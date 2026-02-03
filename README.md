@@ -1,8 +1,8 @@
-<img src="https://r2cdn.perplexity.ai/pplx-full-logo-primary-dark%402x.png" style="height:64px;margin-right:32px"/>
-
 # Agentic AI with MCP - A Technical Showcase
 
-> **Demonstrating next-generation AI architecture: Self-organizing agents that discover services, maintain memory, and orchestrate complex workflows using MCP, MongoDB Vector Search, and Voyage AI.**
+**Demonstrating next-generation AI architecture:
+Self-organizing agents that discover services, maintain memory, and orchestrate
+complex workflows using MCP, MongoDB Vector Search, and Voyage AI.**
 
 ***
 
@@ -382,8 +382,8 @@ llm.generate_response(
 │         Application Layer                   │
 ├─────────────────────────────────────────────┤
 │ • Python 3.11+                              │
-│ • OpenAI GPT-4o (Orchestration)            │
-│ • OpenAI GPT-4o-mini (Fast reasoning)      │
+│ • OpenAI GPT-4o (Orchestration)             │
+│ • OpenAI GPT-4o-mini (Fast reasoning)       │
 └─────────────────────────────────────────────┘
                     │
         ┌───────────┴───────────┐
@@ -470,39 +470,3 @@ python main.py
 **This is the future of AI systems: Autonomous, intelligent, and self-organizing.**
 
 *Built by engineers who believe AI should work for you, not the other way around.*
-<span style="display:none">[^1][^10][^11][^12][^13][^14][^15][^16][^2][^3][^4][^5][^6][^7][^8][^9]</span>
-
-<div align="center">⁂</div>
-
-[^1]: shell.py
-
-[^2]: Screenshot-2026-02-02-at-13.05.46.jpg
-
-[^3]: memory_service.py
-
-[^4]: orchestrator.py
-
-[^5]: memory_service.py
-
-[^6]: orchestrator.py
-
-[^7]: main.py
-
-[^8]: memory_service.py
-
-[^9]: restaurant_guide.py
-
-[^10]: orchestrator.py
-
-[^11]: orchestrator.py
-
-[^12]: orchestrator.py
-
-[^13]: orchestrator.py
-
-[^14]: orchestrator.py
-
-[^15]: orchestrator.py
-
-[^16]: restaurant_guide.py
-
