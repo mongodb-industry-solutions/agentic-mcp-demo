@@ -4,3 +4,4 @@ openai
 pymongo
 requests
 rich
+uv

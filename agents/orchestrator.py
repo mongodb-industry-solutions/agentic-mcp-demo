@@ -117,7 +117,7 @@ class OrchestratorAgent:
 
         # Fetch current registry from MongoDB
         db_servers = {
-            doc["server_name"]: doc 
+            doc["server_name"]: doc
             for doc in self.collection.find({}, {"_id": 0})
         }
 
@@ -278,8 +278,8 @@ class OrchestratorAgent:
 
             try:
                 params = StdioServerParameters(
-                    command="uv", 
-                    args=["run", path], 
+                    command="uv",
+                    args=["run", path],
                     env=os.environ.copy()
                 )
                 read, write = await self.exit_stack.enter_async_context(stdio_client(params))
