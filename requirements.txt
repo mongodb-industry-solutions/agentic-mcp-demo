@@ -1,0 +1,11 @@
+# Core dependencies
+openai>=1.12.0
+pymongo>=4.6.1
+mcp>=1.0.0
+
+# Rich terminal UI
+rich>=13.7.0
+
+# HTTP requests
+requests>=2.31.0
+httpx>=0.26.0
