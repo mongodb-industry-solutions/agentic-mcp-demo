@@ -274,7 +274,7 @@ class OrchestratorAgent:
         for srv in servers:
             name = srv["server_name"]
             path = srv["path"]
-            print(f"🚀 Starting {name} from {path}")
+            #print(f"🚀 Starting {name} from {path}")
 
             try:
                 params = StdioServerParameters(
@@ -287,7 +287,7 @@ class OrchestratorAgent:
                 await session.initialize()
 
                 self.sessions[name] = session
-                print(f"  ✅ {name} activated")
+                #print(f"  ✅ {name} activated")
 
                 res_list = await session.list_resources()
                 for r in res_list.resources:
@@ -629,10 +629,10 @@ class OrchestratorAgent:
                     print(f"  Service: {srv}")
                     print(f"  Tool: {tool}")
                     if srv in self.sessions:
-                        print(f"  ✅ Service active, calling tool...")
+                        #print(f"  ✅ Service active, calling tool...")
                         r = await self.sessions[srv].call_tool(tool, args)
                         res_txt = r.content[0].text
-                        print(f"  ✅ Result: {res_txt[:200]}...")
+                        print(f"  ✅ Result: {res_txt[:500]}")
                     else:
                         print(f"  ❌ Service '{srv}' NOT in active sessions!")
                         print(f"  Available: {list(self.sessions.keys())}")
@@ -664,7 +664,6 @@ class OrchestratorAgent:
         else:
             # Rejected - Force LLM to fix WITHOUT tools
             self._broadcast("Critic", "Rejected, fixing...", "warning")
-            print(f"🔴 Critic Rejection: {review}")
 
             # Add critic feedback to conversation
             messages.append({
@@ -690,7 +689,7 @@ class OrchestratorAgent:
                 print("⚠️ LLM returned no content after fix, using original with manual disclaimer")
                 final_answer = f"{initial_answer}\n\nDisclaimer: Use this answer at your own risks."
 
-            print(f"✅ Fixed answer: {final_answer[:200]}...")
+            print(f"✅ Answer corrected")
 
         # Store conversation turn
         self.conversation_history.append({"role": "user", "content": user_input})
