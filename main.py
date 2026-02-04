@@ -3,11 +3,7 @@
 # Author: Benjamin Lorenz <benjamin.lorenz@mongodb.com>
 #
 
-import logging
-import asyncio
-import os
-import sys
-import readline
+import logging, asyncio, os, sys, readline, datetime
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
@@ -15,14 +11,6 @@ from rich.table import Table
 from rich.markdown import Markdown
 from rich import box
 from agents.orchestrator import OrchestratorAgent
-
-logging.basicConfig(
-    level=logging.ERROR,
-    format='%(message)s'
-)
-
-for logger_name in ["mcp", "mcp.server", "httpx", "httpcore", "pymongo"]:
-    logging.getLogger(logger_name).setLevel(logging.CRITICAL)
 
 console = Console()
 BROADCAST_URL = "https://ntfy.sh/agentic-mcp-demo"
@@ -68,8 +56,8 @@ async def show_memories(agent):
         from pymongo import MongoClient
         client = MongoClient(os.environ["MONGODB_URI"])
         memories = list(
-            client["agent_brain"]["episodic_memory"]
-            .find({}, {"_id": 0, "text": 1, "timestamp": 1, "is_temporary": 1})
+            client["agent_registry"]["episodic_memories"]
+            .find({}, {"_id": 0, "text": 1, "category": 1, "createdAt": 1, "is_temporary": 1})
             .limit(10)
         )
 
@@ -77,13 +65,17 @@ async def show_memories(agent):
             table = Table(title="🧠 Stored Memories", box=box.SIMPLE)
             table.add_column("Timestamp", style="dim")
             table.add_column("Memory", style="cyan")
+            table.add_column("Category", style="magenta")
             table.add_column("Type", style="yellow")
 
             for mem in memories:
-                ts = mem.get('timestamp', 'unknown')[:19]
+                created_at = mem.get('createdAt', None)
+                if isinstance(created_at, datetime.datetime):
+                    ts = created_at.isoformat()[:19]
+                else:
+                    ts = 'unknown'
                 mem_type = "Temporary" if mem.get('is_temporary') else "Permanent"
-                table.add_row(ts, mem['text'], mem_type)
-
+                table.add_row(ts, mem['text'], mem.get('category', 'N/A'), mem_type)
             console.print(table)
         else:
             console.print("[yellow]No memories stored yet[/]")
