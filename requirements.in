@@ -1,7 +1,9 @@
 httpx
 mcp
+numpy
 openai
 pymongo
 requests
 rich
 uv
+voyageai
