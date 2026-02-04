@@ -108,7 +108,7 @@ multidict==6.7.1
     # via
     #   aiohttp
     #   yarl
-numpy==2.4.2
+numpy==2.3.5
     # via
     #   -r requirements.in
     #   voyageai
@@ -216,7 +216,7 @@ uuid-utils==0.14.0
     # via
     #   langchain-core
     #   langsmith
-uv==0.9.29
+uv==0.9.15
     # via -r requirements.in
 uvicorn==0.40.0
     # via mcp
