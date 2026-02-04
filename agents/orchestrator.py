@@ -182,7 +182,7 @@ class OrchestratorAgent:
                     "index": "vector_index",
                     "path": "description",
                     "query": query,
-                    "numCandidates": 10,
+                    "numCandidates": 50,
                     "limit": limit
                 }
             },
@@ -214,22 +214,35 @@ class OrchestratorAgent:
             print(f"  {c['server_name']}: {score:.3f}")
 
         # High confidence → use immediately
-        if best_score > 0.85:
+        if best_score > 0.8:
             print(f"  ✓ High confidence, using: {candidates[0]['server_name']}")
             return [candidates[0]["server_name"]]
 
         # Session stickiness for very vague queries
-        if use_stickiness and self.last_service and best_score < 0.65:
+        if use_stickiness and self.last_service and best_score < 0.6:
             print(f"  ⚡ Low confidence ({best_score:.3f}), using session stickiness: {self.last_service}")
             return [self.last_service]
 
         # Medium confidence → LLM validation
-        print(f"  🤔 Medium confidence ({best_score:.3f}), asking LLM to validate...")
+        print(f" 🤔 Medium confidence ({best_score:.3f}), asking LLM to validate...")
 
-        candidate_list = "\n".join([
-            f"{i+1}. {c['server_name']} (confidence: {c.get('score', 0):.2f})"
-            for i, c in enumerate(candidates[:3])
-        ])
+        # Fetch full service descriptions for LLM context
+        candidate_details = []
+        for i, c in enumerate(candidates[:3]):
+            service_name = c['server_name']
+            # Get full doc with description
+            doc = self.collection.find_one(
+                {"server_name": service_name},
+                {"description": 1, "_id": 0}
+            )
+            description = doc.get("description", "No description") if doc else "No description"
+            # Take first 200 chars of description
+            short_desc = description[:200] + "..." if len(description) > 200 else description
+            candidate_details.append(
+                f"{i+1}. {service_name} (score: {c.get('score', 0):.2f})\n"
+                f"   Purpose: {short_desc}"
+            )
+        candidate_list = "\n\n".join(candidate_details)
 
         try:
             resp = await self.openai.chat.completions.create(
@@ -239,9 +252,10 @@ class OrchestratorAgent:
                     "content": (
                         f"User query: '{query}'\n\n"
                         f"Top service matches:\n{candidate_list}\n\n"
-                        f"Which service(s) should handle this query? "
-                        f"Reply with service name(s) only, comma-separated. "
-                        f"If none are relevant, reply 'NONE'."
+                        f"Which service(s) can handle this query?\n"
+                        f"Consider the service PURPOSE and user intent.\n"
+                        f"Reply with service name(s) only, comma-separated.\n"
+                        f"If NONE are relevant, reply 'NONE'."
                     )
                 }],
                 temperature=0,
@@ -541,29 +555,31 @@ class OrchestratorAgent:
         system_msg = (
             "You are an AUTONOMOUS AGENT using ReAct.\n\n"
             "CRITICAL RULES:\n"
-            "1. PERMANENT facts (name, chronic conditions, lasting preferences)"
-            " → remember_fact(is_temporary=False)\n"
-            "2. TEMPORARY context ('this time', 'today', 'just now') → remember_fact(is_temporary=True)\n\n"
-            "3. ⚠️ MANDATORY WORKFLOW for any recommendation query:\n"
-            "   Step 1: ALWAYS call recall_memories(topic='<relevant topic>') FIRST!\n"
+            "1. PERMANENT facts (name, chronic conditions, lasting preferences)\n"
+            "   → remember_fact(is_temporary=False)\n"
+            "2. TEMPORARY context ('this time', 'today', 'just now')\n"
+            "   → remember_fact(is_temporary=True)\n"
+            "3. DELETE memories → forget_memory(topic='what to forget')\n"
+            "4. LIST ALL memories → list_all_memories()\n\n"
+            "⚠️ MANDATORY WORKFLOW for recommendations:\n"
+            "   Step 1: ALWAYS call recall_memories(topic='...') FIRST!\n"
             "   Step 2: If user stated NEW preference, call remember_fact() to store it\n"
             "   Step 3: Call domain tool using BOTH recalled AND new preferences\n\n"
-            "4. Examples of recall topics:\n"
-            "   - For restaurants: recall_memories(topic='food preferences dietary restrictions allergies')\n"
-            "   - For shopping: recall_memories(topic='shopping preferences budget brand preferences')\n"
-            "   - For travel: recall_memories(topic='travel preferences destination preferences')\n\n"
+            "⚠️ WORKFLOW for listing everything:\n"
+            "   User: 'was weißt du über mich?' or 'sage mir alles'\n"
+            "   → Step 1: list_all_memories()\n"
+            "   → Step 2: Present the complete list to user\n\n"
+            "⚠️ WORKFLOW for forgetting:\n"
+            "   User: 'vergiss dass ich vegetarier bin'\n"
+            "   → Step 1: forget_memory(topic='vegetarian dietary restriction')\n"
+            "   → Step 2: Confirm deletion to user\n\n"
+            "Examples of recall topics:\n"
+            "   - Food: recall_memories(topic='food preferences dietary restrictions allergies')\n"
+            "   - Shopping: recall_memories(topic='shopping preferences budget brand')\n"
+            "   - Finance: recall_memories(topic='investments portfolio assets')\n\n"
             "5. If recall_memories() returns 'No relevant memories', proceed with defaults.\n"
             "6. ALWAYS use available tools - DO NOT use internal knowledge.\n"
             "7. NEVER skip the recall_memories() step before recommendations!\n\n"
-            "CORRECT WORKFLOW EXAMPLE:\n"
-            "User: 'ich habe hunger und lust auf indisch'\n"
-            "→ Step 1: recall_memories(topic='food preferences dietary restrictions allergies')"
-            " → finds 'User is vegetarian'\n"
-            "→ Step 2: remember_fact(fact='User wants Indian food', is_temporary=True)\n"
-            "→ Step 3: find_restaurants(preference_filter='vegetarian indian')\n\n"
-            "WRONG WORKFLOW (DO NOT DO THIS):\n"
-            "User: 'ich habe hunger'\n"
-            "→ ❌ remember_fact() then find_restaurants() → MISSING recall_memories() step!\n\n"
             f"Available Resources:\n{resource_list}"
         )
 

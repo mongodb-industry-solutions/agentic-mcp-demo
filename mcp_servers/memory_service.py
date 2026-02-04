@@ -4,9 +4,24 @@
 #
 
 """
-SERVER: Memory Service (AI-Powered Multi-Perspective Recall with TTL)
-Stores and recalls user memories using LLM for multi-perspective relevance judgment.
-MongoDB handles automatic expiration of temporary memories (10 minutes).
+Memory Service - User Preferences and Personal Information Storage
+
+Store, recall, list, and delete user preferences, personal facts, and context:
+- Personal information (name, location, profession, dietary restrictions)
+- Preferences (likes, dislikes, interests, habits)
+- Financial information (investments, portfolio, assets)
+- Health information (allergies, conditions, medications)
+- Lifestyle choices (vegetarian, vegan, hobbies)
+- Shopping preferences (brands, budgets, past purchases)
+- Travel preferences (destinations, airline preferences)
+
+Use this service when users say:
+- Store: "remember", "merke dir", "speichere", "ich bin", "ich habe", "ich investiere"
+- Recall: "erinnere dich", "was weißt du", "meine präferenzen"
+- List all: "sage mir was du weißt", "zeig alles", "liste alle memories"
+- Delete: "vergiss", "forget", "lösche", "entferne", "ich bin nicht mehr"
+
+Supports both permanent facts and temporary context with automatic expiration.
 """
 
 import logging, os, datetime
@@ -261,6 +276,142 @@ def remember_fact(fact: str, is_temporary: bool = False) -> str:
     except Exception as e:
         logger.error(f"❌ Failed to store memory: {e}")
         return f"❌ Failed to remember: {fact}"
+
+@mcp.tool()
+def list_all_memories() -> str:
+    """
+    List ALL stored memories about the user.
+
+    Returns:
+        Complete list of all permanent and temporary memories
+    """
+    logger.info("📋 Listing all memories")
+
+    all_memories = list(collection.find(
+        {},
+        {"_id": 0, "text": 1, "category": 1, "is_temporary": 1, "createdAt": 1}
+    ).sort("createdAt", -1))  # Newest first
+
+    if not all_memories:
+        return "No memories stored yet."
+
+    # Separate by type
+    permanent = [m for m in all_memories if not m.get("is_temporary", False)]
+    temporary = [m for m in all_memories if m.get("is_temporary", False)]
+
+    response_text = f"📋 Total: {len(all_memories)} memory(ies)\n\n"
+
+    if permanent:
+        response_text += f"PERMANENT ({len(permanent)}):\n"
+        for m in permanent:
+            category = m.get("category", "general")
+            response_text += f"- {m['text']} [{category}]\n"
+        response_text += "\n"
+
+    if temporary:
+        response_text += f"TEMPORARY ({len(temporary)}, expires after 10 min):\n"
+        for m in temporary:
+            category = m.get("category", "general")
+            response_text += f"- {m['text']} [{category}]\n"
+
+    return response_text
+
+@mcp.tool()
+def forget_memory(topic: str) -> str:
+    """
+    Delete memories matching a topic using AI-powered semantic search.
+
+    Args:
+        topic: Description of what to forget (e.g., "vegetarian", "Solana investment")
+
+    Returns:
+        Confirmation of deleted memories
+    """
+    logger.info(f"🗑️ Forgetting memories about: '{topic}'")
+
+    # Reuse existing search logic to find relevant memories
+    all_memories = list(collection.find(
+        {},
+        {"_id": 1, "text": 1, "category": 1, "is_temporary": 1}
+    ))
+
+    if not all_memories:
+        return "No memories found to delete."
+
+    # Generate search perspectives for finding memories to delete
+    perspectives = _generate_search_perspectives(topic)
+    all_relevant_indices = set()
+
+    for perspective in perspectives:
+        logger.info(f" 🔍 Searching perspective: '{perspective}'")
+        memory_list = "\n".join([
+            f"{i+1}. {m['text']} (category: {m.get('category', 'unknown')})"
+            for i, m in enumerate(all_memories)
+        ])
+
+        try:
+            response = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        f"User wants to forget: '{perspective}'\n\n"
+                        f"Available memories:\n{memory_list}\n\n"
+                        f"Which memories should be DELETED?\n"
+                        f"Be CONSERVATIVE - only select memories that clearly match.\n"
+                        f"Reply with the numbers of memories to delete (comma-separated).\n"
+                        f"If none match, reply 'NONE'."
+                    )
+                }],
+                temperature=0,
+                max_tokens=100
+            )
+
+            result = response.choices[0].message.content.strip()
+            logger.info(f" AI selected for deletion: {result}")
+
+            if result != "NONE":
+                try:
+                    selected_indices = [int(x.strip()) - 1 for x in result.split(',') if x.strip().isdigit()]
+                    all_relevant_indices.update(selected_indices)
+                except:
+                    logger.warning(f" Failed to parse AI response: {result}")
+
+        except Exception as e:
+            logger.error(f" AI evaluation failed: {e}")
+
+    if not all_relevant_indices:
+        logger.info(" No matching memories found to delete")
+        return f"No memories found matching '{topic}'."
+
+    # Collect memories to delete
+    memories_to_delete = [
+        all_memories[i]
+        for i in sorted(all_relevant_indices)
+        if 0 <= i < len(all_memories)
+    ]
+
+    # Delete from MongoDB
+    deleted_count = 0
+    deleted_texts = []
+
+    for mem in memories_to_delete:
+        try:
+            result = collection.delete_one({"_id": mem["_id"]})
+            if result.deleted_count > 0:
+                deleted_count += 1
+                deleted_texts.append(mem["text"])
+                logger.info(f" ✓ Deleted: {mem['text']}")
+        except Exception as e:
+            logger.error(f" ❌ Failed to delete {mem['_id']}: {e}")
+
+    if deleted_count == 0:
+        return "Failed to delete any memories."
+
+    response_text = f"🗑️ Deleted {deleted_count} memory(ies):\n"
+    response_text += "\n".join([f"- {text}" for text in deleted_texts])
+
+    return response_text
 
 if __name__ == "__main__":
     logger.info("🚀 Starting Memory Service...")
