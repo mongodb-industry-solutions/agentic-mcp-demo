@@ -13,9 +13,9 @@ import logging
 import requests
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("crypto_service")
+logging.disable(logging.WARNING)
 
-logging.basicConfig(level=logging.ERROR)
+mcp = FastMCP("crypto_service")
 
 @mcp.resource("crypto://disclaimer")
 def get_disclaimer() -> str:

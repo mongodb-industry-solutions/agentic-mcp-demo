@@ -12,16 +12,13 @@ Use this for food recommendations, dining suggestions, and meal planning.
 import logging, os, numpy as np, voyageai
 from mcp.server.fastmcp import FastMCP
 
+logging.disable(logging.WARNING)
+
 mcp = FastMCP("restaurant_guide")
 
-voyage = voyageai.Client(api_key=os.environ.get("VOYAGE_API_KEY"))
-
-logging.basicConfig(
-    level=logging.ERROR,
-    format='%(levelname)s - %(name)s - %(message)s'
-)
 logger = logging.getLogger("restaurant_guide")
 
+voyage = voyageai.Client(api_key=os.environ.get("VOYAGE_API_KEY"))
 
 RESTAURANTS = [
     {"name": "The Green Leaf", "cuisine": "Vegan", "price": "$$"},

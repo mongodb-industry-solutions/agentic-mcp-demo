@@ -14,12 +14,10 @@ from pymongo import MongoClient, ASCENDING
 from openai import OpenAI
 from mcp.server.fastmcp import FastMCP
 
+logging.disable(logging.WARNING)
+
 mcp = FastMCP("memory_service")
 
-logging.basicConfig(
-    level=logging.ERROR,
-    format='%(levelname)s - %(name)s - %(message)s'
-)
 logger = logging.getLogger("memory_service")
 
 openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
@@ -35,8 +33,6 @@ def _ensure_ttl_index():
     for idx_name, idx_info in existing_indexes.items():
         if 'createdAt' in str(idx_info.get('key', [])):
             has_ttl = True
-            logger.info(f"TTL index exists: {idx_name}")
-            logger.info(f"  Config: {idx_info}")
             break
 
     if not has_ttl:
@@ -202,7 +198,7 @@ def recall_memories(topic: str) -> str:
     if permanent:
         response_text += "PERMANENT:\n" + "\n".join([f"- {m}" for m in permanent]) + "\n"
     if temporary:
-        response_text += "TEMPORARY (expires 10min):\n" + "\n".join([f"- {m}" for m in temporary])
+        response_text += "TEMPORARY (expires after 10 min):\n" + "\n".join([f"- {m}" for m in temporary])
 
     return response_text
 
