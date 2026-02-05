@@ -22,7 +22,40 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from openai import AsyncOpenAI
 
+
 BROADCAST_URL = "https://notify.bjjl.dev/send"
+
+
+class Colors:
+    RESET     = "\033[0m"
+    BOLD      = "\033[1m"
+
+    RED       = "\033[31m"
+    GREEN     = "\033[32m"
+    YELLOW    = "\033[33m"
+    BLUE      = "\033[34m"
+    MAGENTA   = "\033[35m"
+    CYAN      = "\033[36m"
+
+    BRIGHT_RED     = "\033[91m"
+    BRIGHT_GREEN   = "\033[92m"
+    BRIGHT_YELLOW  = "\033[93m"
+    BRIGHT_BLUE    = "\033[94m"
+    BRIGHT_MAGENTA = "\033[95m"
+    BRIGHT_CYAN    = "\033[96m"
+
+
+TITLE_COLORS = {
+    "BOOTSTRAP":  Colors.BLUE,
+    "QUERY":      Colors.BRIGHT_YELLOW,
+    "REACT":      Colors.RESET,
+    "AGENT":      Colors.BRIGHT_CYAN,
+    "ROUTING":    Colors.RESET,
+    "ACTION":     Colors.RESET,
+    "RESULT":     Colors.BRIGHT_GREEN,
+    "CRITIC":     Colors.MAGENTA,
+}
+
 
 class OrchestratorAgent:
     def __init__(self, server_dir: str = "mcp_servers"):
@@ -46,12 +79,16 @@ class OrchestratorAgent:
         self.openai = AsyncOpenAI()
         self.model = os.environ.get("OPENAI_MODEL", "gpt-4o")
 
-    def _broadcast(self, title: str, message: str, tags: str = "robot"):
+    def _broadcast(self, title: str = "", message: str = "", tags: str = "robot"):
         """Send live updates"""
         try:
-            current_time = datetime.datetime.now().strftime("%H:%M")
-            full_message = f"🤖 {current_time} [{title}] {message}"
-            resp = requests.post(BROADCAST_URL, data=full_message.encode("utf-8"), timeout=2)
+            if title == "":
+                resp = requests.post(BROADCAST_URL, f"{Colors.RESET}\n", timeout=2)
+            else:
+                current_time = datetime.datetime.now().strftime("%H:%M")
+                color = TITLE_COLORS.get(title, Colors.RESET)
+                full_message = f"🤖 {current_time} {color}[{title}] {message}{Colors.RESET}"
+                resp = requests.post(BROADCAST_URL, data=full_message.encode("utf-8"), timeout=5)
             resp.raise_for_status()
         except Exception as e:
             print(f"❌ Broadcast failed: {e}")
@@ -102,7 +139,8 @@ class OrchestratorAgent:
                 "last_seen": datetime.datetime.now().isoformat()
             }
 
-        self._broadcast("Bootstrap", f"Found {len(local_servers)} local MCP servers")
+        self._broadcast() # newline
+        self._broadcast("BOOTSTRAP", f"Found {len(local_servers)} local MCP servers")
 
         # Fetch current registry from MongoDB
         db_servers = {
@@ -110,7 +148,7 @@ class OrchestratorAgent:
             for doc in self.collection.find({}, {"_id": 0})
         }
 
-        self._broadcast("Bootstrap", f"Found {len(db_servers)} servers in registry")
+        self._broadcast("BOOTSTRAP", f"Found {len(db_servers)} servers in registry")
 
         # Compute diff
         local_names = set(local_servers.keys())
@@ -133,7 +171,7 @@ class OrchestratorAgent:
         total_changes = len(new_servers) + len(changed_servers) + len(deleted_servers)
 
         if total_changes == 0:
-            self._broadcast("Bootstrap", "✓ Registry up-to-date (no changes)\n")
+            self._broadcast("BOOTSTRAP", "✓ Registry up-to-date (no changes)")
             return
 
         print(f"\n🔄 Syncing {total_changes} changes:")
@@ -197,26 +235,26 @@ class OrchestratorAgent:
 
         best_score = candidates[0].get("score", 0)
 
-        self._broadcast("Semantic Routing", f"Vector search results:")
+        self._broadcast("ROUTING", f"Vector search results:")
         for c in candidates:
             score = c.get("score", 0)
-            self._broadcast("Semantic Routing", f"  {c['server_name']}: {score:.3f}")
+            self._broadcast("ROUTING", f"  {c['server_name']}: {score:.3f}")
 
         # High confidence → use immediately
         if best_score > 0.8:
-            self._broadcast("Semantic Routing",
+            self._broadcast("ROUTING",
                             f"✓ High confidence, using: {candidates[0]['server_name']}")
             return [candidates[0]["server_name"]]
 
         # Session stickiness for very vague queries
         if use_stickiness and self.last_service and best_score < 0.6:
-            self._broadcast("Semantic Routing",
+            self._broadcast("ROUTING",
                             ( f"⚡ Low confidence ({best_score:.3f}), "
                               "using session stickiness: {self.last_service}" ))
             return [self.last_service]
 
         # Medium confidence → LLM validation
-        self._broadcast("Semantic Routing",
+        self._broadcast("ROUTING",
                         ( f"🤔 Medium confidence ({best_score:.3f}), "
                           "asking LLM to validate..." ))
 
@@ -257,7 +295,7 @@ class OrchestratorAgent:
             )
 
             result = resp.choices[0].message.content.strip()
-            self._broadcast("Semantic Routing", f"💡 LLM decision: {result}")
+            self._broadcast("ROUTING", f"💡 LLM decision: {result}")
 
             if result == "NONE":
                 return []
@@ -370,10 +408,10 @@ class OrchestratorAgent:
 
             result = json.loads(resp.choices[0].message.tool_calls[0].function.arguments)
 
-            print(f"\n📋 Critic Analysis:")
-            print(f"  Financial Topic: {result['is_financial_topic']}")
-            print(f"  Has Disclaimer: {result['has_financial_disclaimer']}")
-            print(f"  Verdict: {result['verdict']}")
+            #print(f"\n📋 Critic Analysis:")
+            #print(f"  Financial Topic: {result['is_financial_topic']}")
+            #print(f"  Has Disclaimer: {result['has_financial_disclaimer']}")
+            #print(f"  Verdict: {result['verdict']}")
 
             # Strict compliance checks
             if result["is_financial_topic"] and not result["has_financial_disclaimer"]:
@@ -431,8 +469,9 @@ class OrchestratorAgent:
         return result == "YES"
 
     async def process_query(self, user_input: str) -> str:
-        self._broadcast("New Query", user_input[:100], "question")
-        self._broadcast("Routing", "Analyzing intent...", "mag")
+        self._broadcast() # newline
+        self._broadcast("QUERY", user_input[:100])
+        self._broadcast("AGENT", "Analyzing intent...")
 
         # Context-Aware Routing for follow-up questions
         context_window = self.conversation_history[-4:] if self.conversation_history else []
@@ -448,9 +487,9 @@ class OrchestratorAgent:
             if is_followup:
                 enriched_query = f"{last_user_queries[-1]}. {user_input}"
                 use_stickiness = True
-                print(f"🔍 Follow-up detected, enriched: '{enriched_query}'")
+                self._broadcast("AGENT", f"Follow-up detected, enriched: '{enriched_query}'")
             else:
-                print(f"🔍 Topic change detected, no enrichment")
+                self._broadcast("AGENT", f"Topic change detected, no enrichment")
 
         # Hybrid routing with LLM validation
         service_names = await self._route_query(enriched_query, use_stickiness=use_stickiness)
@@ -488,7 +527,7 @@ class OrchestratorAgent:
         # Add memory service if available
         memory_doc = self.collection.find_one({"server_name": "memory_service"})
 
-        self._broadcast("Semantic Routing", f"🔍 Service found: {memory_doc is not None}")
+        #self._broadcast("ROUTING", f"Memory Service found: {memory_doc is not None}")
         if memory_doc:
             if "memory_service" not in [m["server_name"] for m in matches]:
                 memory_path = self.server_dir / "memory_service.py"
@@ -497,17 +536,16 @@ class OrchestratorAgent:
                         "server_name": "memory_service",
                         "path": str(memory_path.absolute())
                     })
-                    print(f"✅ Added memory_service to matches")
+                    self._broadcast("ROUTING", f"Added memory_service to matches")
                 else:
                     print(f"⚠️ memory_service not found locally")
 
         server_names_final = [m["server_name"] for m in matches]
-        self._broadcast("Selected Agents", ", ".join(server_names_final))
+        self._broadcast("AGENT", "Selected: " + ", ".join(server_names_final))
 
         await self._activate_servers(matches)
 
-        self._broadcast("Semantic Routing",
-                        f"🎯 Active sessions after activation: {list(self.sessions.keys())}")
+        #self._broadcast("ACTION", f"Active sessions after activation: {list(self.sessions.keys())}")
 
         openai_tools = []
         for name, session in self.sessions.items():
@@ -588,7 +626,7 @@ class OrchestratorAgent:
 
         while iteration < max_iterations:
             iteration += 1
-            print(f"\n🔄 ReAct Iteration {iteration}/{max_iterations}")
+            self._broadcast("AGENT", f"Iteration {iteration}/{max_iterations}")
 
             response = await self.openai.chat.completions.create(
                 model=self.model,
@@ -600,7 +638,7 @@ class OrchestratorAgent:
 
             # No tool calls? Agent finished
             if not msg.tool_calls:
-                print("  ✅ No more tool calls, agent finished")
+                self._broadcast("AGENT", "No more tool calls, agent finished")
                 initial_answer = msg.content or "I have no response."
                 break
 
@@ -609,14 +647,9 @@ class OrchestratorAgent:
             for tc in msg.tool_calls:
                 args = json.loads(tc.function.arguments)
                 fname = tc.function.name
-                self._broadcast("Action", f"{fname}", "hammer")
-
-                print(f"\n{'='*60}")
-                print(f"🔧 TOOL CALL DEBUG - Iteration {iteration}")
-                print(f"{'='*60}")
-                print(f"Function: {fname}")
-                print(f"Arguments: {args}")
-                print(f"Active sessions: {list(self.sessions.keys())}")
+                #self._broadcast("AGENT", f"  Function: {fname}")
+                #self._broadcast("AGENT", f"  Arguments: {args}")
+                #print(f"Active sessions: {list(self.sessions.keys())}")
 
                 res_txt = "Error"
                 if fname == "read_resource":
@@ -636,18 +669,16 @@ class OrchestratorAgent:
                         res_txt = f"Error: Resource '{uri}' not found in registry."
                 else:
                     srv, tool = fname.split("__", 1)
-                    print(f"  Service: {srv}")
-                    print(f"  Tool: {tool}")
+                    self._broadcast("ACTION", f"  Service: {srv}")
+                    self._broadcast("ACTION", f"  Tool: {tool}")
                     if srv in self.sessions:
                         #print(f"  ✅ Service active, calling tool...")
                         r = await self.sessions[srv].call_tool(tool, args)
                         res_txt = r.content[0].text
-                        print(f"  ✅ Result: {res_txt[:500]}")
+                        self._broadcast("RESULT", f"{res_txt[:500]}")
                     else:
                         print(f"  ❌ Service '{srv}' NOT in active sessions!")
                         print(f"  Available: {list(self.sessions.keys())}")
-
-                print(f"{'='*60}\n")
 
                 messages.append({
                     "role": "tool",
@@ -665,15 +696,15 @@ class OrchestratorAgent:
             initial_answer = final.choices[0].message.content or "Max iterations reached."
 
         # Critic Review
-        self._broadcast("Critic", "Reviewing...", "eyeglasses")
+        self._broadcast("CRITIC", "Reviewing...", "eyeglasses")
         review = await self._critic_review(user_input, initial_answer)
 
         if "APPROVED" in review:
-            self._broadcast("Finished", "Approved ✓", "white_check_mark")
+            self._broadcast("CRITIC", "Approved ✓", "white_check_mark")
             final_answer = initial_answer
         else:
             # Rejected - Force LLM to fix WITHOUT tools
-            self._broadcast("Critic", "Rejected, fixing...", "warning")
+            self._broadcast("CRITIC", "Rejected, fixing...", "warning")
 
             # Add critic feedback to conversation
             messages.append({
@@ -699,7 +730,7 @@ class OrchestratorAgent:
                 print("⚠️ LLM returned no content after fix, using original with manual disclaimer")
                 final_answer = f"{initial_answer}\n\nDisclaimer: Use this answer at your own risks."
 
-            print(f"✅ Answer corrected")
+            self._broadcast("CRITIC", f"✅ Answer corrected")
 
         # Store conversation turn
         self.conversation_history.append({"role": "user", "content": user_input})
