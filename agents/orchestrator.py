@@ -22,7 +22,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from openai import AsyncOpenAI
 
-BROADCAST_CHANNEL = "agentic-mcp-demo"
+BROADCAST_URL = "https://notify.bjjl.dev/send"
 
 class OrchestratorAgent:
     def __init__(self, server_dir: str = "mcp_servers"):
@@ -45,23 +45,13 @@ class OrchestratorAgent:
 
         self.openai = AsyncOpenAI()
         self.model = os.environ.get("OPENAI_MODEL", "gpt-4o")
-        self.broadcast_url = f"https://ntfy.sh/{BROADCAST_CHANNEL}"
 
     def _broadcast(self, title: str, message: str, tags: str = "robot"):
         """Send live updates"""
-        return # disabled
         try:
-            full_message = f"🤖 {title}\n{message}"
-            resp = requests.post(
-                self.broadcast_url,
-                data=full_message.encode("utf-8"),
-                headers={
-                    "Title": title,
-                    "Tags": tags,
-                    "Priority": "3"
-                },
-                timeout=2
-            )
+            current_time = datetime.datetime.now().strftime("%H:%M")
+            full_message = f"🤖 {current_time} [{title}] {message}"
+            resp = requests.post(BROADCAST_URL, data=full_message.encode("utf-8"), timeout=2)
             resp.raise_for_status()
         except Exception as e:
             print(f"❌ Broadcast failed: {e}")
@@ -100,7 +90,6 @@ class OrchestratorAgent:
         server_files = [f for f in self.server_dir.glob("*.py") if f.name != "__init__.py"]
         local_servers = {}
 
-        print(f"\n📂 Scanning {self.server_dir}...")
         for f in server_files:
             server_name = f.stem
             docstring = self._extract_docstring(f)
@@ -113,7 +102,7 @@ class OrchestratorAgent:
                 "last_seen": datetime.datetime.now().isoformat()
             }
 
-        print(f"  Found {len(local_servers)} local MCP servers")
+        self._broadcast("Bootstrap", f"Found {len(local_servers)} local MCP servers")
 
         # Fetch current registry from MongoDB
         db_servers = {
@@ -121,7 +110,7 @@ class OrchestratorAgent:
             for doc in self.collection.find({}, {"_id": 0})
         }
 
-        print(f"  Found {len(db_servers)} servers in registry")
+        self._broadcast("Bootstrap", f"Found {len(db_servers)} servers in registry")
 
         # Compute diff
         local_names = set(local_servers.keys())
@@ -144,7 +133,7 @@ class OrchestratorAgent:
         total_changes = len(new_servers) + len(changed_servers) + len(deleted_servers)
 
         if total_changes == 0:
-            print("  ✓ Registry up-to-date (no changes)\n")
+            self._broadcast("Bootstrap", "✓ Registry up-to-date (no changes)\n")
             return
 
         print(f"\n🔄 Syncing {total_changes} changes:")
@@ -208,23 +197,28 @@ class OrchestratorAgent:
 
         best_score = candidates[0].get("score", 0)
 
-        print(f"\n🎯 Vector search results:")
+        self._broadcast("Semantic Routing", f"Vector search results:")
         for c in candidates:
             score = c.get("score", 0)
-            print(f"  {c['server_name']}: {score:.3f}")
+            self._broadcast("Semantic Routing", f"  {c['server_name']}: {score:.3f}")
 
         # High confidence → use immediately
         if best_score > 0.8:
-            print(f"  ✓ High confidence, using: {candidates[0]['server_name']}")
+            self._broadcast("Semantic Routing",
+                            f"✓ High confidence, using: {candidates[0]['server_name']}")
             return [candidates[0]["server_name"]]
 
         # Session stickiness for very vague queries
         if use_stickiness and self.last_service and best_score < 0.6:
-            print(f"  ⚡ Low confidence ({best_score:.3f}), using session stickiness: {self.last_service}")
+            self._broadcast("Semantic Routing",
+                            ( f"⚡ Low confidence ({best_score:.3f}), "
+                              "using session stickiness: {self.last_service}" ))
             return [self.last_service]
 
         # Medium confidence → LLM validation
-        print(f" 🤔 Medium confidence ({best_score:.3f}), asking LLM to validate...")
+        self._broadcast("Semantic Routing",
+                        ( f"🤔 Medium confidence ({best_score:.3f}), "
+                          "asking LLM to validate..." ))
 
         # Fetch full service descriptions for LLM context
         candidate_details = []
@@ -263,7 +257,7 @@ class OrchestratorAgent:
             )
 
             result = resp.choices[0].message.content.strip()
-            print(f"  💡 LLM decision: {result}")
+            self._broadcast("Semantic Routing", f"💡 LLM decision: {result}")
 
             if result == "NONE":
                 return []
@@ -474,7 +468,7 @@ class OrchestratorAgent:
                     "server_name": service_name,
                     "path": str(local_path.absolute())
                 })
-                print(f"✓ Resolved {service_name} → {local_path}")
+                #print(f"✓ Resolved {service_name} → {local_path}")
             else:
                 print(f"⚠️ {service_name} not found locally at {local_path}, skipping")
 
@@ -494,7 +488,7 @@ class OrchestratorAgent:
         # Add memory service if available
         memory_doc = self.collection.find_one({"server_name": "memory_service"})
 
-        print(f"🔍 Memory doc found: {memory_doc is not None}")
+        self._broadcast("Semantic Routing", f"🔍 Service found: {memory_doc is not None}")
         if memory_doc:
             if "memory_service" not in [m["server_name"] for m in matches]:
                 memory_path = self.server_dir / "memory_service.py"
@@ -508,12 +502,12 @@ class OrchestratorAgent:
                     print(f"⚠️ memory_service not found locally")
 
         server_names_final = [m["server_name"] for m in matches]
-        print(f"🎯 Final services to activate: {server_names_final}")
-        self._broadcast("Selected Agents", ", ".join(server_names_final), "white_check_mark")
+        self._broadcast("Selected Agents", ", ".join(server_names_final))
 
         await self._activate_servers(matches)
 
-        print(f"🎯 Active sessions after activation: {list(self.sessions.keys())}")
+        self._broadcast("Semantic Routing",
+                        f"🎯 Active sessions after activation: {list(self.sessions.keys())}")
 
         openai_tools = []
         for name, session in self.sessions.items():

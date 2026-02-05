@@ -10,23 +10,22 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich.markdown import Markdown
 from rich import box
-from agents.orchestrator import OrchestratorAgent
+from agents.orchestrator import OrchestratorAgent, BROADCAST_URL
 
 console = Console()
-BROADCAST_URL = "https://ntfy.sh/agentic-mcp-demo"
 history_file = os.path.expanduser("~/.agentic_demo_history")
 
 def show_banner():
     banner = """
 # 🧠 Agentic AI Demo
 
-**Multi-Agent System with MCP + MongoDB Atlas**
+**Multi-Agent System with MCP + MongoDB Atlas + Voyage AI**
 
 ## Features
 - Semantic Routing (Vector Search)
-- Long-Term Memory (MongoDB)
+- Long/Short-Term Agentic Memory (MongoDB)
 - Multi-Domain (Identity, Finance, Lifestyle)
-- Live Broadcast to Mobile Devices
+- Live Broadcast to Guest Devices
 
 ## Commands
 - Type queries naturally
@@ -35,7 +34,7 @@ def show_banner():
 - `exit` - Quit
 """
     console.print(Panel(Markdown(banner), border_style="green", box=box.DOUBLE))
-    console.print(f"📱 [bold cyan]Mobile Live Feed:[/] {BROADCAST_URL}\n", style="dim")
+    console.print(f"📱 [bold bright_cyan]Live Feed:[/] [cyan]{BROADCAST_URL}\n", style="dim")
 
 async def show_status(agent):
     table = Table(title="System Status", box=box.ROUNDED)
