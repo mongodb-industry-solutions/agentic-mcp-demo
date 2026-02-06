@@ -23,7 +23,8 @@ from mcp.client.stdio import stdio_client
 from openai import AsyncOpenAI
 
 
-BROADCAST_URL = "https://notify.bjjl.dev/send"
+BROADCAST_URL         = "https://notify.bjjl.dev/send"
+BROADCAST_RECEIVE_URL = "https://notify.bjjl.dev/receive"
 
 
 class Colors:

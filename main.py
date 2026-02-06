@@ -10,7 +10,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich.markdown import Markdown
 from rich import box
-from agents.orchestrator import OrchestratorAgent, BROADCAST_URL
+from agents.orchestrator import OrchestratorAgent, BROADCAST_RECEIVE_URL
 
 console = Console()
 history_file = os.path.expanduser("~/.agentic_demo_history")
@@ -34,7 +34,8 @@ def show_banner():
 - `exit` - Quit
 """
     console.print(Panel(Markdown(banner), border_style="green", box=box.DOUBLE))
-    console.print(f"📱 [bold bright_cyan]Live Feed:[/] [cyan]{BROADCAST_URL}\n", style="dim")
+    console.print(f"📱 [bold bright_cyan]Live Feed:[/] "
+                  f"[cyan]{BROADCAST_RECEIVE_URL}\n", style="dim")
 
 async def show_status(agent):
     table = Table(title="System Status", box=box.ROUNDED)
