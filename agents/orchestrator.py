@@ -55,6 +55,7 @@ TITLE_COLORS = {
     "ACTION":     Colors.RESET,
     "RESULT":     Colors.BRIGHT_GREEN,
     "CRITIC":     Colors.MAGENTA,
+    "ERROR":      Colors.BRIGHT_RED
 }
 
 
@@ -175,33 +176,33 @@ class OrchestratorAgent:
             self._broadcast("BOOTSTRAP", "✓ Registry up-to-date (no changes)")
             return
 
-        print(f"\n🔄 Syncing {total_changes} changes:")
+        #print(f"\n🔄 Syncing changes:")
 
         # 1. Add new servers
         if new_servers:
-            print(f"\n  ➕ Adding {len(new_servers)} new server(s):")
+            self._broadcast("BOOTSTRAP", f"➕ Adding {len(new_servers)} new server(s):")
             for name in new_servers:
                 self.collection.insert_one(local_servers[name])
-                print(f"    + {name}")
+                self._broadcast("BOOTSTRAP", f"    + {name}")
 
         # 2. Update changed servers
         if changed_servers:
-            print(f"\n  🔄 Updating {len(changed_servers)} changed server(s):")
+            self._broadcast("BOOTSTRAP", f"🔄 Updating {len(changed_servers)} changed server(s):")
             for name in changed_servers:
                 self.collection.update_one(
                     {"server_name": name},
                     {"$set": local_servers[name]}
                 )
-                print(f"    ↻ {name} (description or content changed)")
+                self._broadcast("BOOTSTRAP", f"    ↻ {name} (description or content changed)")
 
         # 3. Remove deleted servers
         if deleted_servers:
-            print(f"\n  🗑️  Removing {len(deleted_servers)} deleted server(s):")
+            self._broadcast("BOOTSTRAP", f"🗑️  Removing {len(deleted_servers)} deleted server(s):")
             for name in deleted_servers:
                 self.collection.delete_one({"server_name": name})
-                print(f"    - {name}")
+                self._broadcast("BOOTSTRAP", f"    - {name}")
 
-        print(f"\n✅ Registry sync complete\n")
+        self._broadcast("BOOTSTRAP", f"✓ Registry sync complete\n")
 
     async def _semantic_search(self, query: str, limit: int = 3) -> List[Dict]:
         pipeline = [
@@ -232,6 +233,7 @@ class OrchestratorAgent:
         candidates = await self._semantic_search(query, limit=3)
 
         if not candidates:
+            self._broadcast("ERROR", f"No results from vector search - embeddings and index exist?")
             return []
 
         best_score = candidates[0].get("score", 0)

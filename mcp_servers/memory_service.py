@@ -9,6 +9,8 @@ Memory Service - User Preferences and Personal Information Storage
 Store, recall, list, and delete user preferences, personal facts, and context:
 - Personal information (name, location, profession, dietary restrictions)
 - Preferences (likes, dislikes, interests, habits)
+- Hobbies and activities (sports, series, movies, reading)
+- Daily routines (morning habits, evening activities)
 - Financial information (investments, portfolio, assets)
 - Health information (allergies, conditions, medications)
 - Lifestyle choices (vegetarian, vegan, hobbies)
@@ -17,9 +19,11 @@ Store, recall, list, and delete user preferences, personal facts, and context:
 
 Use this service when users say:
 - Store: "remember", "merke dir", "speichere", "ich bin", "ich habe", "ich investiere"
+- Store preferences: "ich mag", "ich schaue gerne", "ich liebe", "ich bevorzuge"
 - Recall: "erinnere dich", "was weißt du", "meine präferenzen"
 - List all: "sage mir was du weißt", "zeig alles", "liste alle memories"
-- Delete: "vergiss", "forget", "lösche", "entferne", "ich bin nicht mehr"
+- Delete specific: "vergiss", "forget", "lösche", "entferne", "ich bin nicht mehr"
+- Delete ALL: "vergiss alles", "forget everything", "lösche alles", "delete all"
 
 Supports both permanent facts and temporary context with automatic expiration.
 """
@@ -412,6 +416,30 @@ def forget_memory(topic: str) -> str:
     response_text += "\n".join([f"- {text}" for text in deleted_texts])
 
     return response_text
+
+@mcp.tool()
+def forget_all_memories() -> str:
+    """
+    Delete ALL stored memories about the user.
+    Use this when user says: 'forget everything', 'delete all',
+    'vergiss alles', 'lösche alles'
+
+    ⚠️ WARNING: This is irreversible!
+    """
+
+    try:
+        result = collection.delete_many({})
+        deleted_count = result.deleted_count
+        logger.info(f"Deleted {deleted_count} memories")
+
+        if deleted_count == 0:
+            return "No memories found to delete."
+
+        return f"🗑️ Deleted ALL memories ({deleted_count} total)"
+
+    except Exception as e:
+        logger.error(f"Failed to delete all memories: {e}")
+        return f"❌ Failed to delete memories: {e}"
 
 if __name__ == "__main__":
     logger.info("🚀 Starting Memory Service...")
