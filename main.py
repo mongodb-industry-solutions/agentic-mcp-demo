@@ -132,7 +132,7 @@ async def interactive_loop():
                     response = "I encountered an issue processing your request."
 
                 console.print(Panel(
-                    response,
+                    Markdown(response),
                     title="🤖 Agent Response",
                     border_style="green",
                     box=box.ROUNDED
