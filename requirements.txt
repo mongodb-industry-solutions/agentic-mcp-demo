@@ -39,7 +39,7 @@ click==8.3.1
     # via
     #   typer-slim
     #   uvicorn
-cryptography==46.0.4
+cryptography==46.0.5
     # via pyjwt
 distro==1.9.0
     # via openai
