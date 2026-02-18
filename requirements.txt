@@ -121,7 +121,7 @@ packaging==26.0
     #   huggingface-hub
     #   langchain-core
     #   langsmith
-pillow==12.1.0
+pillow==12.1.1
     # via voyageai
 propcache==0.4.1
     # via
