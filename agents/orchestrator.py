@@ -204,7 +204,7 @@ class OrchestratorAgent:
 
         self._broadcast("BOOTSTRAP", f"✓ Registry sync complete\n")
 
-    async def _semantic_search(self, query: str, limit: int = 3) -> List[Dict]:
+    async def _semantic_search(self, query: str, limit: int = 5) -> List[Dict]:
         pipeline = [
             {
                 "$vectorSearch": {
@@ -226,11 +226,33 @@ class OrchestratorAgent:
 
         return list(self.collection.aggregate(pipeline))
 
+    def _enrich_for_routing(self, user_input: str) -> str:
+        """Add routing hints based on patterns"""
+
+        lower = user_input.lower()
+
+        if "," in user_input:
+            actions = user_input.split(",")
+            if len(actions) >= 2:
+                action_verbs = ["eat", "show", "phone", "call", "buy", "send",
+                                "watch", "read", "meet", "confirm", "check", "book"]
+                has_actions = any(verb in lower for verb in action_verbs)
+
+                if has_actions:
+                    return f"[Multiple tasks to add to TODO list] {user_input}"
+
+        if "i need to" in lower or "i have to" in lower:
+            and_count = lower.count(" and ")
+            if and_count >= 1:
+                return f"[Multiple tasks to add to TODO list] {user_input}"
+
+        return user_input
+
     async def _route_query(self, query: str, use_stickiness: bool = False) -> List[str]:
         """Hybrid routing: Vector Search + LLM validation for ambiguous cases"""
 
-        # Stage 1: Vector Search
-        candidates = await self._semantic_search(query, limit=3)
+        enriched_query = self._enrich_for_routing(query)
+        candidates = await self._semantic_search(enriched_query, limit=5)
 
         if not candidates:
             self._broadcast("ERROR", f"No results from vector search - embeddings and index exist?")
@@ -263,7 +285,7 @@ class OrchestratorAgent:
 
         # Fetch full service descriptions for LLM context
         candidate_details = []
-        for i, c in enumerate(candidates[:3]):
+        for i, c in enumerate(candidates[:5]):
             service_name = c['server_name']
             # Get full doc with description
             doc = self.collection.find_one(
@@ -589,7 +611,13 @@ class OrchestratorAgent:
         # Strong System Prompt - LLM must follow this workflow
         system_msg = (
             "You are an AUTONOMOUS AGENT using ReAct.\n\n"
-            "CRITICAL RULES:\n"
+            "⚠️ ANTI-HALLUCINATION RULES:\n"
+            "1. You can ONLY perform actions using the tools listed below\n"
+            "2. NEVER claim to have done something without actually calling the tool\n"
+            "3. If you don't have the right tool, say: 'I don't have access to that service right now'\n"
+            "4. Always call the appropriate tool BEFORE confirming an action to the user\n"
+            "5. If a tool call fails, report the error honestly - don't pretend it succeeded\n\n"
+            "⚠️ CRITICAL RULES:\n"
             "1. PERMANENT facts (name, chronic conditions, lasting preferences)\n"
             "   → remember_fact(is_temporary=False)\n"
             "2. TEMPORARY context ('this time', 'today', 'just now')\n"
@@ -613,8 +641,9 @@ class OrchestratorAgent:
             "   - Shopping: recall_memories(topic='shopping preferences budget brand')\n"
             "   - Finance: recall_memories(topic='investments portfolio assets')\n\n"
             "5. If recall_memories() returns 'No relevant memories', proceed with defaults.\n"
-            "6. ALWAYS use available tools - DO NOT use internal knowledge.\n"
-            "7. NEVER skip the recall_memories() step before recommendations!\n\n"
+            "6. ALWAYS use available tools - DO NOT use internal knowledge or pretend to have done something.\n"
+            "7. NEVER skip the recall_memories() step before recommendations!\n"
+            "8. If you get a tool execution error, report it to the user honestly.\n\n"
             f"Available Resources:\n{resource_list}"
         )
 

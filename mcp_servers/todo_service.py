@@ -4,22 +4,29 @@
 # Author: Benjamin Lorenz
 
 """
-SERVER: TODO List Manager
+SERVER: TODO List & Task Management
 
-Manage personal TODO tasks with completion tracking.
+Manage tasks, reminders, and action items for the user.
 
 Use this service when users say:
-- Add tasks: "add todo", "create task", "remember to do", "ich muss", "aufgabe", "erledigen"
-- List tasks: "show todos", "what's on my list", "pending tasks", "was muss ich tun"
-- Complete tasks: "mark as done", "complete task", "erledigt", "fertig"
-- Delete tasks: "remove task", "delete todo", "lösche aufgabe"
+- Explicit: "add todo", "create task", "remind me to", "add to my list", "put on my todo"
+- Implicit: "I need to", "I have to", "I should", "I must", "don't forget to"
+- Planning: "tomorrow I need to", "this week I should", "later I have to"
+- Multiple tasks: "I need to X, Y, and Z", comma-separated action lists
+- Questions: "what are my tasks", "show my todos", "what's on my list"
 
 Capabilities:
-- Create tasks
+- Add single or multiple tasks at once
 - List active and completed tasks
 - Mark tasks as completed
 - Delete tasks permanently
 - Persistent storage (survives restarts)
+
+Examples:
+- "Add 'buy milk' to my todo list"
+- "I need to call John and send that email"
+- "Remind me to check the report tomorrow"
+- "What's on my todo list?"
 """
 
 import logging
