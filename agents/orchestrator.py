@@ -63,7 +63,6 @@ class OrchestratorAgent:
     def __init__(self, server_dir: str = "mcp_servers"):
         self.server_dir = Path(server_dir)
         self.sessions = {}
-        self.resource_registry = {}
         self.exit_stack = AsyncExitStack()
         self.conversation_history = []
         self.last_service = None  # Session Stickiness
@@ -85,12 +84,12 @@ class OrchestratorAgent:
         """Send live updates"""
         try:
             if title == "":
-                resp = requests.post(BROADCAST_URL, f"{Colors.RESET}\n", timeout=2)
+                resp = requests.post(BROADCAST_URL, f"{Colors.RESET}\n", timeout=15)
             else:
                 current_time = datetime.datetime.now().strftime("%H:%M")
                 color = TITLE_COLORS.get(title, Colors.RESET)
                 full_message = f"🤖 {current_time} {color}[{title}] {message}{Colors.RESET}"
-                resp = requests.post(BROADCAST_URL, data=full_message.encode("utf-8"), timeout=5)
+                resp = requests.post(BROADCAST_URL, data=full_message.encode("utf-8"), timeout=15)
             resp.raise_for_status()
         except Exception as e:
             print(f"❌ Broadcast failed: {e}")
@@ -340,7 +339,6 @@ class OrchestratorAgent:
         await self.exit_stack.aclose()
         self.exit_stack = AsyncExitStack()
         self.sessions = {}
-        self.resource_registry = {}
 
         for srv in servers:
             name = srv["server_name"]
@@ -360,9 +358,6 @@ class OrchestratorAgent:
                 self.sessions[name] = session
                 #print(f"  ✅ {name} activated")
 
-                res_list = await session.list_resources()
-                for r in res_list.resources:
-                    self.resource_registry[r.uri] = name
             except Exception as e:
                 print(f"  ❌ {name} failed: {e}")
 
@@ -493,6 +488,17 @@ class OrchestratorAgent:
         result = resp.choices[0].message.content.strip().upper()
         return result == "YES"
 
+    def _format_result_preview(self, text: str, max_lines: int = 3, max_chars: int = 120) -> str:
+        lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
+        preview = lines[:max_lines]
+        truncated = len(lines) > max_lines
+        result = " │ ".join(preview)
+        if len(result) > max_chars:
+            result = result[:max_chars - 1] + "…"
+        elif truncated:
+            result += " …"
+            return result
+
     async def process_query(self, user_input: str) -> str:
         self._broadcast() # newline
         self._broadcast("QUERY", user_input[:100])
@@ -585,32 +591,17 @@ class OrchestratorAgent:
                     }
                 })
 
-        openai_tools.append({
-            "type": "function",
-            "function": {
-                "name": "read_resource",
-                "description": (
-                    "Read contextual data from MCP resources (NOT external URLs). "
-                    "Only use for resources listed in 'Available Resources'."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "uri": {
-                            "type": "string",
-                            "description": "MCP resource URI (e.g., 'mcp://...'). Do NOT use HTTP URLs!"
-                        }
-                    },
-                    "required": ["uri"]
-                }
-            }
-        })
-
-        resource_list = "\n".join([f"- {uri}" for uri in self.resource_registry.keys()])
-
         # Strong System Prompt - LLM must follow this workflow
         system_msg = (
             "You are an AUTONOMOUS AGENT using ReAct.\n\n"
+            "🎯 AUDIENCE & TONE:\n"
+            "You are assisting NOC engineers and internal operations staff - NOT end customers.\n"
+            "Always speak in THIRD PERSON about the customer:\n"
+            "  ✅ 'A €10.00 credit has been applied to the customer's account'\n"
+            "  ✅ 'The subscriber +49 176 12345678 has been notified'\n"
+            "  ❌ 'A credit has been applied to YOUR account'\n"
+            "  ❌ 'Thank you for your patience'\n"
+            "Use operational, concise language. No customer-facing pleasantries.\n\n"
             "⚠️ ANTI-HALLUCINATION RULES:\n"
             "1. You can ONLY perform actions using the tools listed below\n"
             "2. NEVER claim to have done something without actually calling the tool\n"
@@ -643,8 +634,7 @@ class OrchestratorAgent:
             "5. If recall_memories() returns 'No relevant memories', proceed with defaults.\n"
             "6. ALWAYS use available tools - DO NOT use internal knowledge or pretend to have done something.\n"
             "7. NEVER skip the recall_memories() step before recommendations!\n"
-            "8. If you get a tool execution error, report it to the user honestly.\n\n"
-            f"Available Resources:\n{resource_list}"
+            "8. If you get a tool execution error, report it to the user honestly.\n"
         )
 
         # Build messages with conversation history
@@ -663,12 +653,12 @@ class OrchestratorAgent:
             response = await self.openai.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                tools=openai_tools
+                tools=openai_tools,
+                parallel_tool_calls=False
             )
 
             msg = response.choices[0].message
 
-            # No tool calls? Agent finished
             if not msg.tool_calls:
                 self._broadcast("AGENT", "No more tool calls, agent finished")
                 initial_answer = msg.content or "I have no response."
@@ -681,36 +671,19 @@ class OrchestratorAgent:
                 fname = tc.function.name
                 #self._broadcast("AGENT", f"  Function: {fname}")
                 #self._broadcast("AGENT", f"  Arguments: {args}")
-                #print(f"Active sessions: {list(self.sessions.keys())}")
 
                 res_txt = "Error"
-                if fname == "read_resource":
-                    uri = args["uri"]
 
-                    # Validate resource URI
-                    if uri.startswith(("http://", "https://")):
-                        res_txt = (
-                            "Error: read_resource cannot access external URLs. "
-                            "Use the appropriate tool instead (e.g., get_sol_price for crypto data)."
-                        )
-                    elif uri in self.resource_registry:
-                        srv = self.resource_registry.get(uri)
-                        r = await self.sessions[srv].read_resource(uri)
-                        res_txt = r.contents[0].text
-                    else:
-                        res_txt = f"Error: Resource '{uri}' not found in registry."
+                srv, tool = fname.split("__", 1)
+                self._broadcast("ACTION", f"  Service: {srv}")
+                self._broadcast("ACTION", f"  Tool: {tool}")
+                if srv in self.sessions:
+                    r = await self.sessions[srv].call_tool(tool, args)
+                    res_txt = r.content[0].text
+                    self._broadcast("RESULT", self._format_result_preview(res_txt))
                 else:
-                    srv, tool = fname.split("__", 1)
-                    self._broadcast("ACTION", f"  Service: {srv}")
-                    self._broadcast("ACTION", f"  Tool: {tool}")
-                    if srv in self.sessions:
-                        #print(f"  ✅ Service active, calling tool...")
-                        r = await self.sessions[srv].call_tool(tool, args)
-                        res_txt = r.content[0].text
-                        self._broadcast("RESULT", res_txt.split('\n', 1)[0].strip())
-                    else:
-                        print(f"  ❌ Service '{srv}' NOT in active sessions!")
-                        print(f"  Available: {list(self.sessions.keys())}")
+                    print(f"  ❌ Service '{srv}' NOT in active sessions!")
+                    print(f"  Available: {list(self.sessions.keys())}")
 
                 messages.append({
                     "role": "tool",
