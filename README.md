@@ -116,6 +116,7 @@ You interact with the following questions/commands:
 - Check tower status. And just in case, create ticket, and apply a
   credit to this premium customer
 
+![Demo Flow](media/oss-incident.png)
 
 ## Use Cases
 
