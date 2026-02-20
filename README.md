@@ -58,6 +58,44 @@ curl --no-progress-meter -N https://notify.bjjl.dev/receive | grep -v '^:'
 Have fun! ;-)
 
 
+## Why MongoDB
+
+### 360-degree data foundation / digital twin
+
+A multi-agent, multi-MCP architecture is only as strong as its
+underlying data foundation. This foundation must be accessible in a
+highly performant, resilient manner and as comprehensive as
+possible. MongoDB's Document Model excels at building such a base,
+enabling rapid iteration during innovation and experimentation.
+
+### Voyage AI
+
+Voyage AI's powerful embedding models drive MCP service
+discovery. Moreover, select MCP servers employ them to enable semantic
+search across multi-modal content, facilitating precise retrieval,
+processing, and transactional operations.
+
+### Short/Long-Term Memory and User Preferences
+
+MongoDB serves as the cohesive layer linking MCP server invocations,
+overseeing agentic memory services. It manages both enduring data like
+user preferences ("I am vegetarian," "I often travel overseas") and
+transient situational details ("today I want Indian food," "looking
+for a new iPhone").
+
+### TTL Indexes
+
+Short-term memory undergoes automatic garbage collection after a set
+period, powered by MongoDB's TTL indexing. This eliminates the need
+for external scheduled scripts.
+
+### Geospatial Indexes
+
+Some MCP servers integrate geospatial search into their operations. In
+the Telco/OSS demo flow, for example, one server maps a customer's
+current location to nearby cell towers, enabling discovery of proper
+functioning, and conducting service assurance.
+
 ## Implemented demo flows (so far, more to come)
 
 ### Telco/BSS billing / plan management
