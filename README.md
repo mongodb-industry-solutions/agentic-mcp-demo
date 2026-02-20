@@ -4,10 +4,85 @@
 agents that discover services, maintain memory, and orchestrate
 complex workflows using MCP, MongoDB Vector Search, and Voyage AI.**
 
+
+## How to install and run the demo
+
+Setup is straightforward. Clone the repository, and follow these steps:
+
+#### Set environment variables for aaS components
+```
+export OPENAI_API_KEY="<your openai api token>"
+export MONGODB_URI="<your mdb connection string>"
+```
+
+#### Install Python 3.13
+
+```
+brew install python@3.13
+```
+
+#### Set the path in your .zshrc
+
+```
+export PATH="$(brew --prefix)/opt/python@3.13/libexec/bin:$PATH"
+```
+
+#### Create and activate a Python virtual environment
+
+```
+python -m venv <dir>
+source <dir>/bin/activate
+```
+
+#### Install Python packages
+
+```
+cd agentic-mcp-demo
+pip install -r requirements.txt
+```
+
+#### Run the shell and interact
+
+```
+python main.py
+```
+
+#### Look behind the scenes
+
+Open another shell, and issue this command:
+
+```
+curl --no-progress-meter -N https://notify.bjjl.dev/receive | grep -v '^:'
+```
+
+Have fun! ;-)
+
+
+## Implemented demo flows (so far, more to come)
+
+### Telco/BSS billing / plan management
+
+You interact with the following questions/commands:
+
+- Show my current invoice
+- Why so expensive
+- Options to reduce costs
+- Book addon world roaming plus
+- Confirm
+
+### Telco/OSS network assurance / customer complaint management
+
+You interact with the following questions/commands:
+
+- Check network status for customer +49 176 12345678
+- Check tower status. And just in case, create ticket, and apply a
+  credit to this premium customer
+
+
 ## Use Cases
 
 Not all are part of the demo yet - but should, over time. Please
-contribute MCP servers!
+contribute MCP servers and demo flows!
 
 ### Telco/BSS
 
