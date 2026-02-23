@@ -497,7 +497,7 @@ class OrchestratorAgent:
             result = result[:max_chars - 1] + "…"
         elif truncated:
             result += " …"
-            return result
+        return result
 
     async def process_query(self, user_input: str) -> str:
         self._broadcast() # newline
