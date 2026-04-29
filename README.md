@@ -13,6 +13,7 @@ Setup is straightforward. Clone the repository, and follow these steps:
 ```
 export OPENAI_API_KEY="<your openai api token>"
 export MONGODB_URI="<your mdb connection string>"
+export VOYAGE_API_KEY="<your voyage api token>"   # used by the restaurant_guide MCP service
 ```
 
 #### Install Python 3.13
@@ -52,8 +53,20 @@ python main.py
 Open another shell, and issue this command:
 
 ```
-curl --no-progress-meter -N https://notify.bjjl.dev/receive | grep -v '^:'
+curl -sN https://notify.bjjl.dev/receive | sed -n 's/^data: //p'
 ```
+
+#### Watch the portfolio live
+
+The portfolio MCP service ships with a web dashboard backed by MongoDB
+Change Streams + WebSockets. Run it in a separate shell:
+
+```
+python web/portfolio_dashboard.py
+```
+
+Then open <http://localhost:8050> — every add/update/delete from the
+agent flows in real time without polling.
 
 Have fun! ;-)
 
