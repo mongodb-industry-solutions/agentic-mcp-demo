@@ -4,12 +4,14 @@
 #
 
 import logging, asyncio, os, sys, readline, datetime, time
+from urllib.parse import urlparse
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
 from rich.markdown import Markdown
 from rich import box
+from pymongo import MongoClient
 from agents.orchestrator import OrchestratorAgent, BROADCAST_RECEIVE_URL
 
 console = Console()
@@ -35,7 +37,37 @@ def show_banner():
 """
     console.print(Panel(Markdown(banner), border_style="green", box=box.DOUBLE))
     console.print(f"📱 [bold bright_cyan]Live Feed:[/] "
-                  f"[cyan]{BROADCAST_RECEIVE_URL}\n", style="dim")
+                  f"[cyan]curl -sN {BROADCAST_RECEIVE_URL} | sed -n 's/^data: //p'",
+                  style="dim")
+    _show_mongo_info()
+
+def _show_mongo_info():
+    """Render a single condensed line: MongoDB target + vector indexes."""
+    uri = os.environ.get("MONGODB_URI", "")
+    parsed = urlparse(uri)
+    user = parsed.username or "?"
+    host = parsed.hostname or "?"
+
+    vector_idx = []
+    try:
+        client = MongoClient(uri, serverSelectionTimeoutMS=3000)
+        db = client["agent_registry"]
+        for coll_name in db.list_collection_names():
+            try:
+                for idx in db[coll_name].list_search_indexes():
+                    if idx.get("type") == "vectorSearch":
+                        vector_idx.append(f"{coll_name}.{idx['name']}")
+            except Exception:
+                pass
+        client.close()
+    except Exception:
+        pass
+
+    idx_text = ", ".join(vector_idx) if vector_idx else "none"
+    console.print(f"🍃 [bold bright_cyan]MongoDB:[/] [cyan]{user}@{host}",
+                  style="dim")
+    console.print(f"🔍 [bold bright_cyan]Vector Indexes:[/] [cyan]{idx_text}\n",
+                  style="dim")
 
 async def show_status(agent):
     table = Table(title="System Status", box=box.ROUNDED)

@@ -23,7 +23,7 @@ Use this service when users say:
 - Refresh: "refresh prices", "update portfolio prices", "get current prices"
 """
 
-import logging, os, re, datetime
+import logging, os, re, datetime, time
 import requests
 from pymongo import MongoClient, ASCENDING
 from openai import OpenAI
@@ -359,28 +359,54 @@ def delete_position(identifier: str) -> str:
     return f"🗑️ Removed {doc['name']} ({doc['ISIN']}) from portfolio."
 
 
-FRANKFURTER_URL  = "https://api.frankfurter.app/latest"
+# fawazahmed0 currency-api: CDN-backed (jsDelivr primary, Cloudflare Pages
+# mirror as fallback), no auth, daily-updated. Per-base JSON file at:
+#   /v1/currencies/{base}.json  →  {"date": "...", "{base}": {"usd": x, ...}}
+CURRENCY_API_URLS = [
+    "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/{base}.json",
+    "https://latest.currency-api.pages.dev/v1/currencies/{base}.json",
+]
 _rates_cache: dict  = {}
 _rates_cache_ts: float = 0.0
-RATES_TTL = 300  # seconds
+RATES_TTL = 300  # seconds — refresh window when network is healthy
 
 
 def _get_eur_rates() -> dict:
     """
-    Fetch EUR-based exchange rates from Frankfurter (free, no key needed).
-    Cached for RATES_TTL seconds to avoid a network call on every list_portfolio.
+    Fetch EUR-based exchange rates. Tries jsDelivr first, then the Cloudflare
+    Pages mirror; both are CDN-served so failures should be rare. Cached for
+    RATES_TTL seconds for freshness; on total failure falls back to the last
+    successful cache for the rest of the session.
     """
     global _rates_cache, _rates_cache_ts
     now = datetime.datetime.now().timestamp()
     if _rates_cache and (now - _rates_cache_ts) < RATES_TTL:
         return _rates_cache
-    resp = requests.get(FRANKFURTER_URL, params={"base": "EUR"}, timeout=10)
-    resp.raise_for_status()
-    rates = resp.json()["rates"]
-    rates["EUR"] = 1.0
-    _rates_cache    = rates
-    _rates_cache_ts = now
-    return rates
+
+    last_err = None
+    for attempt in range(3):
+        for url_tpl in CURRENCY_API_URLS:
+            try:
+                resp = requests.get(url_tpl.format(base="eur"), timeout=10)
+                resp.raise_for_status()
+                # API returns lowercase ISO codes; normalize to uppercase so
+                # the rest of the code (which uses "USD", "GBP", ...) matches.
+                raw   = resp.json().get("eur") or {}
+                rates = {code.upper(): rate for code, rate in raw.items()}
+                rates["EUR"] = 1.0
+                _rates_cache    = rates
+                _rates_cache_ts = now
+                return rates
+            except requests.exceptions.RequestException as e:
+                last_err = e
+        if attempt < 2:
+            time.sleep(0.5 * (2 ** attempt))  # 0.5s, 1s between full rounds
+
+    if _rates_cache:
+        age = int(now - _rates_cache_ts)
+        logger.warning(f"Currency API unreachable ({last_err}); serving cached rates ({age}s old)")
+        return _rates_cache
+    raise RuntimeError(f"Currency API unreachable and no cached rates available: {last_err}")
 
 
 def _convert(amount: float, from_cur: str, to_cur: str, rates: dict) -> float:
@@ -393,65 +419,83 @@ def _convert(amount: float, from_cur: str, to_cur: str, rates: dict) -> float:
 
 
 @mcp.tool()
-def list_portfolio(currency: str = "EUR") -> str:
+def list_portfolio(currency: str = None) -> str:
     """
-    List all portfolio positions and total value normalized to a single currency.
-    When positions are in different currencies, converts all totals using live
-    exchange rates from Frankfurter. Default target currency is EUR.
+    List all portfolio positions. By default, every position is shown in its
+    native currency and the total is broken down per currency (no FX). If
+    `currency` is set, every position AND the total are converted to that
+    currency using live exchange rates.
+
+    Pass `currency` ONLY when the user explicitly asks for a specific target
+    currency ('show portfolio in USD', 'total in SEK', 'worth in CHF').
+    Do NOT pass it for plain queries like 'show my portfolio'.
 
     Args:
-        currency: Target currency for the total (e.g. 'EUR', 'USD', 'GBP').
-                  Defaults to EUR.
+        currency: Optional target currency (e.g. 'EUR', 'USD', 'SEK'). When
+                  omitted, no currency conversion is performed.
     """
     positions = list(collection.find({}, {"_id": 0}).sort("name", ASCENDING))
 
     if not positions:
         return "Portfolio is empty."
 
-    currency    = currency.upper()
+    target      = currency.upper() if currency else None
     native_curs = {p.get("currency", "N/A") for p in positions}
 
-    # Fetch exchange rates when needed
     rates = {}
-    needs_conversion = native_curs != {currency}
-    if needs_conversion:
+    if target:
         try:
             rates = _get_eur_rates()
         except Exception as e:
-            logger.error(f"Exchange rate fetch failed: {e}")
-            rates = {}
+            logger.warning(f"Exchange rate fetch failed: {e}")
+            return (
+                f"❌ Cannot compute portfolio total in {target}: "
+                f"live exchange rates unavailable and no cached rates from this session. "
+                f"Refusing to return a misleading total. Please try again shortly."
+            )
 
-    lines       = [f"📊 Portfolio (total in {currency}):\n"]
-    total_conv  = 0.0
-    conv_failed = False
+        missing = sorted((native_curs | {target}) - set(rates.keys()))
+        if missing:
+            return (
+                f"❌ Cannot compute portfolio total in {target}: "
+                f"no exchange rate available for {', '.join(missing)}. "
+                f"Refusing to return a misleading total."
+            )
+
+    header = f"📊 Portfolio (total in {target}):" if target else "📊 Portfolio:"
+    lines  = [header + "\n"]
+
+    total_target  = 0.0
+    totals_native = {}
 
     for p in positions:
-        cur   = p.get("currency", "N/A")
-        value = p["price"] * p["quantity"]
+        cur          = p.get("currency", "N/A")
+        value_native = p["price"] * p["quantity"]
 
-        if rates and cur in rates and currency in rates:
-            value_conv = _convert(value, cur, currency, rates)
-            total_conv += value_conv
+        if target:
+            value_target  = _convert(value_native, cur, target, rates)
+            total_target += value_target
+            value_str = (
+                f"{value_target:.2f} {target} (= {value_native:.2f} {cur})"
+                if cur != target else f"{value_native:.2f} {cur}"
+            )
         else:
-            # Unknown currency or rate fetch failed — add as-is and flag
-            total_conv += value
-            if cur != currency:
-                conv_failed = True
+            totals_native[cur] = totals_native.get(cur, 0.0) + value_native
+            value_str = f"{value_native:.2f} {cur}"
 
         lines.append(
             f"  {p['name']} ({p['ISIN']})\n"
             f"    Qty: {p['quantity']} | "
             f"Price: {p['price']:.2f} {cur} | "
-            f"Value: {value:.2f} {cur}"
+            f"Value: {value_str}"
         )
 
-    total_note = f"{total_conv:.2f} {currency}"
-    if conv_failed:
-        total_note += " (⚠️ some currencies could not be converted)"
-    elif needs_conversion and rates:
-        total_note += " (converted at live rates)"
+    if target:
+        lines.append(f"\n  Total value: {total_target:.2f} {target} (converted at live rates)")
+    else:
+        breakdown = ", ".join(f"{v:.2f} {c}" for c, v in sorted(totals_native.items()))
+        lines.append(f"\n  Total: {breakdown}")
 
-    lines.append(f"\n  Total value: {total_note}")
     return "\n".join(lines)
 
 
