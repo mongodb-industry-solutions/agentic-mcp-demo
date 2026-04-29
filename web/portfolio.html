@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Portfolio Live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Red+Hat+Display:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:          #000000;
+    --surface:     rgba(255, 255, 255, 0.03);
+    --surface-2:   rgba(255, 255, 255, 0.06);
+    --border:      rgba(255, 255, 255, 0.08);
+    --border-hover:rgba(255, 255, 255, 0.14);
+    --text:        #ffffff;
+    --text-2:      rgba(255, 255, 255, 0.88);
+    --text-dim:    rgba(255, 255, 255, 0.45);
+    --purple:      #B246FF;
+    --purple-dim:  rgba(178, 70, 255, 0.12);
+    --cyan:        #74DEFF;
+    --cyan-dim:    rgba(116, 222, 255, 0.10);
+    --pink:        #FF6A8A;
+    --green:       #00FFA3;
+    --green-dim:   rgba(0, 255, 163, 0.10);
+    --red:         #FF4D6A;
+    --red-dim:     rgba(255, 77, 106, 0.12);
+    --heading:     'Red Hat Display', 'Inter', sans-serif;
+    --body:        'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --mono:        'JetBrains Mono', 'SF Mono', 'Cascadia Code', monospace;
+  }
+
+  body {
+    font-family: var(--body);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* ── Ambient glow ──────────────────────────────────────────────── */
+  body::before {
+    content: '';
+    position: fixed;
+    top: -30%; left: -10%;
+    width: 60%; height: 60%;
+    background: radial-gradient(ellipse, rgba(178, 70, 255, 0.06) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+  body::after {
+    content: '';
+    position: fixed;
+    bottom: -30%; right: -10%;
+    width: 50%; height: 50%;
+    background: radial-gradient(ellipse, rgba(116, 222, 255, 0.04) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── Layout ────────────────────────────────────────────────────── */
+  .container {
+    position: relative;
+    z-index: 1;
+    max-width: 1140px;
+    margin: 0 auto;
+    padding: 48px 32px;
+  }
+
+  /* ── Header ────────────────────────────────────────────────────── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 48px;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .logo-icon {
+    width: 40px; height: 40px;
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    font-family: var(--heading);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--purple);
+    background: var(--purple-dim);
+    border: 1px solid rgba(178, 70, 255, 0.25);
+  }
+
+  .logo h1 {
+    font-family: var(--heading);
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text);
+  }
+
+  .logo h1 span {
+    color: var(--text-dim);
+    font-weight: 400;
+    font-size: 18px;
+  }
+
+  .status-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-family: var(--body);
+    font-weight: 500;
+    color: var(--text-dim);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 24px;
+    padding: 8px 16px;
+    backdrop-filter: blur(8px);
+  }
+
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px rgba(0, 255, 163, 0.6);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  .status-dot.disconnected {
+    background: var(--red);
+    box-shadow: 0 0 8px rgba(255, 77, 106, 0.6);
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
+  /* ── Summary cards ─────────────────────────────────────────────── */
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 36px;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    backdrop-filter: blur(8px);
+    transition: border-color 0.2s, background 0.2s;
+  }
+
+  .card:hover {
+    border-color: var(--border-hover);
+    background: var(--surface-2);
+  }
+
+  .card-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    letter-spacing: 0.01em;
+  }
+
+  .card-value {
+    font-family: var(--heading);
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text);
+  }
+
+  .card-value.accent {
+    background: linear-gradient(135deg, var(--purple), var(--cyan));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .card-sub {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-top: 6px;
+  }
+
+  /* ── Table ─────────────────────────────────────────────────────── */
+  .table-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+    backdrop-filter: blur(8px);
+  }
+
+  .table-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .table-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 28px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .table-title {
+    font-family: var(--heading);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .table-count {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-dim);
+    background: var(--surface-2);
+    padding: 5px 14px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  thead th {
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    color: var(--text-dim);
+    padding: 16px 28px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    user-select: none;
+  }
+
+  thead th.num { text-align: right; }
+
+  tbody tr {
+    transition: background 0.15s;
+  }
+
+  tbody tr:hover {
+    background: var(--surface-2);
+  }
+
+  tbody td {
+    padding: 18px 28px;
+    font-size: 16px;
+    font-weight: 400;
+    color: var(--text-2);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    vertical-align: middle;
+  }
+
+  tbody td.num {
+    text-align: right;
+    font-family: var(--mono);
+    font-size: 16px;
+    font-weight: 400;
+    color: var(--text-2);
+  }
+
+  tbody td.ticker-cell {
+    font-family: var(--mono);
+    font-weight: 600;
+    color: var(--cyan);
+    font-size: 16px;
+  }
+
+  tbody td.name-cell {
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+    color: var(--text);
+    font-size: 16px;
+  }
+
+
+  .currency-tag {
+    display: inline-block;
+    font-size: 12px;
+    font-family: var(--mono);
+    font-weight: 500;
+    color: var(--purple);
+    background: var(--purple-dim);
+    padding: 3px 10px;
+    border-radius: 6px;
+    margin-left: 8px;
+    vertical-align: middle;
+    letter-spacing: 0.02em;
+  }
+
+  .zero-qty {
+    color: var(--text-dim);
+  }
+
+  /* ── Row animations ────────────────────────────────────────────── */
+  @keyframes row-flash-green {
+    0%   { background: rgba(0, 255, 163, 0.10); }
+    100% { background: transparent; }
+  }
+
+  @keyframes row-flash-red {
+    0%   { background: rgba(255, 77, 106, 0.10); }
+    100% { background: transparent; }
+  }
+
+  tr.flash-insert { animation: row-flash-green 1.5s ease-out; }
+  tr.flash-update { animation: row-flash-green 1.5s ease-out; }
+  tr.flash-delete {
+    animation: row-flash-red 0.6s ease-out;
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+
+  /* ── Empty state ───────────────────────────────────────────────── */
+  .empty-state {
+    text-align: center;
+    padding: 72px 20px;
+    color: var(--text-dim);
+    font-size: 15px;
+  }
+
+  .empty-state .icon {
+    font-size: 36px;
+    margin-bottom: 12px;
+    opacity: 0.3;
+  }
+
+  /* ── Footer ────────────────────────────────────────────────────── */
+  footer {
+    margin-top: 36px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-dim);
+    letter-spacing: 0.02em;
+  }
+
+  /* ── Toast notification ────────────────────────────────────────── */
+  .toast-container {
+    position: fixed;
+    bottom: 28px;
+    right: 28px;
+    z-index: 100;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 8px;
+  }
+
+  .toast {
+    font-family: var(--body);
+    font-size: 13px;
+    font-weight: 500;
+    padding: 12px 18px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: rgba(15, 15, 15, 0.95);
+    backdrop-filter: blur(12px);
+    color: var(--text);
+    opacity: 0;
+    transform: translateY(8px);
+    animation: toast-in 0.3s forwards, toast-out 0.3s 3s forwards;
+  }
+
+  @keyframes toast-in {
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes toast-out {
+    to { opacity: 0; transform: translateY(-8px); }
+  }
+
+  /* ── Responsive ────────────────────────────────────────────────── */
+  @media (max-width: 900px) {
+    .summary { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  @media (max-width: 768px) {
+    .container { padding: 20px 12px; }
+    header { margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
+    .logo h1 { font-size: 18px; }
+    .logo h1 span { font-size: 15px; }
+    .card-value { font-size: 22px; }
+    .card { padding: 16px; }
+    .summary { gap: 10px; margin-bottom: 24px; }
+    .table-header { padding: 14px 16px; }
+    .table-title { font-size: 15px; }
+
+    thead th { padding: 14px 16px; font-size: 13px; }
+    tbody td { padding: 14px 16px; font-size: 15px; }
+    tbody td.num { font-size: 15px; }
+    tbody td.ticker-cell { font-size: 15px; }
+    tbody td.name-cell { font-size: 15px; max-width: 200px; }
+    tbody td.isin-cell { font-size: 13px; }
+
+  }
+
+  @media (max-width: 480px) {
+    .summary { grid-template-columns: repeat(2, 1fr); }
+    .card-value { font-size: 20px; }
+    .card-label { font-size: 12px; }
+    .card { padding: 14px; border-radius: 12px; }
+    .logo-icon { width: 34px; height: 34px; font-size: 15px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <div class="logo">
+      <div class="logo-icon">P</div>
+      <h1>Portfolio <span>/ live</span></h1>
+    </div>
+    <div class="status-badge">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">connecting...</span>
+    </div>
+  </header>
+
+  <div class="summary">
+    <div class="card">
+      <div class="card-label">Positions</div>
+      <div class="card-value accent" id="posCount">--</div>
+      <div class="card-sub" id="activeCount"></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Total Value (USD)</div>
+      <div class="card-value" id="totalUSD">--</div>
+      <div class="card-sub" id="usdBreakdown"></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Total Value (EUR)</div>
+      <div class="card-value" id="totalEUR">--</div>
+      <div class="card-sub" id="eurBreakdown"></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Last Update</div>
+      <div class="card-value" id="lastUpdate" style="font-size:20px;">--</div>
+      <div class="card-sub" id="lastChange"></div>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <div class="table-header">
+      <span class="table-title">Holdings</span>
+      <span class="table-count" id="holdingCount">0 positions</span>
+    </div>
+    <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Ticker</th>
+          <th>Name</th>
+          <th class="num">Qty</th>
+          <th class="num">Price</th>
+          <th class="num">Value</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    </div>
+    <div class="empty-state" id="emptyState" style="display:none;">
+      <div class="icon">&#9744;</div>
+      <div>No positions in portfolio</div>
+    </div>
+  </div>
+
+  <footer>
+    real-time &middot; MongoDB Change Streams &middot; WebSocket
+  </footer>
+</div>
+
+<div class="toast-container" id="toasts"></div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────
+let rows = [];
+
+const tbody       = document.getElementById('tbody');
+const emptyState  = document.getElementById('emptyState');
+const statusDot   = document.getElementById('statusDot');
+const statusText  = document.getElementById('statusText');
+const toastBox    = document.getElementById('toasts');
+
+// ── Formatting ───────────────────────────────────────────────────
+function fmtMoney(n, currency) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency', currency: currency || 'USD',
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  }).format(n);
+}
+
+function fmtDate(iso) {
+  if (!iso) return '--';
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function fmtTime(d) {
+  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+}
+
+// ── Rendering ────────────────────────────────────────────────────
+function renderRow(r) {
+  const val = r.quantity * r.price;
+  const qtyClass = r.quantity === 0 ? ' zero-qty' : '';
+  return `<tr data-id="${r._id}">
+    <td class="ticker-cell">${esc(r.ticker || '--')}</td>
+    <td class="name-cell">${esc(r.name || '--')}<span class="currency-tag">${esc(r.currency || '')}</span></td>
+    <td class="num${qtyClass}">${r.quantity}</td>
+    <td class="num">${fmtMoney(r.price, r.currency)}</td>
+    <td class="num">${val > 0 ? fmtMoney(val, r.currency) : '--'}</td>
+  </tr>`;
+}
+
+function esc(s) {
+  const el = document.createElement('span');
+  el.textContent = s;
+  return el.innerHTML;
+}
+
+function renderAll() {
+  rows.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  tbody.innerHTML = rows.map(renderRow).join('');
+  emptyState.style.display = rows.length === 0 ? 'block' : 'none';
+  updateSummary();
+}
+
+function updateSummary() {
+  const active = rows.filter(r => r.quantity > 0);
+  document.getElementById('posCount').textContent = rows.length;
+  document.getElementById('activeCount').textContent = `${active.length} active`;
+  document.getElementById('holdingCount').textContent = `${rows.length} position${rows.length !== 1 ? 's' : ''}`;
+
+  let usd = 0, eur = 0;
+  for (const r of rows) {
+    const val = r.quantity * r.price;
+    if (r.currency === 'USD') usd += val;
+    else if (r.currency === 'EUR') eur += val;
+  }
+  document.getElementById('totalUSD').textContent = fmtMoney(usd, 'USD');
+  document.getElementById('totalEUR').textContent = fmtMoney(eur, 'EUR');
+  document.getElementById('usdBreakdown').textContent =
+    `${rows.filter(r => r.currency === 'USD').length} USD positions`;
+  document.getElementById('eurBreakdown').textContent =
+    `${rows.filter(r => r.currency === 'EUR').length} EUR positions`;
+}
+
+function flashRow(id, type) {
+  const tr = tbody.querySelector(`tr[data-id="${id}"]`);
+  if (!tr) return;
+  tr.classList.remove('flash-insert', 'flash-update', 'flash-delete');
+  void tr.offsetWidth;
+  tr.classList.add(`flash-${type}`);
+}
+
+function showToast(text) {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = text;
+  toastBox.appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+function stampUpdate(label) {
+  document.getElementById('lastUpdate').textContent = fmtTime(new Date());
+  document.getElementById('lastChange').textContent = label || '';
+}
+
+// ── WebSocket ────────────────────────────────────────────────────
+let ws;
+let reconnectDelay = 1000;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  ws.onopen = () => {
+    statusDot.classList.remove('disconnected');
+    statusText.textContent = 'live';
+    reconnectDelay = 1000;
+  };
+
+  ws.onclose = () => {
+    statusDot.classList.add('disconnected');
+    statusText.textContent = 'reconnecting...';
+    setTimeout(connect, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 1.5, 10000);
+  };
+
+  ws.onerror = () => ws.close();
+
+  ws.onmessage = (evt) => {
+    const msg = JSON.parse(evt.data);
+
+    if (msg.type === 'snapshot') {
+      rows = msg.rows;
+      renderAll();
+      stampUpdate('snapshot');
+      return;
+    }
+
+    if (msg.type === 'upsert') {
+      const idx = rows.findIndex(r => r._id === msg.doc._id);
+      if (idx >= 0) {
+        rows[idx] = msg.doc;
+        renderAll();
+        flashRow(msg.doc._id, 'update');
+        stampUpdate(`updated ${msg.doc.ticker || msg.doc.name}`);
+        showToast(`Updated: ${msg.doc.ticker || msg.doc.name}`);
+      } else {
+        rows.push(msg.doc);
+        renderAll();
+        flashRow(msg.doc._id, 'insert');
+        stampUpdate(`added ${msg.doc.ticker || msg.doc.name}`);
+        showToast(`Added: ${msg.doc.ticker || msg.doc.name}`);
+      }
+      return;
+    }
+
+    if (msg.type === 'delete') {
+      const idx = rows.findIndex(r => r._id === msg.id);
+      if (idx >= 0) {
+        const removed = rows[idx];
+        flashRow(msg.id, 'delete');
+        setTimeout(() => {
+          rows.splice(idx, 1);
+          renderAll();
+        }, 500);
+        stampUpdate(`deleted ${removed.ticker || removed.name}`);
+        showToast(`Deleted: ${removed.ticker || removed.name}`);
+      }
+      return;
+    }
+  };
+}
+
+connect();
+</script>
+</body>
+</html>

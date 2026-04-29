@@ -3,7 +3,7 @@
 # Author: Benjamin Lorenz <benjamin.lorenz@mongodb.com>
 #
 
-import logging, asyncio, os, sys, readline, datetime
+import logging, asyncio, os, sys, readline, datetime, time
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
@@ -125,15 +125,17 @@ async def interactive_loop():
                     await show_memories(agent)
                     continue
 
+                t0 = time.monotonic()
                 with console.status("[dim]Thinking...[/]"):
                     response = await agent.process_query(user_input)
+                elapsed = time.monotonic() - t0
 
                 if response is None:
                     response = "I encountered an issue processing your request."
 
                 console.print(Panel(
                     Markdown(response),
-                    title="🤖 Agent Response",
+                    title=f"🤖 Agent Response (time needed: {elapsed:.1f} seconds)",
                     border_style="green",
                     box=box.ROUNDED
                 ))
