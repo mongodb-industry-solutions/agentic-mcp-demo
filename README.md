@@ -121,6 +121,57 @@ You interact with the following questions/commands:
 - Book addon world roaming plus
 - Confirm
 
+### Intent-Based Networking (IBN) — retail chain onboarding
+
+The flagship technical demo. A retail chain customer expresses a
+business intent in plain language; the system parses it, checks
+feasibility against live inventory, generates a plan, activates it,
+and continuously defends the promise. When a violation fires, a single
+MongoDB Atlas aggregation pipeline combines **semantic similarity +
+geospatial pre-filter + time window + structured equality** to surface
+the closest matching past incident and its proven runbook — the
+"institutional memory" moment that makes MongoDB Atlas hard to replace
+with a Postgres + pgvector + PostGIS + TimescaleDB cocktail.
+
+**Setup (one time):**
+
+```
+python seed/ibn_seed.py
+```
+
+This loads the fixtures (5 sites with geo, ~20 vector-indexed knowledge
+chunks, 4 active intents) and prints the JSON config for the Atlas
+Vector Search index you need to create on `ibn_knowledge_chunks` in
+the Atlas UI. Until that index is built, the diagnose tool will fail.
+
+**Run the live dashboard (separate shell):**
+
+```
+python web/ibn_dashboard.py
+```
+
+Then open <http://localhost:8060> for engineer view, or
+<http://localhost:8060/?mode=exec> for executive view. Same backbone,
+two rendering styles.
+
+**5-minute demo conversation:**
+
+```
+You: I'm opening a new Alpenmarkt store at Marienplatz Munich.
+     POS priority, guest WiFi strictly separated, camera uplink,
+     online by 18:00, max 40ms POS latency, 99.95% availability.
+You: Is this feasible?
+You: Activate it.
+You: Inject morning rush.
+You: What happened?           ← this fires the WOW vector query
+You: Apply the runbook.
+```
+
+**10-minute extended flow** adds: `show all active intents`, resource
+inspection at the new site, geospatial failover lookup, post-violation
+fleet breadth check, runbook preview, and `update the template so
+future stores inherit the fix` — closing the institutional-memory loop.
+
 ### Telco/OSS network assurance / customer complaint management
 
 You interact with the following questions/commands:

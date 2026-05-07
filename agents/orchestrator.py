@@ -429,7 +429,7 @@ class OrchestratorAgent:
 
     async def process_query(self, user_input: str) -> str:
         await self._broadcast() # newline
-        await self._broadcast("QUERY", user_input[:100])
+        await self._broadcast("QUERY", user_input[:300])
         await self._broadcast("AGENT", "Analyzing intent...")
 
         # Context-Aware Routing for follow-up questions

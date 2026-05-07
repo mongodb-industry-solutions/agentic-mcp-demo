@@ -1,0 +1,944 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>IBN Live — Intent-Based Networking</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Red+Hat+Display:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:          #000000;
+    --surface:     rgba(255, 255, 255, 0.03);
+    --surface-2:   rgba(255, 255, 255, 0.06);
+    --border:      rgba(255, 255, 255, 0.08);
+    --border-hover:rgba(255, 255, 255, 0.16);
+    --text:        #ffffff;
+    --text-2:      rgba(255, 255, 255, 0.88);
+    --text-dim:    rgba(255, 255, 255, 0.48);
+    --green:       #00FFA3;
+    --green-dim:   rgba(0, 255, 163, 0.10);
+    --red:         #FF4D6A;
+    --red-dim:     rgba(255, 77, 106, 0.12);
+    --yellow:      #FFD166;
+    --purple:      #B246FF;
+    --purple-dim:  rgba(178, 70, 255, 0.12);
+    --cyan:        #74DEFF;
+    --cyan-dim:    rgba(116, 222, 255, 0.10);
+    --heading:     'Red Hat Display', 'Inter', sans-serif;
+    --body:        'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --mono:        'JetBrains Mono', 'SF Mono', 'Cascadia Code', monospace;
+  }
+
+  body {
+    font-family: var(--body);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body::before {
+    content: ''; position: fixed; top: -30%; left: -10%;
+    width: 60%; height: 60%;
+    background: radial-gradient(ellipse, rgba(0, 255, 163, 0.05) 0%, transparent 70%);
+    pointer-events: none; z-index: 0;
+  }
+  body::after {
+    content: ''; position: fixed; bottom: -30%; right: -10%;
+    width: 50%; height: 50%;
+    background: radial-gradient(ellipse, rgba(178, 70, 255, 0.04) 0%, transparent 70%);
+    pointer-events: none; z-index: 0;
+  }
+
+  .container { position: relative; z-index: 1; max-width: 1480px;
+                margin: 0 auto; padding: 32px 28px; }
+
+  /* ── Header ─────────────────────────────────────────────────────── */
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 28px;
+  }
+  .logo { display: flex; align-items: center; gap: 14px; }
+  .logo-icon {
+    width: 40px; height: 40px; border-radius: 12px;
+    display: grid; place-items: center;
+    font-family: var(--heading); font-size: 16px; font-weight: 700;
+    color: var(--green); background: var(--green-dim);
+    border: 1px solid rgba(0, 255, 163, 0.25);
+  }
+  .logo h1 {
+    font-family: var(--heading); font-size: 22px; font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  .logo h1 span { color: var(--text-dim); font-weight: 400; font-size: 18px; }
+
+  .header-right { display: flex; gap: 12px; align-items: center; }
+
+  .mode-badge {
+    font-family: var(--mono); font-size: 11px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 4px 12px; border-radius: 6px;
+    background: var(--purple-dim); color: var(--purple);
+    border: 1px solid rgba(178, 70, 255, 0.25);
+  }
+  body.exec-mode .mode-badge {
+    background: var(--cyan-dim); color: var(--cyan);
+    border-color: rgba(116, 222, 255, 0.25);
+  }
+
+  .status-badge {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; font-weight: 500; color: var(--text-dim);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 24px; padding: 8px 16px;
+  }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green); box-shadow: 0 0 8px rgba(0, 255, 163, 0.6);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  .status-dot.disconnected { background: var(--red); }
+  @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.35 } }
+
+  /* ── Three-column grid ──────────────────────────────────────────── */
+  .grid {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    backdrop-filter: blur(8px);
+    transition: border-color 0.2s;
+    min-height: 380px;
+    display: flex; flex-direction: column;
+  }
+  .panel:hover { border-color: var(--border-hover); }
+
+  .panel h2 {
+    font-family: var(--heading); font-size: 12px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.12em;
+    color: var(--text-dim); margin-bottom: 16px;
+  }
+
+  /* ── Intent panel ───────────────────────────────────────────────── */
+  .intent-id {
+    font-family: var(--mono); font-size: 22px; font-weight: 600;
+    color: var(--green); margin-bottom: 4px;
+  }
+  .intent-site {
+    font-family: var(--heading); font-size: 18px; font-weight: 600;
+    color: var(--text); margin-bottom: 16px;
+  }
+  .status-line {
+    display: flex; align-items: center; gap: 8px; font-size: 13px;
+    margin-bottom: 16px;
+  }
+  .status-pill {
+    padding: 4px 12px; border-radius: 999px;
+    font-family: var(--mono); font-size: 11px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .status-pill.active     { background: var(--green-dim); color: var(--green); }
+  .status-pill.violated   { background: var(--red-dim);   color: var(--red);   }
+  .status-pill.submitted  { background: var(--cyan-dim);  color: var(--cyan);  }
+  .status-pill.feasible   { background: var(--cyan-dim);  color: var(--cyan);  }
+  .status-pill.planned    { background: var(--purple-dim); color: var(--purple); }
+  .status-pill.cancelled,
+  .status-pill.closed     { background: var(--surface-2); color: var(--text-dim); }
+
+  .raw-text {
+    font-style: italic; color: var(--text-2); font-size: 14px;
+    line-height: 1.6;
+    background: var(--surface-2);
+    border-left: 3px solid var(--green);
+    padding: 12px 14px; border-radius: 8px;
+    margin-bottom: 16px;
+  }
+
+  .targets-list {
+    list-style: none; padding: 0;
+    font-size: 13px; color: var(--text-2);
+  }
+  .targets-list li {
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between;
+  }
+  .targets-list li:last-child { border-bottom: none; }
+  .targets-list .label { color: var(--text-dim); }
+  .targets-list .value { font-family: var(--mono); }
+
+  /* Engineer-only: parsed JSON */
+  .parsed-json {
+    font-family: var(--mono); font-size: 11px;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px;
+    white-space: pre-wrap; word-break: break-all;
+    color: var(--text-2);
+    max-height: 220px; overflow-y: auto;
+    margin-top: 12px;
+  }
+  body.exec-mode .parsed-json,
+  body.exec-mode .eng-only { display: none !important; }
+
+  /* Exec-only callout */
+  .exec-callout {
+    display: none;
+    margin-top: 12px; padding: 12px 14px;
+    background: var(--cyan-dim);
+    border-left: 3px solid var(--cyan);
+    border-radius: 8px;
+    font-size: 13px; color: var(--text-2);
+  }
+  body.exec-mode .exec-callout { display: block; }
+
+  /* ── Plan panel ─────────────────────────────────────────────────── */
+  .resource-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 0; border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .resource-row:last-child { border-bottom: none; }
+  .resource-row .name { color: var(--text-dim); font-size: 12px;
+                        text-transform: uppercase; letter-spacing: 0.04em; }
+  .resource-row .id   { font-family: var(--mono); color: var(--text); }
+  .plan-empty { color: var(--text-dim); font-size: 13px;
+                font-style: italic; padding: 32px 0; text-align: center; }
+
+  /* ── Assurance panel ────────────────────────────────────────────── */
+  .gauge-block { margin-bottom: 14px; }
+  .gauge-label {
+    display: flex; justify-content: space-between;
+    font-size: 12px; color: var(--text-dim); margin-bottom: 6px;
+  }
+  .gauge-label .latest { color: var(--text); font-family: var(--mono); }
+  .gauge-bar {
+    height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden;
+    position: relative;
+  }
+  .gauge-fill {
+    height: 100%; background: var(--green); border-radius: 4px;
+    transition: width 0.3s, background 0.3s;
+  }
+  .gauge-fill.violation { background: var(--red); }
+  .gauge-threshold {
+    position: absolute; top: -2px; bottom: -2px; width: 2px;
+    background: var(--yellow); opacity: 0.7;
+  }
+
+  .violation-banner {
+    display: none;
+    padding: 12px 16px; margin-top: 16px;
+    background: var(--red-dim); border: 1px solid var(--red);
+    border-radius: 12px; font-size: 13px;
+  }
+  .violation-banner.visible { display: block; animation: slide-down 0.4s ease-out; }
+  .violation-banner strong { color: var(--red); }
+  @keyframes slide-down {
+    from { opacity: 0; transform: translateY(-8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .events-feed { margin-top: 16px; max-height: 200px; overflow-y: auto; }
+  .event-row {
+    display: flex; gap: 8px; padding: 6px 0;
+    font-family: var(--mono); font-size: 11px;
+    color: var(--text-dim); border-bottom: 1px solid var(--border);
+  }
+  .event-row:last-child { border-bottom: none; }
+  .event-time { width: 60px; flex-shrink: 0; }
+  .event-kind { width: 90px; flex-shrink: 0; text-transform: uppercase;
+                font-weight: 500; letter-spacing: 0.04em; }
+  .event-kind.violation  { color: var(--red); }
+  .event-kind.recovery   { color: var(--green); }
+  .event-kind.diagnose   { color: var(--purple); }
+  .event-text { flex: 1; color: var(--text-2); white-space: nowrap;
+                overflow: hidden; text-overflow: ellipsis; }
+
+  /* ── Diagnosis (the WOW + AHA) ──────────────────────────────────── */
+  .diagnosis-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(6px);
+    z-index: 50;
+    display: none; align-items: center; justify-content: center;
+    padding: 32px;
+  }
+  .diagnosis-overlay.visible { display: flex; animation: fade-in 0.3s; }
+  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+  .diagnosis-card {
+    background: rgba(15, 15, 15, 0.96);
+    border: 1px solid var(--border-hover);
+    border-radius: 20px;
+    max-width: 1100px; width: 100%;
+    max-height: 92vh; overflow-y: auto;
+    padding: 32px;
+    animation: slide-up 0.4s ease-out;
+  }
+  @keyframes slide-up {
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .diagnosis-card h3 {
+    font-family: var(--heading); font-size: 16px; font-weight: 700;
+    color: var(--purple); text-transform: uppercase;
+    letter-spacing: 0.12em; margin-bottom: 20px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .diagnosis-card h3::before {
+    content: ''; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--purple); box-shadow: 0 0 8px var(--purple);
+  }
+
+  /* Pipeline phase (engineer mode only) */
+  .pipeline-phase {
+    display: none;
+  }
+  .pipeline-phase.visible { display: block; }
+  body.exec-mode .pipeline-phase { display: none !important; }
+
+  .pipeline-code {
+    font-family: var(--mono); font-size: 12px;
+    background: rgba(0, 0, 0, 0.5);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px;
+    color: var(--text-2);
+    line-height: 1.55;
+    white-space: pre;
+    overflow-x: auto;
+    max-height: 380px; overflow-y: auto;
+  }
+  .pipeline-code .key   { color: var(--cyan); }
+  .pipeline-code .str   { color: var(--green); }
+  .pipeline-code .num   { color: var(--yellow); }
+  .pipeline-code .stage { color: var(--purple); font-weight: 600; }
+
+  .pipeline-hint {
+    margin-top: 12px; font-size: 12px; color: var(--text-dim);
+    font-style: italic;
+  }
+
+  /* AHA phase — side-by-side */
+  .aha-phase { display: none; }
+  .aha-phase.visible { display: block; animation: fade-in 0.4s; }
+
+  .aha-grid {
+    display: grid; grid-template-columns: 1fr auto 1fr; gap: 20px;
+    align-items: stretch;
+    margin-bottom: 24px;
+  }
+
+  .aha-col {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px;
+  }
+  .aha-col.now    { border-left: 3px solid var(--red); }
+  .aha-col.match  { border-left: 3px solid var(--green); }
+  .aha-col-title {
+    font-family: var(--heading); font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.12em;
+    color: var(--text-dim); margin-bottom: 8px;
+  }
+  .aha-col-site {
+    font-family: var(--heading); font-size: 17px; font-weight: 600;
+    color: var(--text); margin-bottom: 6px;
+  }
+  .aha-col-date {
+    font-family: var(--mono); font-size: 12px; color: var(--text-dim);
+    margin-bottom: 14px;
+  }
+  .aha-col-fingerprint {
+    font-family: var(--mono); font-size: 11px;
+    color: var(--text-2); line-height: 1.7;
+  }
+  .aha-col-fingerprint .k { color: var(--text-dim); display: inline-block; width: 110px; }
+  .aha-col-fingerprint .v { color: var(--text); }
+
+  .aha-arrow {
+    align-self: center;
+    font-family: var(--mono); font-size: 16px;
+    color: var(--purple);
+    padding: 0 4px;
+  }
+
+  .similarity-bar {
+    background: var(--surface-2); border-radius: 6px; height: 6px;
+    margin: 16px 0 12px; overflow: hidden;
+  }
+  .similarity-fill {
+    height: 100%; background: linear-gradient(90deg, var(--purple), var(--green));
+    border-radius: 6px;
+    transition: width 0.6s ease-out;
+  }
+  .similarity-label {
+    display: flex; justify-content: space-between;
+    font-size: 12px; color: var(--text-dim); margin-bottom: 16px;
+  }
+  body.exec-mode .similarity-score { display: none; }
+
+  .runbook-section {
+    background: var(--green-dim);
+    border: 1px solid rgba(0, 255, 163, 0.25);
+    border-radius: 12px;
+    padding: 18px;
+  }
+  .runbook-title {
+    font-family: var(--heading); font-size: 14px; font-weight: 600;
+    color: var(--green); margin-bottom: 4px;
+  }
+  .runbook-id {
+    font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+    margin-bottom: 12px;
+  }
+  .runbook-step {
+    font-size: 13px; color: var(--text-2);
+    padding: 5px 0; padding-left: 28px; position: relative;
+  }
+  .runbook-step::before {
+    content: counter(step);
+    counter-increment: step;
+    position: absolute; left: 0; top: 4px;
+    width: 20px; height: 20px; border-radius: 50%;
+    background: var(--green); color: black;
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    display: grid; place-items: center;
+  }
+  .runbook-steps { counter-reset: step; }
+
+  .close-x {
+    position: absolute; top: 16px; right: 20px;
+    background: none; border: none; color: var(--text-dim);
+    font-size: 22px; cursor: pointer; padding: 8px;
+  }
+  .close-x:hover { color: var(--text); }
+
+  /* Recent events list at bottom */
+  .events-bar {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 16px 20px;
+  }
+  .events-bar h2 {
+    font-family: var(--heading); font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.12em;
+    color: var(--text-dim); margin-bottom: 12px;
+  }
+
+  /* ── Responsive ─────────────────────────────────────────────────── */
+  @media (max-width: 1100px) {
+    .grid { grid-template-columns: 1fr; }
+    .panel { min-height: auto; }
+    .aha-grid { grid-template-columns: 1fr; }
+    .aha-arrow { transform: rotate(90deg); padding: 4px 0; text-align: center; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div class="logo">
+      <div class="logo-icon">IBN</div>
+      <h1>IBN Live <span>/ intent-based networking</span></h1>
+    </div>
+    <div class="header-right">
+      <div class="mode-badge" id="modeBadge">eng</div>
+      <div class="status-badge">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">connecting...</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="grid">
+    <!-- ── Intent panel ── -->
+    <div class="panel" id="intentPanel">
+      <h2>Customer Intent</h2>
+      <div id="intentBody">
+        <div class="plan-empty">No intent in focus.</div>
+      </div>
+    </div>
+
+    <!-- ── Plan panel ── -->
+    <div class="panel" id="planPanel">
+      <h2>Plan &amp; Resources</h2>
+      <div id="planBody">
+        <div class="plan-empty">No plan yet — submit and check feasibility.</div>
+      </div>
+    </div>
+
+    <!-- ── Assurance panel ── -->
+    <div class="panel" id="assurancePanel">
+      <h2>Live Assurance</h2>
+      <div id="assuranceBody">
+        <div class="plan-empty">Activate an intent to see live telemetry.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="events-bar">
+    <h2>Recent Events</h2>
+    <div class="events-feed" id="eventsFeed"></div>
+  </div>
+</div>
+
+<!-- Diagnosis overlay (WOW + AHA) -->
+<div class="diagnosis-overlay" id="diagnosisOverlay">
+  <div class="diagnosis-card" style="position: relative;">
+    <button class="close-x" id="closeDiagnosis">×</button>
+    <h3>Hybrid Vector Diagnosis</h3>
+
+    <div class="pipeline-phase" id="pipelinePhase">
+      <div style="font-size: 13px; color: var(--text-dim); margin-bottom: 14px;">
+        Running aggregation pipeline against
+        <code style="color:var(--cyan); font-family:var(--mono);">ibn_knowledge_chunks</code> —
+        semantic similarity + structured filter + time window + geospatial bounding box,
+        in a <strong style="color:var(--text)">single stage</strong>:
+      </div>
+      <div class="pipeline-code" id="pipelineCode"></div>
+      <div class="pipeline-hint">→ resolving matches…</div>
+    </div>
+
+    <div class="aha-phase" id="ahaPhase">
+      <div class="aha-grid">
+        <div class="aha-col now">
+          <div class="aha-col-title">Now</div>
+          <div class="aha-col-site"   id="nowSite">—</div>
+          <div class="aha-col-date"   id="nowDate">—</div>
+          <div class="aha-col-fingerprint" id="nowFingerprint"></div>
+        </div>
+        <div class="aha-arrow">↔</div>
+        <div class="aha-col match">
+          <div class="aha-col-title">Matched past incident</div>
+          <div class="aha-col-site"   id="matchSite">—</div>
+          <div class="aha-col-date"   id="matchDate">—</div>
+          <div class="aha-col-fingerprint" id="matchFingerprint"></div>
+        </div>
+      </div>
+
+      <div class="similarity-label">
+        <span>Semantic similarity</span>
+        <span class="similarity-score" id="simScore">—</span>
+      </div>
+      <div class="similarity-bar">
+        <div class="similarity-fill" id="simFill" style="width: 0%;"></div>
+      </div>
+
+      <div class="runbook-section" id="runbookSection">
+        <div class="runbook-title" id="runbookTitle">—</div>
+        <div class="runbook-id"    id="runbookId">—</div>
+        <div class="runbook-steps" id="runbookSteps"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Mode handling ──
+const params = new URLSearchParams(window.location.search);
+const mode = params.get('mode') === 'exec' ? 'exec' : 'eng';
+if (mode === 'exec') document.body.classList.add('exec-mode');
+document.getElementById('modeBadge').textContent = mode;
+
+// ── State ──
+let state = {
+  focused: null,
+  intents: [],
+  plan: null,
+  site: null,
+  telemetry: [],
+  events: [],
+};
+
+// ── Formatting helpers ──
+function fmtTime(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('en-GB', { year: 'numeric', month: 'short', day: '2-digit' });
+}
+function esc(s) {
+  const el = document.createElement('span');
+  el.textContent = s == null ? '' : String(s);
+  return el.innerHTML;
+}
+
+// ── Intent panel ──
+function renderIntent() {
+  const i = state.focused;
+  const body = document.getElementById('intentBody');
+  if (!i) {
+    body.innerHTML = `<div class="plan-empty">No intent in focus.</div>`;
+    return;
+  }
+  const p = i.parsed || {};
+  const t = p.targets || {};
+  const status = i.status || '—';
+  const siteName = (state.site && state.site.name) || p.site_name || '—';
+
+  let targetItems = '';
+  if (t.pos_latency_ms != null)   targetItems += `<li><span class="label">POS latency</span><span class="value">≤ ${t.pos_latency_ms}ms</span></li>`;
+  if (t.availability_pct != null) targetItems += `<li><span class="label">Availability</span><span class="value">${t.availability_pct}%</span></li>`;
+  if (t.segmentation)             targetItems += `<li><span class="label">Segmentation</span><span class="value">${t.segmentation}</span></li>`;
+  if (t.kiosk_count != null)      targetItems += `<li><span class="label">Kiosks</span><span class="value">${t.kiosk_count}</span></li>`;
+  if (p.services && p.services.length)
+    targetItems += `<li><span class="label">Services</span><span class="value">${p.services.join(', ')}</span></li>`;
+  if (p.deadline)
+    targetItems += `<li><span class="label">Deadline</span><span class="value">${fmtTime(p.deadline)} ${fmtDate(p.deadline)}</span></li>`;
+
+  body.innerHTML = `
+    <div class="intent-id">${esc(i._id)}</div>
+    <div class="intent-site">${esc(siteName)}</div>
+    <div class="status-line">
+      <span class="status-pill ${status}">${esc(status)}</span>
+      ${i.activated_at ? `<span style="color:var(--text-dim); font-size:12px;">activated ${fmtDate(i.activated_at)}</span>` : ''}
+    </div>
+    <div class="raw-text">${esc(i.raw_text || '—')}</div>
+    <div class="exec-callout">
+      <strong>Intent understood.</strong> The customer's business outcome — captured verbatim above —
+      has been parsed into measurable network commitments shown to the right.
+    </div>
+    <ul class="targets-list">${targetItems}</ul>
+    <div class="parsed-json eng-only">${esc(JSON.stringify(p, null, 2))}</div>
+  `;
+}
+
+// ── Plan panel ──
+function renderPlan() {
+  const body = document.getElementById('planBody');
+  const plan = state.plan;
+  const i = state.focused;
+  if (!plan) {
+    if (i && (i.status === 'submitted')) {
+      body.innerHTML = `<div class="plan-empty">Run feasibility check, then propose plan.</div>`;
+    } else {
+      body.innerHTML = `<div class="plan-empty">No plan yet.</div>`;
+    }
+    return;
+  }
+  body.innerHTML = `
+    <div class="resource-row">
+      <span class="name">Access node</span>
+      <span class="id">${esc(plan.access_node || '—')}</span>
+    </div>
+    <div class="resource-row">
+      <span class="name">Uplink</span>
+      <span class="id">${esc(plan.uplink || '—')}${plan.uplink_mbps ? ` <span style="color:var(--text-dim)">(${plan.uplink_mbps} Mbps)</span>` : ''}</span>
+    </div>
+    <div class="resource-row">
+      <span class="name">CPE</span>
+      <span class="id">${esc(plan.cpe || '—')} ${plan.cpe_vendor ? `<span style="color:var(--text-dim)">${esc(plan.cpe_vendor)}</span>` : ''}</span>
+    </div>
+    <div class="resource-row">
+      <span class="name">Template</span>
+      <span class="id">${esc(plan.template || '—')}</span>
+    </div>
+    <div class="resource-row">
+      <span class="name">Estimated demand</span>
+      <span class="id">${plan.estimated_mbps || '—'} Mbps</span>
+    </div>
+    <div class="exec-callout" style="margin-top: 16px;">
+      <strong>Plan committed.</strong> Concrete resources are earmarked. Activation will provision
+      the services and engage live monitoring.
+    </div>
+  `;
+}
+
+// ── Assurance panel ──
+function renderAssurance() {
+  const body = document.getElementById('assuranceBody');
+  const i = state.focused;
+  if (!i) { body.innerHTML = `<div class="plan-empty">No intent in focus.</div>`; return; }
+
+  const t = (i.parsed && i.parsed.targets) || {};
+  const threshold = t.pos_latency_ms;
+  const samples = state.telemetry.filter(s => s.meta && s.meta.metric === 'pos_latency_ms');
+  const latest = samples.length ? samples[samples.length - 1].value : null;
+  const violation = (latest != null && threshold != null && latest > threshold);
+
+  const fillPct = threshold ? Math.min(100, ((latest || 0) / (threshold * 2)) * 100) : 0;
+  const thresholdMarker = threshold ? `<div class="gauge-threshold" style="left: 50%;"></div>` : '';
+
+  // Latest violation event for banner
+  const violationEvt = [...state.events].reverse().find(e => e.kind === 'violation');
+  const recoveryEvt  = [...state.events].reverse().find(e => e.kind === 'recovery');
+  const showBanner = violation && violationEvt && (!recoveryEvt || new Date(recoveryEvt.ts) < new Date(violationEvt.ts));
+
+  let bannerHTML = '';
+  if (showBanner) {
+    bannerHTML = `
+      <div class="violation-banner visible">
+        <strong>Violation</strong> — POS latency ${latest.toFixed(1)}ms exceeds SLA ≤${threshold}ms.
+        <div style="margin-top: 6px; color: var(--text-dim); font-size: 12px;">
+          ${esc(violationEvt.justification || '')}
+        </div>
+      </div>`;
+  }
+
+  body.innerHTML = `
+    <div class="gauge-block">
+      <div class="gauge-label">
+        <span>POS latency</span>
+        <span class="latest">${latest != null ? latest.toFixed(1) + 'ms' : '— ms'} ${threshold ? `<span style="color:var(--text-dim); font-size:11px;"> / ≤ ${threshold}ms</span>` : ''}</span>
+      </div>
+      <div class="gauge-bar">
+        ${thresholdMarker}
+        <div class="gauge-fill ${violation ? 'violation' : ''}" style="width: ${fillPct}%;"></div>
+      </div>
+    </div>
+
+    ${bannerHTML}
+
+    <div class="events-feed">
+      ${state.events.length === 0
+        ? '<div style="color:var(--text-dim); font-size:12px; padding:8px 0;">no events yet</div>'
+        : state.events.slice(-8).reverse().map(e => `
+            <div class="event-row">
+              <span class="event-time">${fmtTime(e.ts)}</span>
+              <span class="event-kind ${e.kind || ''}">${esc(e.kind || '')}</span>
+              <span class="event-text">${esc(e.justification || e.fingerprint?.trigger || (e.runbook_id ? 'runbook ' + e.runbook_id : '') || e.kind)}</span>
+            </div>
+          `).join('')
+      }
+    </div>
+  `;
+}
+
+function renderAll() { renderIntent(); renderPlan(); renderAssurance(); }
+
+// ── Diagnosis (WOW + AHA) ──
+
+function syntaxHighlightPipeline(obj) {
+  // Render pipeline as pretty JSON with class spans.
+  const json = JSON.stringify(obj, null, 2);
+  return json
+    .replace(/\$([a-zA-Z]+)/g, '<span class="stage">$$$1</span>')
+    .replace(/(&quot;[^&]+&quot;)\s*:/g, '<span class="key">$1</span>:')
+    .replace(/:\s*(&quot;[^&]+&quot;)/g, ': <span class="str">$1</span>')
+    .replace(/:\s*(\d+(\.\d+)?)/g, ': <span class="num">$1</span>');
+}
+
+function showDiagnosis(evt) {
+  const overlay   = document.getElementById('diagnosisOverlay');
+  const pipeP     = document.getElementById('pipelinePhase');
+  const ahaP      = document.getElementById('ahaPhase');
+  overlay.classList.add('visible');
+
+  // Pipeline phase (only meaningful in eng mode)
+  const escapedPipeline = JSON.stringify(evt.pipeline, null, 2)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/&quot;/g, '"');
+  document.getElementById('pipelineCode').innerHTML =
+    syntaxHighlightPipeline(evt.pipeline);
+
+  pipeP.classList.add('visible');
+  ahaP.classList.remove('visible');
+
+  const pipelineDuration = (mode === 'exec') ? 100 : 2200;
+
+  setTimeout(() => {
+    pipeP.classList.remove('visible');
+    renderAhaCard(evt);
+    ahaP.classList.add('visible');
+  }, pipelineDuration);
+}
+
+function renderAhaCard(evt) {
+  const matches = evt.matches || [];
+  const top = matches[0];
+  const nowFp = currentNowFingerprint();
+
+  document.getElementById('nowSite').textContent  = (state.site && state.site.name) || '—';
+  document.getElementById('nowDate').textContent  = `now · ${fmtTime(evt.ts)}`;
+  document.getElementById('nowFingerprint').innerHTML = renderFingerprint(nowFp);
+
+  if (!top) {
+    document.getElementById('matchSite').textContent  = 'no match found';
+    document.getElementById('matchDate').textContent  = '—';
+    document.getElementById('matchFingerprint').innerHTML = '<span style="color:var(--text-dim); font-style:italic;">geo + time filter excluded all candidates</span>';
+    document.getElementById('runbookTitle').textContent = '—';
+    document.getElementById('runbookId').textContent    = '';
+    document.getElementById('runbookSteps').innerHTML   = '';
+    document.getElementById('simScore').textContent     = '—';
+    document.getElementById('simFill').style.width      = '0%';
+    return;
+  }
+
+  document.getElementById('matchSite').textContent = top.site_name || '—';
+  document.getElementById('matchDate').textContent = fmtDate(top.ts);
+  document.getElementById('matchFingerprint').innerHTML = renderFingerprint(top.fingerprint || {});
+
+  const score = top.score || 0;
+  document.getElementById('simScore').textContent   = score.toFixed(2);
+  document.getElementById('simFill').style.width    = `${Math.round(score * 100)}%`;
+
+  // Runbook
+  if (top.runbook_id) {
+    document.getElementById('runbookId').textContent    = top.runbook_id;
+    document.getElementById('runbookTitle').textContent = guessRunbookTitle(top.runbook_id);
+    // Steps: hard-coded mapping for the demo runbooks (since we don't have full
+    // doc here; assurance service includes them in the diagnose response text)
+    document.getElementById('runbookSteps').innerHTML =
+      runbookSteps(top.runbook_id).map(s => `<div class="runbook-step">${esc(s)}</div>`).join('');
+  } else {
+    document.getElementById('runbookId').textContent = '';
+    document.getElementById('runbookTitle').textContent = 'No runbook in matched record';
+    document.getElementById('runbookSteps').innerHTML = '';
+  }
+}
+
+function renderFingerprint(fp) {
+  if (!fp || Object.keys(fp).length === 0) {
+    return '<span style="color:var(--text-dim); font-style:italic;">—</span>';
+  }
+  const labels = {
+    trigger: 'trigger',
+    segmentation: 'segmentation',
+    link_util_pct: 'link util',
+    latency_ms_observed: 'latency obs',
+    latency_ms_threshold: 'threshold',
+  };
+  return Object.entries(fp).map(([k, v]) => {
+    const label = labels[k] || k;
+    const suffix = (k === 'link_util_pct') ? '%' : (k.startsWith('latency_ms') ? 'ms' : '');
+    return `<div><span class="k">${esc(label)}</span><span class="v">${esc(v)}${suffix}</span></div>`;
+  }).join('');
+}
+
+function currentNowFingerprint() {
+  // From the most recent violation event
+  const v = [...state.events].reverse().find(e => e.kind === 'violation');
+  return v && v.fingerprint ? v.fingerprint : {};
+}
+
+function guessRunbookTitle(id) {
+  // Static fallback titles for demo runbooks
+  const titles = {
+    'RB-007': 'POS to EF queue with PIR uplift',
+    'RB-001': 'Fiber cut splice repair',
+    'RB-003': 'DNS resolver recovery',
+    'RB-005': 'PoE injector diagnosis',
+    'RB-009': 'UPS battery rotation',
+  };
+  return titles[id] || id;
+}
+function runbookSteps(id) {
+  const steps = {
+    'RB-007': [
+      'Mark POS DSCP 46 (EF) at CPE egress',
+      'Confirm access-node QoS maps EF to priority queue',
+      'Increase POS class PIR by 30%',
+    ],
+    'RB-001': [
+      'Confirm LTE failover engaged',
+      'Dispatch splice crew with site GPS and fiber map',
+      'Reflectometer → fusion splice → OTDR validation',
+      'Cutover from LTE backup',
+    ],
+  };
+  return steps[id] || [];
+}
+
+document.getElementById('closeDiagnosis').onclick = () => {
+  document.getElementById('diagnosisOverlay').classList.remove('visible');
+};
+
+// ── WebSocket ──
+let ws, reconnectDelay = 1000;
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  ws.onopen = () => {
+    document.getElementById('statusDot').classList.remove('disconnected');
+    document.getElementById('statusText').textContent = 'live';
+    reconnectDelay = 1000;
+  };
+  ws.onclose = () => {
+    document.getElementById('statusDot').classList.add('disconnected');
+    document.getElementById('statusText').textContent = 'reconnecting…';
+    setTimeout(connect, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 1.5, 8000);
+  };
+  ws.onerror = () => ws.close();
+
+  ws.onmessage = (evt) => {
+    const msg = JSON.parse(evt.data);
+
+    if (msg.type === 'snapshot') {
+      state.intents = msg.intents || [];
+      state.focused = msg.focused;
+      state.plan    = msg.plan;
+      state.site    = msg.site;
+      state.telemetry = msg.telemetry || [];
+      state.events  = msg.events || [];
+      renderAll();
+      return;
+    }
+
+    if (msg.type === 'intent_update') {
+      // Update or insert in the list, refocus if it matches
+      const idx = state.intents.findIndex(i => i._id === msg.doc._id);
+      if (idx >= 0) state.intents[idx] = msg.doc; else state.intents.unshift(msg.doc);
+      // Always switch focus to the most recently submitted intent
+      state.focused = state.intents.slice().sort((a, b) =>
+        new Date(b.submitted_at || 0) - new Date(a.submitted_at || 0)
+      )[0];
+      renderAll();
+      return;
+    }
+
+    if (msg.type === 'plan_update') {
+      if (state.focused && msg.doc.intent_id === state.focused._id) {
+        state.plan = msg.doc;
+        renderPlan();
+      }
+      return;
+    }
+
+    if (msg.type === 'telemetry') {
+      if (state.focused && msg.intent_id === state.focused._id) {
+        state.telemetry = msg.samples;
+        renderAssurance();
+      }
+      return;
+    }
+
+    if (msg.type === 'compliance_event') {
+      if (!state.focused || msg.doc.intent_id !== state.focused._id) return;
+      state.events.push(msg.doc);
+      if (state.events.length > 50) state.events = state.events.slice(-50);
+      renderAssurance();
+
+      if (msg.doc.kind === 'diagnose') {
+        // Bring up the WOW + AHA card
+        showDiagnosis(msg.doc);
+      }
+      return;
+    }
+  };
+}
+connect();
+</script>
+</body>
+</html>
