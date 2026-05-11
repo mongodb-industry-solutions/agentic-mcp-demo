@@ -68,6 +68,11 @@ _SYSTEM_PROMPT = (
     "  ❌ 'A credit has been applied to YOUR account'\n"
     "  ❌ 'Thank you for your patience'\n"
     "Use operational, concise language. No customer-facing pleasantries.\n\n"
+    "📄 CONTENT PASSTHROUGH RULE:\n"
+    "When a tool returns formatted content (proof points, documents, previews, "
+    "rendered stories, one-pagers, slide content) — output the tool result VERBATIM "
+    "to the user. Do NOT summarize, paraphrase, or condense it. The user asked to "
+    "see the content, so show it in full exactly as the tool returned it.\n\n"
     "⚠️ ANTI-HALLUCINATION RULES:\n"
     "1. You can ONLY perform actions using the tools listed below\n"
     "2. NEVER claim to have done something without actually calling the tool\n"
@@ -111,6 +116,11 @@ class OrchestratorAgent:
         self.exit_stack = AsyncExitStack()
         self.conversation_history = []
         self.last_service = None  # Session Stickiness
+
+        # Services that hold a session lock once selected — follow-up messages
+        # are always routed here regardless of vector score, because the user
+        # is in a multi-turn conversation with them.
+        self.CONVERSATIONAL_SERVICES = {"acc_proof_point_service", "acc_export_service"}
 
         if not os.environ.get("MONGODB_URI"):
             raise ValueError("MONGODB_URI missing")
@@ -274,6 +284,35 @@ class OrchestratorAgent:
         cursor = await self.collection.aggregate(pipeline)
         return await cursor.to_list()
 
+    async def _is_session_continuation(self, query: str, service: str,
+                                        service_description: str) -> bool:
+        """
+        Ask gpt-4o-mini whether the current query continues the active
+        conversational session or is a new, unrelated request.
+        Returns True = stay locked, False = release lock and re-route.
+        """
+        try:
+            resp = await self.openai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        f"The user is in an active session with service: '{service}'\n"
+                        f"Service purpose: {service_description[:300]}\n\n"
+                        f"New user message: '{query}'\n\n"
+                        f"Is this message continuing the current session, "
+                        f"or is it a completely different/unrelated request?\n"
+                        f"Reply with exactly one word: CONTINUE or NEW_TOPIC"
+                    )
+                }],
+                temperature=0,
+                max_tokens=5,
+            )
+            decision = resp.choices[0].message.content.strip().upper()
+            return "CONTINUE" in decision
+        except Exception:
+            return True  # safe fallback: stay in session
+
     async def _route_query(self, query: str, use_stickiness: bool = False) -> List[str]:
         """Hybrid routing: Vector Search + LLM validation for ambiguous cases"""
 
@@ -305,6 +344,27 @@ class OrchestratorAgent:
                               "using session stickiness: {self.last_service}" ))
             return [self.last_service]
 
+        # Conversational lock: services like acc_proof_point_service hold a
+        # session lock once selected — but check whether the user has switched
+        # topics before applying it.
+        if (self.last_service in self.CONVERSATIONAL_SERVICES and
+                any(c["server_name"] == self.last_service for c in candidates)):
+            service_desc = next(
+                (c.get("description", "") for c in candidates
+                 if c["server_name"] == self.last_service), ""
+            )
+            is_continuation = await self._is_session_continuation(
+                query, self.last_service, service_desc
+            )
+            if is_continuation:
+                await self._broadcast("ROUTING",
+                                f"🔒 Conversational lock → {self.last_service}")
+                return [self.last_service]
+            else:
+                await self._broadcast("ROUTING",
+                                f"🔓 Topic switch detected, releasing lock from {self.last_service}")
+                self.last_service = None
+
         # Medium confidence → LLM validation
         await self._broadcast("ROUTING",
                         ( f"🤔 Medium confidence ({best_score:.3f}), "
@@ -315,7 +375,7 @@ class OrchestratorAgent:
         for i, c in enumerate(candidates[:5]):
             service_name = c['server_name']
             description = c.get("description", "No description")
-            short_desc = description[:200] + "..." if len(description) > 200 else description
+            short_desc = description[:400] + "..." if len(description) > 400 else description
             candidate_details.append(
                 f"{i+1}. {service_name} (score: {c.get('score', 0):.2f})\n"
                 f"   Purpose: {short_desc}"
@@ -416,7 +476,7 @@ class OrchestratorAgent:
         result = resp.choices[0].message.content.strip().upper()
         return result == "YES"
 
-    def _format_result_preview(self, text: str, max_lines: int = 3, max_chars: int = 120) -> str:
+    def _format_result_preview(self, text: str, max_lines: int = 3, max_chars: int = 250) -> str:
         lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
         preview = lines[:max_lines]
         truncated = len(lines) > max_lines
@@ -569,6 +629,8 @@ class OrchestratorAgent:
                     r = await self.sessions[srv].call_tool(tool, args)
                     res_txt = r.content[0].text
                     await self._broadcast("RESULT", self._format_result_preview(res_txt))
+                    if res_txt.startswith("VERBATIM:"):
+                        return res_txt[len("VERBATIM:\n"):]
                 else:
                     print(f"  ❌ Service '{srv}' NOT in active sessions!")
                     print(f"  Available: {list(self.sessions.keys())}")

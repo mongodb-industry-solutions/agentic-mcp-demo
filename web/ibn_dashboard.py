@@ -12,14 +12,16 @@
 #       http://localhost:8060/?mode=eng    (engineer view, default)
 
 import asyncio
+import datetime
 import json
 import logging
 import os
+import random
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pymongo import AsyncMongoClient
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
@@ -136,7 +138,14 @@ async def watch_intents(db):
                     if change["operationType"] in ("insert", "update", "replace"):
                         doc = change.get("fullDocument")
                         if doc:
-                            await broadcast({"type": "intent_update", "doc": _serializable(doc)})
+                            site = await site_for(db, doc.get("site_id"))
+                            plan = await latest_plan_for(db, doc["_id"])
+                            await broadcast({
+                                "type": "intent_update",
+                                "doc":  _serializable(doc),
+                                "site": _serializable(site),
+                                "plan": _serializable(plan),
+                            })
         except Exception as e:
             log.warning(f"intent stream error ({e}); retrying in 2s")
             await asyncio.sleep(2)
@@ -190,6 +199,42 @@ async def poll_telemetry(db, interval_seconds: float = 1.0):
             await asyncio.sleep(2)
 
 
+async def live_telemetry_writer(db, interval_seconds: float = 2.0):
+    """
+    Write one telemetry sample per active intent every interval_seconds.
+    Keeps the gauge bar alive and visibly fluctuating during the demo.
+    Skips violated intents so the spike stays visible until diagnosed.
+    """
+    log.info(f"live telemetry writer started ({interval_seconds:.1f}s interval)")
+    intents_coll  = db["ibn_intents"]
+    telemetry_coll = db["ibn_telemetry"]
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            cur = intents_coll.find({"status": "active"})
+            active = [d async for d in cur]
+            if not active:
+                continue
+            now = datetime.datetime.now()
+            docs = []
+            for intent in active:
+                targets   = (intent.get("parsed") or {}).get("targets") or {}
+                threshold = targets.get("pos_latency_ms", 40)
+                lo = max(15, threshold - 18)
+                hi = max(20, threshold - 8)
+                docs.append({
+                    "ts":   now,
+                    "meta": {"intent_id": intent["_id"],
+                             "site_id":   intent.get("site_id"),
+                             "metric":    "pos_latency_ms"},
+                    "value": round(random.uniform(lo, hi), 1),
+                })
+            await telemetry_coll.insert_many(docs)
+        except Exception as e:
+            log.warning(f"live telemetry writer error ({e})")
+            await asyncio.sleep(2)
+
+
 async def watch_plans(db):
     log.info("plan watcher started")
     coll = db["ibn_policy_snapshots"]
@@ -222,6 +267,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(watch_compliance(db)),
         asyncio.create_task(poll_telemetry(db)),
         asyncio.create_task(watch_plans(db)),
+        asyncio.create_task(live_telemetry_writer(db)),
     ]
     log.info("Dashboard ready — http://localhost:8060")
     yield
@@ -238,6 +284,26 @@ HTML_PATH = Path(__file__).parent / "ibn.html"
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return HTML_PATH.read_text()
+
+
+@app.get("/snapshot/{intent_id}")
+async def intent_snapshot(intent_id: str):
+    """Per-intent snapshot for tab switching — returns intent, plan, site, telemetry, events."""
+    db = app.state.db
+    intent = await db["ibn_intents"].find_one({"_id": intent_id})
+    if not intent:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    plan    = await latest_plan_for(db, intent_id)
+    site    = await site_for(db, intent.get("site_id"))
+    samples = await recent_telemetry(db, intent_id)
+    events  = await recent_compliance_events(db, intent_id)
+    return JSONResponse(_serializable({
+        "intent":    intent,
+        "plan":      plan,
+        "site":      site,
+        "telemetry": samples,
+        "events":    events,
+    }))
 
 
 @app.websocket("/ws")

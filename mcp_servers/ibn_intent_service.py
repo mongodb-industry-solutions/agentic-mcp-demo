@@ -88,7 +88,7 @@ def _parse_natural_language(text: str) -> dict:
         f"{text!r}\n\n"
         f"Return ONLY valid JSON, no prose, with this schema:\n"
         "{\n"
-        '  "site_name":   string  // store/site name as mentioned, e.g. "Munich Marienplatz"\n'
+        '  "site_name":   string  // full site name: district + city, e.g. "Munich Marienplatz". Always include both city and district/neighbourhood if mentioned, in the form "<city> <district>".\n'
         '  "customer":    string  // company name if mentioned, else null\n'
         '  "services":    string[]  // subset of ["pos","guest_wifi","camera_uplink","kiosk","voip"]\n'
         '  "targets": {\n'

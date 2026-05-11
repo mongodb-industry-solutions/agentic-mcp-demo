@@ -150,13 +150,13 @@
     font-family: var(--mono); font-size: 11px; font-weight: 500;
     text-transform: uppercase; letter-spacing: 0.08em;
   }
-  .status-pill.active     { background: var(--green-dim); color: var(--green); }
-  .status-pill.violated   { background: var(--red-dim);   color: var(--red);   }
-  .status-pill.submitted  { background: var(--cyan-dim);  color: var(--cyan);  }
-  .status-pill.feasible   { background: var(--cyan-dim);  color: var(--cyan);  }
-  .status-pill.planned    { background: var(--purple-dim); color: var(--purple); }
+  .status-pill.active     { background: var(--green-dim);                color: var(--green);  }
+  .status-pill.violated   { background: var(--red-dim);                  color: var(--red);    }
+  .status-pill.submitted  { background: var(--cyan-dim);                 color: var(--cyan);   }
+  .status-pill.feasible   { background: rgba(255,209,102,0.12);          color: var(--yellow); }
+  .status-pill.planned    { background: var(--purple-dim);               color: var(--purple); }
   .status-pill.cancelled,
-  .status-pill.closed     { background: var(--surface-2); color: var(--text-dim); }
+  .status-pill.closed     { background: var(--surface-2);                color: var(--text-dim); }
 
   .raw-text {
     font-style: italic; color: var(--text-2); font-size: 14px;
@@ -215,16 +215,83 @@
   .resource-row .name { color: var(--text-dim); font-size: 12px;
                         text-transform: uppercase; letter-spacing: 0.04em; }
   .resource-row .id   { font-family: var(--mono); color: var(--text); }
-  .plan-empty { color: var(--text-dim); font-size: 13px;
-                font-style: italic; padding: 32px 0; text-align: center; }
+  .plan-empty { color: var(--text-2); font-size: 14px;
+                font-weight: 500; padding: 32px 16px; text-align: center;
+                line-height: 1.6; }
+  .plan-draft-badge {
+    display: inline-block; margin-bottom: 14px;
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--yellow); background: rgba(255,209,102,0.10);
+    border: 1px solid rgba(255,209,102,0.25);
+    border-radius: 6px; padding: 4px 12px;
+  }
+  .feasibility-header {
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--yellow); margin-bottom: 12px;
+  }
+  .feasibility-meta {
+    font-size: 12px; color: var(--text-dim); margin-bottom: 14px;
+  }
+  .check-row {
+    padding: 10px 0; border-bottom: 1px solid var(--border);
+  }
+  .check-row:last-child { border-bottom: none; }
+  .check-row-top {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 3px;
+  }
+  .check-tick  { color: var(--green); font-size: 13px; flex-shrink: 0; }
+  .check-label { font-size: 11px; text-transform: uppercase;
+                 letter-spacing: 0.08em; color: var(--text-dim); width: 90px; flex-shrink: 0; }
+  .check-id    { font-family: var(--mono); font-size: 12px; color: var(--text); }
+  .check-detail   { font-size: 12px; color: var(--text-2); padding-left: 21px; }
+  .check-satisfies { font-size: 11px; color: var(--text-dim); padding-left: 21px; margin-top: 1px; }
+
+  /* Committed plan */
+  .plan-section { padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .plan-section:last-of-type { border-bottom: none; }
+  .plan-section-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--text-dim); margin-bottom: 3px;
+  }
+  .plan-section-id {
+    font-family: var(--mono); font-size: 13px; color: var(--green);
+    margin-bottom: 3px;
+  }
+  .plan-section-desc { font-size: 12px; color: var(--text-2); line-height: 1.5; }
+  .plan-section-sub  { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
 
   /* ── Assurance panel ────────────────────────────────────────────── */
-  .gauge-block { margin-bottom: 14px; }
-  .gauge-label {
-    display: flex; justify-content: space-between;
-    font-size: 12px; color: var(--text-dim); margin-bottom: 6px;
+  .sla-table { margin-bottom: 4px; }
+  .sla-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
   }
-  .gauge-label .latest { color: var(--text); font-family: var(--mono); }
+  .sla-row:last-child { border-bottom: none; }
+  .sla-metric   { color: var(--text-dim); }
+  .sla-committed { font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+  .sla-live     { font-family: var(--mono); color: var(--text); min-width: 52px; text-align: right; }
+  .sla-live.viol { color: var(--red); }
+  .sla-live.nodata { color: var(--text-dim); font-style: italic; }
+  .sla-badge    { font-family: var(--mono); font-size: 12px; font-weight: 600;
+                  width: 18px; text-align: center; }
+  .sla-badge.ok   { color: var(--green); }
+  .sla-badge.viol { color: var(--red); }
+  .sla-badge.nd   { color: var(--text-dim); }
+
+  /* Inline gauge spans all 4 grid columns, sits right under POS latency row */
+  .sla-gauge {
+    grid-column: 1 / -1;
+    margin-top: 2px;
+    margin-bottom: 4px;
+  }
+
   .gauge-bar {
     height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden;
     position: relative;
@@ -443,6 +510,51 @@
     color: var(--text-dim); margin-bottom: 12px;
   }
 
+  /* ── Site tab bar ───────────────────────────────────────────────── */
+  .tab-bar {
+    display: flex; gap: 8px; margin-bottom: 16px;
+    overflow-x: auto; padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+  .tab-bar::-webkit-scrollbar { display: none; }
+
+  .tab {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 16px; border-radius: 10px; cursor: pointer;
+    background: var(--surface); border: 1px solid var(--border);
+    flex-shrink: 0; transition: border-color 0.15s, background 0.15s;
+    user-select: none;
+  }
+  .tab:hover { border-color: var(--border-hover); background: var(--surface-2); }
+  .tab.active {
+    background: var(--surface-2); border-color: var(--border-hover);
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.06);
+  }
+  .tab-name {
+    font-family: var(--heading); font-size: 13px; font-weight: 600;
+    color: var(--text-2); white-space: nowrap;
+  }
+  .tab.active .tab-name { color: var(--text); }
+  .tab-status {
+    font-family: var(--mono); font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 2px 7px; border-radius: 4px;
+  }
+  .tab-status.active   { background: var(--green-dim);            color: var(--green); }
+  .tab-status.violated { background: var(--red-dim);              color: var(--red); }
+  .tab-status.planned  { background: var(--purple-dim);           color: var(--purple); }
+  .tab-status.feasible { background: rgba(255,209,102,0.12);      color: var(--yellow); }
+  .tab-status.submitted{ background: var(--cyan-dim);             color: var(--cyan); }
+  .tab-status.cancelled,
+  .tab-status.closed   { background: var(--surface-2);            color: var(--text-dim); }
+
+  @keyframes tab-new-flash {
+    0%   { box-shadow: 0 0 0 0 rgba(0,255,163,0.6); border-color: var(--green); }
+    60%  { box-shadow: 0 0 0 6px rgba(0,255,163,0); }
+    100% { box-shadow: none; }
+  }
+  .tab.new-flash { animation: tab-new-flash 1.2s ease-out; }
+
   /* ── Responsive ─────────────────────────────────────────────────── */
   @media (max-width: 1100px) {
     .grid { grid-template-columns: 1fr; }
@@ -467,6 +579,8 @@
       </div>
     </div>
   </header>
+
+  <div class="tab-bar" id="tabBar"></div>
 
   <div class="grid">
     <!-- ── Intent panel ── -->
@@ -628,38 +742,73 @@ function renderPlan() {
   const body = document.getElementById('planBody');
   const plan = state.plan;
   const i = state.focused;
+  const fr = i && i.feasibility_result;
+
   if (!plan) {
-    if (i && (i.status === 'submitted')) {
-      body.innerHTML = `<div class="plan-empty">Run feasibility check, then propose plan.</div>`;
-    } else {
-      body.innerHTML = `<div class="plan-empty">No plan yet.</div>`;
+    if (fr && i.status === 'feasible') {
+      const checks = (fr.checks || []).map(c => `
+        <div class="check-row">
+          <div class="check-row-top">
+            <span class="check-tick">✓</span>
+            <span class="check-label">${esc(c.label)}</span>
+            <span class="check-id">${esc(c.id)}</span>
+          </div>
+          <div class="check-detail">${esc(c.detail)}</div>
+          <div class="check-satisfies">satisfies: ${esc(c.satisfies)}</div>
+        </div>`).join('');
+      body.innerHTML = `
+        <div class="feasibility-header">Feasibility Analysis</div>
+        <div class="feasibility-meta">
+          ${fr.resources_found} resources queried at ${esc(fr.site_name)} ·
+          ${(fr.checks || []).length} checks passed · est. ${fr.estimated_mbps} Mbps demand
+        </div>
+        ${checks}
+        <div class="plan-empty" style="padding: 16px 0 0; font-size: 13px;">
+          Run propose plan to commit these resources.
+        </div>`;
+      return;
     }
+    const hint = {
+      submitted: 'Run feasibility check next.',
+      planned:   'Plan committed — run activate.',
+    }[i && i.status] || 'No plan yet.';
+    body.innerHTML = `<div class="plan-empty">${hint}</div>`;
     return;
   }
+
+  const anCaps = (plan.access_node_capabilities || []).slice(0, 4).join(' · ') || 'EVPN · VLAN · DSCP';
+  const anLabel = [plan.access_node_vendor, plan.access_node_model].filter(Boolean).join(' ') || plan.access_node;
+  const upLabel = plan.uplink_mbps ? `${plan.uplink_mbps.toLocaleString()} Mbps ${plan.uplink_medium || 'fiber'}` : plan.uplink;
+  const upHeadroom = plan.uplink_mbps && plan.estimated_mbps
+    ? `${Math.round(plan.uplink_mbps / plan.estimated_mbps)}× headroom over ${plan.estimated_mbps} Mbps estimated demand`
+    : '';
+  const cpeLabel = [plan.cpe_vendor, plan.cpe_model].filter(Boolean).join(' ') || plan.cpe;
+
   body.innerHTML = `
-    <div class="resource-row">
-      <span class="name">Access node</span>
-      <span class="id">${esc(plan.access_node || '—')}</span>
+    <div class="plan-section">
+      <div class="plan-section-label">Network layer</div>
+      <div class="plan-section-id">${esc(plan.access_node || '—')}</div>
+      <div class="plan-section-desc">${esc(anLabel)} — carries all site traffic, enforces strict VLAN isolation between payment, guest and camera segments.</div>
+      <div class="plan-section-sub">${esc(anCaps)}</div>
     </div>
-    <div class="resource-row">
-      <span class="name">Uplink</span>
-      <span class="id">${esc(plan.uplink || '—')}${plan.uplink_mbps ? ` <span style="color:var(--text-dim)">(${plan.uplink_mbps} Mbps)</span>` : ''}</span>
+    <div class="plan-section">
+      <div class="plan-section-label">Uplink</div>
+      <div class="plan-section-id">${esc(plan.uplink || '—')}</div>
+      <div class="plan-section-desc">${esc(upLabel)}${plan.uplink_provider ? ` via ${esc(plan.uplink_provider)}` : ''} — carrier-grade last-mile connectivity.</div>
+      ${upHeadroom ? `<div class="plan-section-sub">${esc(upHeadroom)}</div>` : ''}
     </div>
-    <div class="resource-row">
-      <span class="name">CPE</span>
-      <span class="id">${esc(plan.cpe || '—')} ${plan.cpe_vendor ? `<span style="color:var(--text-dim)">${esc(plan.cpe_vendor)}</span>` : ''}</span>
+    <div class="plan-section">
+      <div class="plan-section-label">On-site gateway</div>
+      <div class="plan-section-id">${esc(plan.cpe || '—')}</div>
+      <div class="plan-section-desc">${esc(cpeLabel)} — classifies POS payment traffic at ingress with DSCP-46, enforcing the ≤${(fr && fr.checks && fr.checks[0] && '') || ''}${(state.focused && state.focused.parsed && state.focused.parsed.targets && state.focused.parsed.targets.pos_latency_ms) || '40'}ms latency SLA at the access layer.</div>
     </div>
-    <div class="resource-row">
-      <span class="name">Template</span>
-      <span class="id">${esc(plan.template || '—')}</span>
+    <div class="plan-section">
+      <div class="plan-section-label">Segmentation template</div>
+      <div class="plan-section-id">${esc(plan.template || '—')}</div>
+      <div class="plan-section-desc">Three isolated VLANs: POS (payment) · guest WiFi · camera uplink. No inter-VLAN routing — payment traffic is physically separated from all other traffic.</div>
     </div>
-    <div class="resource-row">
-      <span class="name">Estimated demand</span>
-      <span class="id">${plan.estimated_mbps || '—'} Mbps</span>
-    </div>
-    <div class="exec-callout" style="margin-top: 16px;">
-      <strong>Plan committed.</strong> Concrete resources are earmarked. Activation will provision
-      the services and engage live monitoring.
+    <div class="exec-callout" style="margin-top: 12px;">
+      <strong>Resources committed.</strong> This snapshot is immutable — Atlas has earmarked exactly these assets for ${esc((state.site && state.site.name) || 'this site')}. Run activate to provision services and start live monitoring.
     </div>
   `;
 }
@@ -676,40 +825,71 @@ function renderAssurance() {
   const latest = samples.length ? samples[samples.length - 1].value : null;
   const violation = (latest != null && threshold != null && latest > threshold);
 
-  const fillPct = threshold ? Math.min(100, ((latest || 0) / (threshold * 2)) * 100) : 0;
-  const thresholdMarker = threshold ? `<div class="gauge-threshold" style="left: 50%;"></div>` : '';
-
-  // Latest violation event for banner
-  const violationEvt = [...state.events].reverse().find(e => e.kind === 'violation');
-  const recoveryEvt  = [...state.events].reverse().find(e => e.kind === 'recovery');
-  const showBanner = violation && violationEvt && (!recoveryEvt || new Date(recoveryEvt.ts) < new Date(violationEvt.ts));
-
-  let bannerHTML = '';
-  if (showBanner) {
-    bannerHTML = `
-      <div class="violation-banner visible">
-        <strong>Violation</strong> — POS latency ${latest.toFixed(1)}ms exceeds SLA ≤${threshold}ms.
-        <div style="margin-top: 6px; color: var(--text-dim); font-size: 12px;">
-          ${esc(violationEvt.justification || '')}
-        </div>
+  function slaRow(metric, committed, liveText, statusClass, inlineGaugeHTML) {
+    const liveClass = statusClass === 'nd' ? 'nodata' : statusClass === 'viol' ? 'viol' : '';
+    const badge     = statusClass === 'ok' ? '✓' : statusClass === 'viol' ? '✗' : '—';
+    return `
+      <div class="sla-row">
+        <span class="sla-metric">${metric}</span>
+        <span class="sla-committed">${esc(committed)}</span>
+        <span class="sla-live ${liveClass}">${esc(liveText)}</span>
+        <span class="sla-badge ${statusClass}">${badge}</span>
+        ${inlineGaugeHTML || ''}
       </div>`;
   }
 
+  // POS latency
+  const fillPct = threshold ? Math.min(100, ((latest || 0) / (threshold * 2)) * 100) : 0;
+  const posGauge = threshold ? `
+    <div class="sla-gauge gauge-bar">
+      <div class="gauge-threshold" style="left: 50%;"></div>
+      <div class="gauge-fill ${violation ? 'violation' : ''}" style="width: ${fillPct}%;"></div>
+    </div>` : '';
+
+  const isProvisioned = (i.status === 'active' || i.status === 'violated');
+
+  // Availability: only meaningful once the intent is live; derive from outage events
+  const outageCount = state.events.filter(e => e.kind === 'outage').length;
+  const availLive   = isProvisioned ? (outageCount === 0 ? '100.00%' : null) : null;
+
+  let slaRows = '';
+  if (threshold != null) {
+    slaRows += slaRow(
+      'POS latency',
+      `≤ ${threshold}ms`,
+      latest != null ? `${latest.toFixed(1)}ms` : (isProvisioned ? 'no data' : '—'),
+      latest == null ? 'nd' : violation ? 'viol' : 'ok',
+      posGauge
+    );
+  }
+  if (t.availability_pct != null) {
+    slaRows += slaRow('Availability', `${t.availability_pct}%`,
+      availLive || '—', availLive ? 'ok' : 'nd');
+  }
+  if (t.segmentation) {
+    slaRows += slaRow('Segmentation', t.segmentation,
+      isProvisioned ? 'active' : '—', isProvisioned ? 'ok' : 'nd');
+  }
+
+  const gaugeHTML = ''; // now inlined in POS row
+
+  // Violation banner
+  const violationEvt = [...state.events].reverse().find(e => e.kind === 'violation');
+  const recoveryEvt  = [...state.events].reverse().find(e => e.kind === 'recovery');
+  const showBanner = violation && violationEvt && (!recoveryEvt || new Date(recoveryEvt.ts) < new Date(violationEvt.ts));
+  const bannerHTML = showBanner ? `
+    <div class="violation-banner visible">
+      <strong>Violation</strong> — POS latency ${latest.toFixed(1)}ms exceeds SLA ≤${threshold}ms.
+      <div style="margin-top: 6px; color: var(--text-dim); font-size: 12px;">
+        ${esc(violationEvt.justification || '')}
+      </div>
+    </div>` : '';
+
   body.innerHTML = `
-    <div class="gauge-block">
-      <div class="gauge-label">
-        <span>POS latency</span>
-        <span class="latest">${latest != null ? latest.toFixed(1) + 'ms' : '— ms'} ${threshold ? `<span style="color:var(--text-dim); font-size:11px;"> / ≤ ${threshold}ms</span>` : ''}</span>
-      </div>
-      <div class="gauge-bar">
-        ${thresholdMarker}
-        <div class="gauge-fill ${violation ? 'violation' : ''}" style="width: ${fillPct}%;"></div>
-      </div>
-    </div>
-
+    <div class="sla-table">${slaRows}</div>
+    ${gaugeHTML}
     ${bannerHTML}
-
-    <div class="events-feed">
+    <div class="events-feed" style="margin-top: 8px;">
       ${state.events.length === 0
         ? '<div style="color:var(--text-dim); font-size:12px; padding:8px 0;">no events yet</div>'
         : state.events.slice(-8).reverse().map(e => `
@@ -724,7 +904,43 @@ function renderAssurance() {
   `;
 }
 
-function renderAll() { renderIntent(); renderPlan(); renderAssurance(); }
+// ── Tab bar ──
+function renderTabs() {
+  const bar = document.getElementById('tabBar');
+  const sorted = state.intents.slice().sort((a, b) =>
+    new Date(a.submitted_at || 0) - new Date(b.submitted_at || 0)
+  );
+  bar.innerHTML = sorted.map(intent => {
+    const isActive = state.focused && intent._id === state.focused._id;
+    const siteName = (intent.parsed && intent.parsed.site_name) || intent._id;
+    const status   = intent.status || 'submitted';
+    const id       = intent._id.replace(/"/g, '');
+    return `
+      <div class="tab${isActive ? ' active' : ''}" id="tab-${id}"
+           onclick="switchFocus('${id}')">
+        <span class="tab-name">${esc(siteName)}</span>
+        <span class="tab-status ${status}">${status}</span>
+      </div>`;
+  }).join('');
+}
+
+async function switchFocus(intentId) {
+  if (state.focused && state.focused._id === intentId) return;
+  try {
+    const resp = await fetch(`/snapshot/${encodeURIComponent(intentId)}`);
+    const data = await resp.json();
+    state.focused  = data.intent;
+    state.plan     = data.plan;
+    state.site     = data.site;
+    state.telemetry = data.telemetry || [];
+    state.events   = data.events || [];
+    renderAll();
+  } catch(e) {
+    console.error('switchFocus failed', e);
+  }
+}
+
+function renderAll() { renderTabs(); renderIntent(); renderPlan(); renderAssurance(); }
 
 // ── Diagnosis (WOW + AHA) ──
 
@@ -897,14 +1113,35 @@ function connect() {
     }
 
     if (msg.type === 'intent_update') {
-      // Update or insert in the list, refocus if it matches
       const idx = state.intents.findIndex(i => i._id === msg.doc._id);
+      const isNew = idx < 0;
       if (idx >= 0) state.intents[idx] = msg.doc; else state.intents.unshift(msg.doc);
-      // Always switch focus to the most recently submitted intent
-      state.focused = state.intents.slice().sort((a, b) =>
+
+      const newFocused = state.intents.slice().sort((a, b) =>
         new Date(b.submitted_at || 0) - new Date(a.submitted_at || 0)
       )[0];
+      const focusChanged = !state.focused || newFocused._id !== state.focused._id;
+      state.focused = newFocused;
+
+      if (msg.doc._id === state.focused._id) {
+        state.site = msg.site || null;
+        if (focusChanged) {
+          // New intent in focus — take plan from snapshot, clear stale data
+          state.plan = msg.plan || null;
+          state.telemetry = [];
+          state.events = [];
+        }
+        // For same-intent status updates (feasible→planned→active) do NOT overwrite
+        // state.plan — plan_update owns that. A timing race can cause intent_update
+        // to carry plan:null even when a valid plan snapshot already exists.
+      }
+
       renderAll();
+      if (isNew) {
+        // Flash the new tab green to draw attention
+        const tabEl = document.getElementById(`tab-${msg.doc._id}`);
+        if (tabEl) tabEl.classList.add('new-flash');
+      }
       return;
     }
 

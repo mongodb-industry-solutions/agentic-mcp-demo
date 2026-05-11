@@ -19,6 +19,7 @@ will not work until that index is built.
 import argparse
 import datetime
 import os
+import random
 import sys
 
 from pymongo import MongoClient, ASCENDING, GEOSPHERE
@@ -184,7 +185,27 @@ RESOURCES = [
         "state": "active",
         "location": {"type": "Point", "coordinates": [11.5807, 48.1657]},
     },
-    # Token resources for the other sites (so geo lookup has data)
+    # Schwabing uplink + CPE
+    {
+        "_id": "UP-MUC-SCH-F1",
+        "site_id": "site-muc-sch",
+        "type": "uplink",
+        "medium": "fiber",
+        "capacity_mbps": 1000,
+        "monthly_cost_eur": 420,
+        "provider": "DTAG",
+        "state": "active",
+    },
+    {
+        "_id": "CPE-MUC-SCH-CISCO",
+        "site_id": "site-muc-sch",
+        "type": "cpe",
+        "vendor": "Cisco",
+        "model": "C8200L-1N-4T",
+        "feature_set": ["VLAN", "QoS-8class", "DSCP-marking", "PoE", "DMVPN"],
+        "state": "active",
+    },
+    # Hamburg Altona
     {
         "_id": "AN-HAM-ALT-01",
         "site_id": "site-ham-alt",
@@ -199,6 +220,26 @@ RESOURCES = [
         "location": {"type": "Point", "coordinates": [9.9356, 53.5500]},
     },
     {
+        "_id": "UP-HAM-ALT-F1",
+        "site_id": "site-ham-alt",
+        "type": "uplink",
+        "medium": "fiber",
+        "capacity_mbps": 1000,
+        "monthly_cost_eur": 395,
+        "provider": "Vodafone Business",
+        "state": "active",
+    },
+    {
+        "_id": "CPE-HAM-ALT-JUNI",
+        "site_id": "site-ham-alt",
+        "type": "cpe",
+        "vendor": "Juniper",
+        "model": "SRX380",
+        "feature_set": ["VLAN", "QoS-8class", "DSCP-marking", "PoE"],
+        "state": "active",
+    },
+    # Berlin Mitte
+    {
         "_id": "AN-BER-MIT-01",
         "site_id": "site-ber-mit",
         "type": "access_node",
@@ -212,6 +253,26 @@ RESOURCES = [
         "location": {"type": "Point", "coordinates": [13.4050, 52.5200]},
     },
     {
+        "_id": "UP-BER-MIT-F10",
+        "site_id": "site-ber-mit",
+        "type": "uplink",
+        "medium": "fiber",
+        "capacity_mbps": 10000,
+        "monthly_cost_eur": 1750,
+        "provider": "DTAG",
+        "state": "active",
+    },
+    {
+        "_id": "CPE-BER-MIT-CISCO",
+        "site_id": "site-ber-mit",
+        "type": "cpe",
+        "vendor": "Cisco",
+        "model": "C8300-2N2S-6T",
+        "feature_set": ["VLAN", "QoS-8class", "DSCP-marking", "PoE", "DMVPN", "kiosk-uplink"],
+        "state": "active",
+    },
+    # Stuttgart Königstraße
+    {
         "_id": "AN-STU-KOE-01",
         "site_id": "site-stu-koe",
         "type": "access_node",
@@ -223,6 +284,103 @@ RESOURCES = [
         "free_gbps": 5.7,
         "state": "active",
         "location": {"type": "Point", "coordinates": [9.1829, 48.7758]},
+    },
+    {
+        "_id": "UP-STU-KOE-F1",
+        "site_id": "site-stu-koe",
+        "type": "uplink",
+        "medium": "fiber",
+        "capacity_mbps": 1000,
+        "monthly_cost_eur": 360,
+        "provider": "Vodafone Business",
+        "state": "active",
+    },
+    {
+        "_id": "CPE-STU-KOE-CISCO",
+        "site_id": "site-stu-koe",
+        "type": "cpe",
+        "vendor": "Cisco",
+        "model": "C8200L-1N-4T",
+        "feature_set": ["VLAN", "QoS-8class", "DSCP-marking", "PoE"],
+        "state": "active",
+    },
+]
+
+
+# ─── Policy snapshots (one per pre-existing active intent) ─────────────────
+
+POLICY_SNAPSHOTS = [
+    {
+        "_id": "PLAN-IBN-001-SEED",
+        "intent_id":    "IBN-001",
+        "snapshot_at":  days_ago(142),
+        "access_node":  "AN-HAM-ALT-01",
+        "access_node_vendor": "Juniper",
+        "access_node_model":  "ACX7100-32C",
+        "access_node_capabilities": ["EVPN", "VLAN", "DSCP-marking", "policer"],
+        "uplink":       "UP-HAM-ALT-F1",
+        "uplink_mbps":  1000,
+        "uplink_medium": "fiber",
+        "uplink_provider": "Vodafone Business",
+        "cpe":          "CPE-HAM-ALT-JUNI",
+        "cpe_vendor":   "Juniper",
+        "cpe_model":    "SRX380",
+        "template":     "strict-retail-v3",
+        "estimated_mbps": 220,
+    },
+    {
+        "_id": "PLAN-IBN-002-SEED",
+        "intent_id":    "IBN-002",
+        "snapshot_at":  days_ago(98),
+        "access_node":  "AN-BER-MIT-01",
+        "access_node_vendor": "Cisco",
+        "access_node_model":  "NCS-540-24Z8Q2C",
+        "access_node_capabilities": ["EVPN", "VLAN", "VXLAN", "DSCP-marking", "policer", "shaper"],
+        "uplink":       "UP-BER-MIT-F10",
+        "uplink_mbps":  10000,
+        "uplink_medium": "fiber",
+        "uplink_provider": "DTAG",
+        "cpe":          "CPE-BER-MIT-CISCO",
+        "cpe_vendor":   "Cisco",
+        "cpe_model":    "C8300-2N2S-6T",
+        "template":     "strict-retail-v3",
+        "estimated_mbps": 680,
+    },
+    {
+        "_id": "PLAN-IBN-003-SEED",
+        "intent_id":    "IBN-003",
+        "snapshot_at":  days_ago(67),
+        "access_node":  "AN-STU-KOE-01",
+        "access_node_vendor": "Cisco",
+        "access_node_model":  "NCS-540-24Z8Q2C",
+        "access_node_capabilities": ["EVPN", "VLAN", "DSCP-marking"],
+        "uplink":       "UP-STU-KOE-F1",
+        "uplink_mbps":  1000,
+        "uplink_medium": "fiber",
+        "uplink_provider": "Vodafone Business",
+        "cpe":          "CPE-STU-KOE-CISCO",
+        "cpe_vendor":   "Cisco",
+        "cpe_model":    "C8200L-1N-4T",
+        "template":     "strict-retail-v3",
+        "estimated_mbps": 190,
+    },
+    {
+        "_id": "PLAN-IBN-004-SEED",
+        "intent_id":    "IBN-004",
+        "snapshot_at":  days_ago(60),
+        "access_node":  "AN-MUC-SCH-02",
+        "access_node_vendor": "Cisco",
+        "access_node_model":  "NCS-540-24Z8Q2C",
+        "access_node_capabilities": ["EVPN", "VLAN", "VXLAN", "DSCP-marking", "policer", "shaper"],
+        "uplink":       "UP-MUC-SCH-F1",
+        "uplink_mbps":  1000,
+        "uplink_medium": "fiber",
+        "uplink_provider": "DTAG",
+        "cpe":          "CPE-MUC-SCH-CISCO",
+        "cpe_vendor":   "Cisco",
+        "cpe_model":    "C8200L-1N-4T",
+        "template":     "strict-retail-v3",
+        "estimated_mbps": 210,
     },
 ]
 
@@ -781,12 +939,43 @@ def insert_all(db):
     db["ibn_sites"].insert_many(SITES)
     db["ibn_resources"].insert_many(RESOURCES)
     db["ibn_intents"].insert_many(INTENTS)
+    db["ibn_policy_snapshots"].insert_many(POLICY_SNAPSHOTS)
     db["ibn_knowledge_chunks"].insert_many(KNOWLEDGE_CHUNKS)
     print(f"    {len(CUSTOMERS)} customers")
     print(f"    {len(SITES)} sites")
     print(f"    {len(RESOURCES)} resources")
     print(f"    {len(INTENTS)} active intents")
+    print(f"    {len(POLICY_SNAPSHOTS)} policy snapshots")
     print(f"    {len(KNOWLEDGE_CHUNKS)} knowledge chunks")
+
+
+def seed_baseline_telemetry(db):
+    """Seed 120s of healthy POS-latency telemetry for every active intent."""
+    telemetry = db["ibn_telemetry"]
+    now = datetime.datetime.now()
+    n = 120
+    total = 0
+    for intent in INTENTS:
+        if intent.get("status") != "active":
+            continue
+        threshold = intent["parsed"]["targets"].get("pos_latency_ms", 40)
+        lo = max(15, threshold - 18)
+        hi = max(20, threshold - 8)
+        docs = [
+            {
+                "ts": now - datetime.timedelta(seconds=n - 1 - i),
+                "meta": {
+                    "intent_id": intent["_id"],
+                    "site_id":   intent["site_id"],
+                    "metric":    "pos_latency_ms",
+                },
+                "value": round(random.uniform(lo, hi), 1),
+            }
+            for i in range(n)
+        ]
+        telemetry.insert_many(docs)
+        total += n
+    print(f"📡 Seeded {total} baseline telemetry samples ({n}s × {len(INTENTS)} intents)")
 
 
 # NOTE: this is the Atlas auto-embed pattern — `type: "text"` with `model`,
@@ -875,6 +1064,7 @@ def main():
     ensure_telemetry_timeseries(db)
     ensure_indexes(db)
     insert_all(db)
+    seed_baseline_telemetry(db)
     create_vector_index(db)
 
     print("✅ Seed complete.")

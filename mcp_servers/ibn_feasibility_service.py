@@ -27,6 +27,7 @@ telemetry (use telemetry simulator).
 import datetime
 import logging
 import os
+import random
 from pymongo import MongoClient
 from mcp.server.fastmcp import FastMCP
 
@@ -41,6 +42,7 @@ intents           = db["ibn_intents"]
 sites             = db["ibn_sites"]
 resources         = db["ibn_resources"]
 policy_snapshots  = db["ibn_policy_snapshots"]
+telemetry         = db["ibn_telemetry"]
 
 DEFAULT_TEMPLATE = "strict-retail-v3"  # the latently-broken template — sets up the WOW
 
@@ -151,8 +153,21 @@ def _evaluate(intent: dict) -> dict:
 
 
 def _save_plan_snapshot(intent_id: str, plan: dict):
-    """Persist the plan as an immutable snapshot."""
-    policy_snapshots.insert_one({**plan, "_id": f"PLAN-{intent_id}-{datetime.datetime.now():%Y%m%d%H%M%S}"})
+    """Persist the plan as an immutable snapshot, enriched with resource details."""
+    an_doc  = resources.find_one({"_id": plan.get("access_node")})  or {}
+    up_doc  = resources.find_one({"_id": plan.get("uplink")})       or {}
+    cpe_doc = resources.find_one({"_id": plan.get("cpe")})          or {}
+    enriched = {
+        **plan,
+        "_id": f"PLAN-{intent_id}-{datetime.datetime.now():%Y%m%d%H%M%S}",
+        "access_node_vendor":       an_doc.get("vendor", ""),
+        "access_node_model":        an_doc.get("model", ""),
+        "access_node_capabilities": an_doc.get("capabilities", []),
+        "uplink_medium":            up_doc.get("medium", "fiber"),
+        "uplink_provider":          up_doc.get("provider", ""),
+        "cpe_model":                cpe_doc.get("model", ""),
+    }
+    policy_snapshots.insert_one(enriched)
 
 
 # ─── Tools ─────────────────────────────────────────────────────────────────
@@ -189,17 +204,61 @@ def check_feasibility(intent_id: str) -> str:
             + "\n".join(f"  - {r}" for r in result["reasons"])
         )
 
+    plan = result["plan"]
+    targets = intent.get("parsed", {}).get("targets", {})
+    site_resources = list(resources.find({"site_id": intent.get("site_id")}))
+
+    feasibility_result = {
+        "checked_at":      datetime.datetime.now(),
+        "site_name":       plan["site_name"],
+        "resources_found": len(site_resources),
+        "estimated_mbps":  plan["estimated_mbps"],
+        "checks": [
+            {
+                "label":    "Access Node",
+                "id":       plan["access_node"],
+                "detail":   "EVPN + VLAN + DSCP-marking",
+                "satisfies": f"strict segmentation · POS latency ≤{targets.get('pos_latency_ms','?')}ms",
+            },
+            {
+                "label":    "Uplink",
+                "id":       plan["uplink"],
+                "detail":   f"{plan['uplink_mbps']:,} Mbps fiber",
+                "satisfies": f"estimated demand {plan['estimated_mbps']} Mbps ✓",
+            },
+            {
+                "label":    "CPE",
+                "id":       plan["cpe"],
+                "detail":   f"{plan['cpe_vendor']} — DSCP-marking capable",
+                "satisfies": f"POS latency ≤{targets.get('pos_latency_ms','?')}ms",
+            },
+            {
+                "label":    "Template",
+                "id":       plan["template"],
+                "detail":   "VLAN isolation: POS / guest WiFi / camera",
+                "satisfies": f"{targets.get('segmentation','strict')} segmentation",
+            },
+        ],
+    }
+
     intents.update_one(
         {"_id": intent_id},
-        {"$set": {"status": "feasible"},
+        {"$set": {
+            "status":            "feasible",
+            "feasibility_result": feasibility_result,
+        },
          "$push": {"history": {
-             "ts": datetime.datetime.now(),
+             "ts":    datetime.datetime.now(),
              "event": "feasibility_passed",
-             "note": "All resource checks passed.",
+             "note":  (
+                 f"{len(site_resources)} resources evaluated at {plan['site_name']}. "
+                 f"Access node {plan['access_node']}, uplink {plan['uplink']} "
+                 f"({plan['uplink_mbps']} Mbps), CPE {plan['cpe']}, "
+                 f"template {plan['template']}, est. demand {plan['estimated_mbps']} Mbps."
+             ),
          }}}
     )
 
-    plan = result["plan"]
     return (
         f"✓ Intent **{intent_id}** is **feasible** at {plan['site_name']}.\n"
         f"  Access node: `{plan['access_node']}` (EVPN+VLAN+DSCP capable)\n"
@@ -300,6 +359,23 @@ def activate_plan(intent_id: str) -> str:
                                "note": "Intent live, assurance monitoring engaged."}},
          "$inc":  {"version": 1}}
     )
+
+    # Seed 90s of healthy baseline telemetry so the assurance panel
+    # lights up green immediately — the store just went live.
+    threshold = intent.get("parsed", {}).get("targets", {}).get("pos_latency_ms", 40)
+    lo = max(15, threshold - 18)
+    hi = max(20, threshold - 8)
+    now_dt = datetime.datetime.now()
+    telemetry.insert_many([
+        {
+            "ts":   now_dt - datetime.timedelta(seconds=89 - i),
+            "meta": {"intent_id": intent_id,
+                     "site_id":   intent.get("site_id"),
+                     "metric":    "pos_latency_ms"},
+            "value": round(random.uniform(lo, hi), 1),
+        }
+        for i in range(90)
+    ])
 
     site = sites.find_one({"_id": intent.get("site_id")})
     return (

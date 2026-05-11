@@ -4,6 +4,7 @@ mcp
 numpy
 openai
 pymongo
+python-pptx
 requests
 rich
 websockets
