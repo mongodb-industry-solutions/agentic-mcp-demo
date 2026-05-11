@@ -19,6 +19,8 @@ Use this service when users say:
              "why is it red", "explain the violation", "find similar incident"
 - Apply:     "apply the runbook", "apply <runbook_id>", "apply the fix",
              "remediate"
+- Runbooks:  "what runbooks are available", "list runbooks", "show runbooks",
+             "which runbooks exist"
 - Template:  "update the template", "patch the template",
              "fold the fix into the template"
 
@@ -525,6 +527,17 @@ def update_template_version(template_id: str = "strict-retail-v3",
         f"  {len(affected)} active intent{'s' if len(affected) != 1 else ''} "
         f"flagged for next change window."
     )
+
+
+@mcp.tool()
+def list_runbooks() -> str:
+    """List all runbooks available in the knowledge base."""
+    rbs = list(knowledge_chunks.find({"kind": "runbook"}, {"_id": 1, "title": 1, "text": 1}))
+    if not rbs:
+        return "No runbooks found in the knowledge base."
+    lines = [f"**{r['_id']}** — {r.get('title', '(no title)')}\n  {r.get('text', '')[:120]}…"
+             for r in rbs]
+    return f"**{len(rbs)} runbooks available:**\n\n" + "\n\n".join(lines)
 
 
 if __name__ == "__main__":

@@ -122,6 +122,8 @@
     backdrop-filter: blur(8px);
     transition: border-color 0.2s;
     min-height: 380px;
+    min-width: 0;
+    overflow: hidden;
     display: flex; flex-direction: column;
   }
   .panel:hover { border-color: var(--border-hover); }
@@ -274,7 +276,7 @@
     font-size: 13px;
   }
   .sla-row:last-child { border-bottom: none; }
-  .sla-metric   { color: var(--text-dim); }
+  .sla-metric   { color: var(--text-dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sla-committed { font-family: var(--mono); font-size: 12px; color: var(--text-2); }
   .sla-live     { font-family: var(--mono); color: var(--text); min-width: 52px; text-align: right; }
   .sla-live.viol { color: var(--red); }
@@ -311,6 +313,7 @@
     padding: 12px 16px; margin-top: 16px;
     background: var(--red-dim); border: 1px solid var(--red);
     border-radius: 12px; font-size: 13px;
+    overflow-wrap: break-word; word-break: break-word;
   }
   .violation-banner.visible { display: block; animation: slide-down 0.4s ease-out; }
   .violation-banner strong { color: var(--red); }
@@ -332,8 +335,7 @@
   .event-kind.violation  { color: var(--red); }
   .event-kind.recovery   { color: var(--green); }
   .event-kind.diagnose   { color: var(--purple); }
-  .event-text { flex: 1; color: var(--text-2); white-space: nowrap;
-                overflow: hidden; text-overflow: ellipsis; }
+  .event-text { flex: 1; color: var(--text-2); overflow-wrap: break-word; word-break: break-word; }
 
   /* ── Diagnosis (the WOW + AHA) ──────────────────────────────────── */
   .diagnosis-overlay {
@@ -548,12 +550,31 @@
   .tab-status.cancelled,
   .tab-status.closed   { background: var(--surface-2);            color: var(--text-dim); }
 
-  @keyframes tab-new-flash {
-    0%   { box-shadow: 0 0 0 0 rgba(0,255,163,0.6); border-color: var(--green); }
-    60%  { box-shadow: 0 0 0 6px rgba(0,255,163,0); }
-    100% { box-shadow: none; }
+  @keyframes content-enter {
+    0%   { opacity: 0; transform: translateY(32px) scale(0.97); }
+    100% { opacity: 1; transform: translateY(0)    scale(1);    }
   }
-  .tab.new-flash { animation: tab-new-flash 1.2s ease-out; }
+  .grid.content-enter {
+    animation: content-enter 0.48s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+
+  @keyframes tab-enter {
+    0%   { transform: scaleX(0); opacity: 0;
+           border-color: var(--green);
+           box-shadow: 0 0 24px rgba(0,255,163,0.55); }
+    55%  { transform: scaleX(1.07); opacity: 1;
+           border-color: var(--green);
+           box-shadow: 0 0 14px rgba(0,255,163,0.30); }
+    75%  { transform: scaleX(0.97);
+           border-color: rgba(0,255,163,0.4); }
+    100% { transform: scaleX(1); opacity: 1;
+           border-color: var(--border);
+           box-shadow: none; }
+  }
+  .tab.tab-enter {
+    animation: tab-enter 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    transform-origin: center;
+  }
 
   /* ── Responsive ─────────────────────────────────────────────────── */
   @media (max-width: 1100px) {
@@ -904,6 +925,53 @@ function renderAssurance() {
   `;
 }
 
+// ── Telemetry-only patch — updates live value + gauge without re-rendering the panel ──
+function patchAssuranceTelemetry() {
+  const i = state.focused;
+  if (!i) return;
+  const t = (i.parsed && i.parsed.targets) || {};
+  const threshold = t.pos_latency_ms;
+  const samples = state.telemetry.filter(s => s.meta && s.meta.metric === 'pos_latency_ms');
+  const latest  = samples.length ? samples[samples.length - 1].value : null;
+  if (latest == null || threshold == null) return;
+
+  const violation = latest > threshold;
+  const liveEl    = document.querySelector('#assuranceBody .sla-live');
+  const badgeEl   = document.querySelector('#assuranceBody .sla-badge');
+  const fillEl    = document.querySelector('#assuranceBody .gauge-fill');
+
+  // If the DOM isn't built yet (first render), fall back to a full render
+  if (!liveEl) { renderAssurance(); return; }
+
+  liveEl.textContent = `${latest.toFixed(1)}ms`;
+  liveEl.className   = `sla-live${violation ? ' viol' : ''}`;
+  if (badgeEl) {
+    badgeEl.textContent = violation ? '✗' : '✓';
+    badgeEl.className   = `sla-badge ${violation ? 'viol' : 'ok'}`;
+  }
+  if (fillEl) {
+    const pct = Math.min(100, (latest / (threshold * 2)) * 100);
+    fillEl.style.width = `${pct}%`;
+    fillEl.classList.toggle('violation', violation);
+  }
+
+  // Show/hide violation banner without recreating it
+  const banner = document.querySelector('#assuranceBody .violation-banner');
+  const violationEvt = [...state.events].reverse().find(e => e.kind === 'violation');
+  const recoveryEvt  = [...state.events].reverse().find(e => e.kind === 'recovery');
+  const showBanner = violation && violationEvt &&
+    (!recoveryEvt || new Date(recoveryEvt.ts) < new Date(violationEvt.ts));
+
+  if (showBanner && (!banner || !banner.classList.contains('visible'))) {
+    // Banner needs to appear for the first time — full render so it animates in
+    renderAssurance();
+    return;
+  }
+  if (banner && !showBanner) {
+    banner.classList.remove('visible');
+  }
+}
+
 // ── Tab bar ──
 function renderTabs() {
   const bar = document.getElementById('tabBar');
@@ -941,6 +1009,13 @@ async function switchFocus(intentId) {
 }
 
 function renderAll() { renderTabs(); renderIntent(); renderPlan(); renderAssurance(); }
+
+function animateContent() {
+  const grid = document.querySelector('.grid');
+  grid.classList.remove('content-enter');
+  void grid.offsetWidth; // force reflow so animation restarts
+  grid.classList.add('content-enter');
+}
 
 // ── Diagnosis (WOW + AHA) ──
 
@@ -1138,9 +1213,9 @@ function connect() {
 
       renderAll();
       if (isNew) {
-        // Flash the new tab green to draw attention
+        animateContent();
         const tabEl = document.getElementById(`tab-${msg.doc._id}`);
-        if (tabEl) tabEl.classList.add('new-flash');
+        if (tabEl) tabEl.classList.add('tab-enter');
       }
       return;
     }
@@ -1156,7 +1231,7 @@ function connect() {
     if (msg.type === 'telemetry') {
       if (state.focused && msg.intent_id === state.focused._id) {
         state.telemetry = msg.samples;
-        renderAssurance();
+        patchAssuranceTelemetry();
       }
       return;
     }
@@ -1168,8 +1243,10 @@ function connect() {
       renderAssurance();
 
       if (msg.doc.kind === 'diagnose') {
-        // Bring up the WOW + AHA card
         showDiagnosis(msg.doc);
+      }
+      if (msg.doc.kind === 'recovery') {
+        document.getElementById('diagnosisOverlay').classList.remove('visible');
       }
       return;
     }
