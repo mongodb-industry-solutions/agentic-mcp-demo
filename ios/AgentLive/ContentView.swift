@@ -19,20 +19,24 @@ struct ContentView: View {
     // ── Header ────────────────────────────────────────────────────────────
     private var header: some View {
         HStack {
-            Circle()
-                .fill(client.isConnected ? Color(hex: "00FF88") : Color(hex: "FF4D6A"))
-                .frame(width: 8, height: 8)
-            Text(client.isConnected ? "live" : "offline")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundColor(.white.opacity(0.5))
-            Spacer()
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(client.isConnected ? Color(hex: "00FF88") : Color(hex: "FF4D6A"))
+                    .frame(width: 8, height: 8)
+                Text(client.isConnected ? "live" : "offline")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.5))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
             Text("🧠 Agent Live")
                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                 .foregroundColor(Color(hex: "00FF88"))
-            Spacer()
+
             Button("clear") { client.clear() }
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(.white.opacity(0.35))
+                .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
