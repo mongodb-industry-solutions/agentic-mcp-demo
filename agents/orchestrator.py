@@ -14,6 +14,7 @@ import ast
 import httpx
 import datetime
 import hashlib
+import tempfile
 from pathlib import Path
 from contextlib import AsyncExitStack
 from typing import List, Dict
@@ -110,12 +111,13 @@ _SYSTEM_PROMPT = (
 
 
 class OrchestratorAgent:
-    def __init__(self, server_dir: str = "mcp_servers"):
+    def __init__(self, server_dir: str = "mcp_servers", local_broadcast=None):
         self.server_dir = Path(server_dir)
         self.sessions = {}
         self.exit_stack = AsyncExitStack()
         self.conversation_history = []
         self.last_service = None  # Session Stickiness
+        self.local_broadcast = local_broadcast  # optional async callback(tag, msg)
 
         # Services that hold a session lock once selected — follow-up messages
         # are always routed here regardless of vector score, because the user
@@ -136,9 +138,15 @@ class OrchestratorAgent:
         self.model = os.environ.get("OPENAI_MODEL", "gpt-4o")
         self.http_client = httpx.AsyncClient()
         self.tool_cache: Dict[str, List[Dict]] = {}  # server_name → openai tool dicts
+        self.temp_dir = Path(tempfile.mkdtemp(prefix="mcp_cloud_"))
 
     async def _broadcast(self, title: str = "", message: str = "", tags: str = "robot"):
         """Send a live update and wait for delivery (preserves message ordering)."""
+        if self.local_broadcast:
+            try:
+                await self.local_broadcast(title, message)
+            except Exception:
+                pass
         try:
             if title == "":
                 await self.http_client.post(BROADCAST_URL, content=f"{Colors.RESET}\n", timeout=15)
@@ -206,11 +214,21 @@ class OrchestratorAgent:
             async for doc in self.collection.find({}, {"_id": 0})
         }
 
-        await self._broadcast("BOOTSTRAP", f"Found {len(db_servers)} servers in registry")
+        # Restore cloud-sourced servers to temp dir so they can be activated
+        cloud_servers = {
+            name: doc for name, doc in db_servers.items()
+            if doc.get("origin") == "cloud" and doc.get("source_code")
+        }
+        for name, doc in cloud_servers.items():
+            p = self.temp_dir / f"{name}.py"
+            p.write_text(doc["source_code"])
 
-        # Compute diff
+        await self._broadcast("BOOTSTRAP", f"Found {len(db_servers)} servers in registry "
+                              f"({len(cloud_servers)} cloud-managed)")
+
+        # Compute diff — cloud servers are never auto-deleted by local sync
         local_names = set(local_servers.keys())
-        db_names = set(db_servers.keys())
+        db_names    = set(n for n, d in db_servers.items() if d.get("origin") != "cloud")
 
         new_servers = local_names - db_names
         deleted_servers = db_names - local_names
@@ -487,6 +505,92 @@ class OrchestratorAgent:
             result += " …"
         return result
 
+    def list_servers_info(self) -> List[Dict]:
+        """Return all registered servers (local filesystem + cloud), with session status."""
+        result = []
+        seen = set()
+
+        # Local filesystem servers
+        if self.server_dir.exists():
+            for f in sorted(self.server_dir.glob("*.py")):
+                if f.name == "__init__.py":
+                    continue
+                name = f.stem
+                seen.add(name)
+                result.append({
+                    "name":   name,
+                    "origin": "local",
+                    "active": name in self.sessions,
+                })
+
+        # Cloud servers (temp dir)
+        for f in sorted(self.temp_dir.glob("*.py")):
+            name = f.stem
+            if name not in seen:
+                seen.add(name)
+                result.append({
+                    "name":   name,
+                    "origin": "cloud",
+                    "active": name in self.sessions,
+                })
+
+        return result
+
+    async def add_server(self, name: str, description: str, source_code: str) -> str:
+        """Write source to temp dir, register in MongoDB, activate session."""
+        if not name.isidentifier():
+            return f"❌ Invalid server name '{name}' — must be a valid Python identifier."
+
+        path = self.temp_dir / f"{name}.py"
+        path.write_text(source_code)
+
+        await self.collection.update_one(
+            {"server_name": name},
+            {"$set": {
+                "server_name":  name,
+                "description":  description,
+                "origin":       "cloud",
+                "source_code":  source_code,
+                "file_hash":    hashlib.sha256(source_code.encode()).hexdigest(),
+                "last_seen":    datetime.datetime.now().isoformat(),
+            }},
+            upsert=True,
+        )
+
+        # Close existing session if any so it restarts fresh
+        if name in self.sessions:
+            del self.sessions[name]
+            self.tool_cache.pop(name, None)
+
+        await self._activate_servers([{"server_name": name, "path": str(path)}])
+
+        if name in self.sessions:
+            await self._broadcast("BOOTSTRAP", f"✓ Cloud server '{name}' added and active")
+            return f"✓ Server '{name}' added and active."
+        else:
+            return f"❌ Server '{name}' registered but failed to start — check the source code."
+
+    async def remove_server(self, name: str) -> str:
+        """Deactivate session and remove from registry."""
+        if name in self.sessions:
+            del self.sessions[name]
+            self.tool_cache.pop(name, None)
+
+        cloud_path = self.temp_dir / f"{name}.py"
+        if cloud_path.exists():
+            cloud_path.unlink()
+            await self.collection.delete_one({"server_name": name, "origin": "cloud"})
+            await self._broadcast("BOOTSTRAP", f"🗑️  Cloud server '{name}' removed")
+            return f"✓ Cloud server '{name}' removed."
+
+        # Local server — just evict the session; file stays on disk
+        local_path = self.server_dir / f"{name}.py"
+        if local_path.exists():
+            await self._broadcast("BOOTSTRAP", f"⏏  Local server '{name}' session evicted (file kept)")
+            return f"✓ Session for '{name}' evicted. File is local — it will reload on next query."
+
+        return f"❌ Server '{name}' not found."
+
     async def process_query(self, user_input: str) -> str:
         await self._broadcast() # newline
         await self._broadcast("QUERY", user_input[:300])
@@ -532,19 +636,18 @@ class OrchestratorAgent:
         if not service_names:
             return "I couldn't find relevant services for this request."
 
-        # Resolve paths from local filesystem
+        # Resolve paths — local filesystem first, then cloud temp dir
         matches = []
         for service_name in service_names:
             local_path = self.server_dir / f"{service_name}.py"
+            cloud_path = self.temp_dir   / f"{service_name}.py"
 
             if local_path.exists():
-                matches.append({
-                    "server_name": service_name,
-                    "path": str(local_path.absolute())
-                })
-                #print(f"✓ Resolved {service_name} → {local_path}")
+                matches.append({"server_name": service_name, "path": str(local_path.absolute())})
+            elif cloud_path.exists():
+                matches.append({"server_name": service_name, "path": str(cloud_path.absolute())})
             else:
-                print(f"⚠️ {service_name} not found locally at {local_path}, skipping")
+                print(f"⚠️ {service_name} not found locally or in cloud temp dir, skipping")
 
         if not matches:
             return (

@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agentic AI — Web Shell</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:      #0a0a0a;
+    --surface: #111111;
+    --border:  #1e1e1e;
+    --green:   #00ff88;
+    --yellow:  #ffd700;
+    --cyan:    #00d4ff;
+    --red:     #ff4d6a;
+    --blue:    #4d9fff;
+    --dim:     rgba(255,255,255,0.32);
+    --text:    rgba(255,255,255,0.88);
+    --mono:    'JetBrains Mono', 'SF Mono', monospace;
+
+    /* full-line colors per tag */
+    --c-bootstrap: var(--blue);
+    --c-query:     var(--yellow);
+    --c-agent:     var(--cyan);
+    --c-routing:   #ffffff;
+    --c-action:    #ffffff;
+    --c-result:    var(--green);
+    --c-error:     var(--red);
+    --c-react:     #ffffff;
+  }
+
+  html, body { height: 100%; overflow: hidden; }
+
+  body {
+    font-family: var(--mono);
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    font-size: 13px;
+    line-height: 1.38;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Banner ── */
+  .banner {
+    border: 1px solid var(--green);
+    border-radius: 6px;
+    margin: 14px 14px 0;
+    padding: 12px 18px;
+    flex-shrink: 0;
+  }
+  .banner-title { color: var(--green); font-weight: 700; font-size: 14px; margin-bottom: 4px; }
+  .banner-meta  { color: var(--dim); font-size: 11px; margin-top: 6px; }
+  .banner-meta span { color: var(--cyan); }
+
+  /* ── Two-column body ── */
+  .columns {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    gap: 0;
+  }
+
+  /* ── Left: chat ── */
+  .col-chat {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    border-right: 1px solid var(--border);
+  }
+
+  #history {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px 16px;
+    scroll-behavior: smooth;
+  }
+  #history::-webkit-scrollbar { width: 5px; }
+  #history::-webkit-scrollbar-thumb { background: #222; border-radius: 3px; }
+
+  .input-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .input-prompt { color: var(--blue); font-weight: 700; white-space: nowrap; user-select: none; }
+  #queryInput {
+    flex: 1; background: transparent; border: none; outline: none;
+    color: var(--text); font-family: var(--mono); font-size: 13px;
+    caret-color: var(--green);
+  }
+  #queryInput::placeholder { color: var(--dim); }
+  .input-hint { color: var(--dim); font-size: 11px; white-space: nowrap; }
+
+  /* ── Right: log + servers ── */
+  .col-log {
+    width: 40%;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  /* Tab bar */
+  .right-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .right-tab {
+    padding: 7px 16px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--dim);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    user-select: none;
+  }
+  .right-tab.active { color: var(--green); border-bottom-color: var(--green); }
+
+  /* Log pane */
+  #logPanel {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 10px;
+    font-size: 11px;
+    line-height: 1.35;
+  }
+  #logPanel::-webkit-scrollbar { width: 4px; }
+  #logPanel::-webkit-scrollbar-thumb { background: #222; border-radius: 2px; }
+
+  /* Servers pane */
+  #serversPanel {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 12px;
+    font-size: 12px;
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+  }
+  #serversPanel.visible { display: flex; }
+
+  .server-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    gap: 8px;
+  }
+  .server-name  { color: var(--text); font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .server-badge {
+    font-size: 10px; padding: 1px 7px; border-radius: 3px; flex-shrink: 0;
+    font-weight: 600; text-transform: uppercase;
+  }
+  .server-badge.local   { background: rgba(0,212,255,0.10);  color: var(--cyan); }
+  .server-badge.cloud   { background: rgba(204,136,255,0.12); color: #cc88ff; }
+  .server-active        { font-size: 10px; color: var(--green); }
+  .server-inactive      { font-size: 10px; color: var(--dim); }
+  .server-remove {
+    background: none; border: 1px solid #333; border-radius: 4px;
+    color: var(--dim); font-size: 11px; padding: 2px 8px; cursor: pointer;
+    font-family: var(--mono);
+  }
+  .server-remove:hover { border-color: var(--red); color: var(--red); }
+
+  /* Add server button */
+  .add-server-btn {
+    margin-top: 4px; padding: 7px; border-radius: 5px; cursor: pointer;
+    border: 1px dashed #333; color: var(--dim); font-size: 12px;
+    font-family: var(--mono); background: none; text-align: center;
+  }
+  .add-server-btn:hover { border-color: var(--green); color: var(--green); }
+
+  /* Add server modal */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7); z-index: 100;
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay.visible { display: flex; }
+  .modal {
+    background: #141414; border: 1px solid var(--border);
+    border-radius: 8px; padding: 20px 22px;
+    width: 540px; max-width: 95vw; display: flex; flex-direction: column; gap: 12px;
+  }
+  .modal h3 { color: var(--green); font-size: 13px; font-weight: 700; }
+  .modal label { color: var(--dim); font-size: 11px; display: block; margin-bottom: 4px; }
+  .modal input, .modal textarea {
+    width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a;
+    border-radius: 4px; color: var(--text); font-family: var(--mono);
+    font-size: 12px; padding: 7px 10px; outline: none;
+  }
+  .modal input:focus, .modal textarea:focus { border-color: var(--green); }
+  .modal textarea { height: 220px; resize: vertical; }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .btn {
+    padding: 6px 16px; border-radius: 4px; font-family: var(--mono);
+    font-size: 12px; cursor: pointer; border: 1px solid #333;
+  }
+  .btn-primary { background: var(--green); color: #000; border-color: var(--green); font-weight: 700; }
+  .btn-primary:hover { opacity: 0.85; }
+  .btn-cancel  { background: none; color: var(--dim); }
+  .btn-cancel:hover  { color: var(--text); border-color: #555; }
+  .modal-result { font-size: 11px; padding: 4px 0; }
+
+  .log-entry {
+    padding: 1px 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  /* full-line coloring by tag */
+  .log-entry.tag-BOOTSTRAP { color: var(--c-bootstrap); }
+  .log-entry.tag-QUERY     { color: var(--c-query);     }
+  .log-entry.tag-AGENT     { color: var(--c-agent);     }
+  .log-entry.tag-ROUTING   { color: var(--c-routing);   }
+  .log-entry.tag-ACTION    { color: var(--c-action);    }
+  .log-entry.tag-RESULT    { color: var(--c-result);    }
+  .log-entry.tag-ERROR     { color: var(--c-error);     }
+  .log-entry.tag-REACT     { color: var(--c-react);     }
+  .log-entry.tag-INFO      { color: var(--dim);         }
+  .log-entry .log-tag { font-weight: 700; }
+
+  /* ── Chat history entries ── */
+  .you-line {
+    color: var(--blue); font-weight: 700;
+    margin: 12px 0 2px;
+  }
+  .you-line span { color: var(--text); font-weight: 400; }
+
+  .thinking {
+    color: var(--dim); font-size: 12px; padding: 3px 0; display: none;
+  }
+  .thinking.active { display: block; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+  .thinking-dot { animation: blink 1s infinite; }
+
+  .turn-sep { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+
+  /* ── Response panel ── */
+  .response-panel {
+    border: 1px solid var(--green);
+    border-radius: 6px;
+    margin: 10px 0 4px;
+    overflow: hidden;
+  }
+  .response-panel-title {
+    background: rgba(0,255,136,0.06);
+    color: var(--green);
+    font-size: 11px; font-weight: 600;
+    padding: 5px 14px;
+    border-bottom: 1px solid rgba(0,255,136,0.12);
+    user-select: none;
+  }
+  .response-panel-body {
+    padding: 12px 16px;
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .response-panel-body p               { margin-bottom: 10px; }
+  .response-panel-body p:last-child    { margin-bottom: 0; }
+  .response-panel-body h1,
+  .response-panel-body h2,
+  .response-panel-body h3 { color: var(--green); margin: 12px 0 6px; font-size: 13px; }
+  .response-panel-body ul,
+  .response-panel-body ol { padding-left: 20px; margin-bottom: 10px; }
+  .response-panel-body li              { margin-bottom: 3px; }
+  .response-panel-body strong          { color: #fff; }
+  .response-panel-body code {
+    font-family: var(--mono);
+    background: rgba(255,255,255,0.06);
+    padding: 1px 5px; border-radius: 3px; font-size: 12px;
+  }
+  .response-panel-body pre {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px 14px; overflow-x: auto; margin-bottom: 10px;
+  }
+  .response-panel-body pre code { background: none; padding: 0; font-size: 12px; }
+  .response-panel-body table {
+    border-collapse: collapse; width: 100%; margin-bottom: 10px; font-size: 12px;
+  }
+  .response-panel-body th,
+  .response-panel-body td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; }
+  .response-panel-body th { color: var(--cyan); background: rgba(255,255,255,0.03); }
+
+  .error-panel {
+    border: 1px solid var(--red); border-radius: 6px;
+    padding: 10px 14px; color: var(--red); margin: 8px 0; font-size: 12px;
+  }
+
+  .info-table { border-collapse: collapse; margin: 8px 0 12px; font-size: 12px; min-width: 280px; }
+  .info-table caption { text-align: left; color: var(--cyan); font-weight: 600; margin-bottom: 6px; font-size: 12px; }
+  .info-table th, .info-table td { border: 1px solid var(--border); padding: 4px 10px; }
+  .info-table th { color: var(--cyan); background: rgba(255,255,255,0.03); }
+</style>
+</head>
+<body>
+
+<div class="banner">
+  <div class="banner-title">🧠 Agentic AI Demo — Web Shell</div>
+  <div style="color:var(--dim);font-size:11px;margin-top:3px;">Multi-Agent System · MCP + MongoDB Atlas + Voyage AI</div>
+  <div class="banner-meta">
+    🍃 MongoDB: <span id="bannerHost">connecting…</span> &nbsp;|&nbsp;
+    🔍 Indexes: <span id="bannerIndexes">—</span> &nbsp;|&nbsp;
+    Commands: <span style="color:var(--text)">status · memory</span>
+  </div>
+</div>
+
+<div class="columns">
+  <!-- ── Left: chat ── -->
+  <div class="col-chat">
+    <div id="history"></div>
+    <div class="input-bar">
+      <span class="input-prompt">You:</span>
+      <input id="queryInput" type="text" placeholder="Ask anything…" autocomplete="off" />
+      <span class="input-hint">↵ send</span>
+    </div>
+  </div>
+
+  <!-- ── Right: log + servers ── -->
+  <div class="col-log">
+    <div class="right-tabs">
+      <div class="right-tab active" id="tabLog"      onclick="switchTab('log')">Agent Log</div>
+      <div class="right-tab"        id="tabServers"  onclick="switchTab('servers')">MCP Servers</div>
+    </div>
+    <div id="logPanel"></div>
+    <div id="serversPanel">
+      <!-- populated by renderServers() -->
+      <button class="add-server-btn" onclick="openAddModal()">+ Add MCP Server</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Add server modal ── -->
+<div class="modal-overlay" id="addModal">
+  <div class="modal">
+    <h3>Add Cloud MCP Server</h3>
+    <div>
+      <label>Server name (Python identifier)</label>
+      <input id="newName" type="text" placeholder="my_custom_service" />
+    </div>
+    <div>
+      <label>Description (used for semantic routing)</label>
+      <input id="newDesc" type="text" placeholder="Handles queries about…" />
+    </div>
+    <div>
+      <label>Python source code</label>
+      <textarea id="newCode" placeholder='from mcp.server.fastmcp import FastMCP&#10;mcp = FastMCP("my_service")&#10;&#10;@mcp.tool()&#10;def my_tool() -> str:&#10;    """..."""&#10;    return "Hello!"&#10;&#10;if __name__ == "__main__":&#10;    mcp.run()'></textarea>
+    </div>
+    <div class="modal-result" id="modalResult"></div>
+    <div class="modal-actions">
+      <button class="btn btn-cancel" onclick="closeAddModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitAddServer()">Add Server</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const historyEl = document.getElementById('history');
+const logPanel  = document.getElementById('logPanel');
+const input     = document.getElementById('queryInput');
+let   thinking  = false;
+
+// Input history (cursor up/down)
+const inputHistory = [];
+let   historyPos   = -1;
+let   savedDraft   = '';
+
+// ── WebSocket ──────────────────────────────────────────────────────────────
+let ws;
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.type === 'hello') {
+      document.getElementById('bannerHost').textContent    = msg.host || '—';
+      document.getElementById('bannerIndexes').textContent = msg.indexes.join(', ') || 'none';
+      if (msg.servers.length)
+        appendLog('INFO', `✓ Ready — ${msg.servers.length} MCP server(s) active`);
+      ws.send(JSON.stringify({type: 'server_list'}));
+      return;
+    }
+
+    if (msg.type === 'server_list') {
+      renderServers(msg.servers);
+      return;
+    }
+
+    if (msg.type === 'server_add_result') {
+      document.getElementById('modalResult').textContent = msg.message;
+      document.getElementById('modalResult').style.color =
+        msg.message.startsWith('✓') ? 'var(--green)' : 'var(--red)';
+      renderServers(msg.servers);
+      return;
+    }
+
+    if (msg.type === 'server_remove_result') {
+      appendLog('INFO', msg.message);
+      renderServers(msg.servers);
+      return;
+    }
+
+    if (msg.type === 'thinking') {
+      const el = document.getElementById('thinkingLine');
+      if (el) el.classList.toggle('active', msg.active);
+      return;
+    }
+
+    if (msg.type === 'broadcast') {
+      if (!msg.tag) return;
+      const ts = new Date().toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'});
+      appendLog(msg.tag, `🤖 ${ts} [${msg.tag}] ${msg.msg}`);
+      return;
+    }
+
+    if (msg.type === 'response') {
+      thinking = false;
+      document.getElementById('thinkingLine')?.remove();
+      const panel = document.createElement('div');
+      panel.className = 'response-panel';
+      panel.innerHTML =
+        `<div class="response-panel-title">🤖 Agent Response (time needed: ${msg.elapsed} seconds)</div>` +
+        `<div class="response-panel-body">${marked.parse(msg.markdown)}</div>`;
+      historyEl.appendChild(panel);
+      scrollChat();
+      return;
+    }
+
+    if (msg.type === 'error') {
+      thinking = false;
+      document.getElementById('thinkingLine')?.remove();
+      const el = document.createElement('div');
+      el.className = 'error-panel';
+      el.textContent = '❌ ' + msg.message;
+      historyEl.appendChild(el);
+      scrollChat();
+      return;
+    }
+
+    if (msg.type === 'status') {
+      const rows = [
+        ['MCP Servers', `${msg.servers.length} active`],
+        ...msg.servers.map(s => [`  ↳ ${s}`, '✓ Online']),
+        ['Memory Store', 'MongoDB Atlas'],
+      ];
+      appendTable('System Status', ['Component', 'Status'], rows);
+      return;
+    }
+
+    if (msg.type === 'memory') {
+      if (!msg.rows.length) { appendInfoLine('No memories stored yet.'); return; }
+      const rows = msg.rows.map(r => [r.ts, r.text, r.category, r.type]);
+      appendTable('🧠 Stored Memories', ['Timestamp', 'Memory', 'Category', 'Type'], rows);
+      return;
+    }
+  };
+
+  ws.onclose = () => {
+    appendLog('ERROR', 'Disconnected — reconnecting in 3s…');
+    setTimeout(connect, 3000);
+  };
+}
+
+// ── Submit ─────────────────────────────────────────────────────────────────
+input.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (!inputHistory.length) return;
+    if (historyPos === -1) savedDraft = input.value;
+    historyPos = Math.min(historyPos + 1, inputHistory.length - 1);
+    input.value = inputHistory[historyPos];
+    input.setSelectionRange(input.value.length, input.value.length);
+    return;
+  }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (historyPos === -1) return;
+    historyPos--;
+    input.value = historyPos === -1 ? savedDraft : inputHistory[historyPos];
+    input.setSelectionRange(input.value.length, input.value.length);
+    return;
+  }
+  if (e.key !== 'Enter') return;
+  const text = input.value.trim();
+  if (!text || thinking) return;
+  inputHistory.unshift(text);
+  historyPos = -1;
+  savedDraft = '';
+  input.value = '';
+
+  historyEl.appendChild(Object.assign(document.createElement('hr'), {className: 'turn-sep'}));
+
+  const youLine = document.createElement('div');
+  youLine.className = 'you-line';
+  youLine.innerHTML = `You: <span>${esc(text)}</span>`;
+  historyEl.appendChild(youLine);
+
+  const thinkEl = document.createElement('div');
+  thinkEl.id = 'thinkingLine';
+  thinkEl.className = 'thinking active';
+  thinkEl.innerHTML = `<span class="thinking-dot">▌</span> Thinking…`;
+  historyEl.appendChild(thinkEl);
+  scrollChat();
+
+  const lower = text.toLowerCase();
+  if (lower === 'status') {
+    ws.send(JSON.stringify({type: 'command', cmd: 'status'}));
+    thinkEl.classList.remove('active');
+  } else if (lower === 'memory') {
+    ws.send(JSON.stringify({type: 'command', cmd: 'memory'}));
+    thinkEl.classList.remove('active');
+  } else {
+    thinking = true;
+    ws.send(JSON.stringify({type: 'query', text}));
+  }
+});
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function scrollChat() { historyEl.scrollTop = historyEl.scrollHeight; }
+function scrollLog()  { logPanel.scrollTop  = logPanel.scrollHeight;  }
+
+function appendLog(tag, text) {
+  const el = document.createElement('div');
+  el.className = `log-entry tag-${tag}`;
+  el.innerHTML = `<span class="log-tag"></span>${esc(text)}`;
+  logPanel.appendChild(el);
+  scrollLog();
+}
+
+function appendInfoLine(text) {
+  const el = document.createElement('div');
+  el.className = 'log-entry tag-INFO';
+  el.textContent = text;
+  logPanel.appendChild(el);
+  scrollLog();
+}
+
+function appendTable(caption, headers, rows) {
+  const t = document.createElement('table');
+  t.className = 'info-table';
+  t.innerHTML =
+    `<caption>${esc(caption)}</caption>` +
+    `<tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr>` +
+    rows.map(r=>`<tr>${r.map(c=>`<td>${esc(c||'')}</td>`).join('')}</tr>`).join('');
+  historyEl.appendChild(t);
+  scrollChat();
+}
+
+// ── Tab switching ──────────────────────────────────────────────────────────
+function switchTab(tab) {
+  document.getElementById('logPanel').style.display     = tab === 'log'     ? '' : 'none';
+  document.getElementById('serversPanel').classList.toggle('visible', tab === 'servers');
+  document.getElementById('tabLog').classList.toggle('active',     tab === 'log');
+  document.getElementById('tabServers').classList.toggle('active', tab === 'servers');
+}
+
+// ── Server management ──────────────────────────────────────────────────────
+function renderServers(servers) {
+  const panel = document.getElementById('serversPanel');
+  panel.querySelectorAll('.server-row, .servers-empty').forEach(el => el.remove());
+  const addBtn = panel.querySelector('.add-server-btn');
+  // Active servers first, then idle — alphabetical within each group
+  const sorted = [...servers].sort((a, b) => {
+    if (a.active !== b.active) return a.active ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  sorted.forEach(s => {
+    const row = document.createElement('div');
+    row.className = 'server-row';
+    const statusDot = s.active
+      ? `<span class="server-active">● active</span>`
+      : `<span class="server-inactive">○ idle</span>`;
+    row.innerHTML =
+      `<span class="server-name">${esc(s.name)}</span>` +
+      `${statusDot}` +
+      `<span class="server-badge ${s.origin}">${s.origin}</span>` +
+      `<button class="server-remove" onclick="removeServer('${esc(s.name)}')">remove</button>`;
+    panel.insertBefore(row, addBtn);
+  });
+  if (!sorted.length) {
+    const empty = document.createElement('div');
+    empty.className = 'servers-empty';
+    empty.style.cssText = 'color:var(--dim);font-size:11px;padding:4px 0;';
+    empty.textContent = 'No servers registered.';
+    panel.insertBefore(empty, addBtn);
+  }
+}
+
+function removeServer(name) {
+  if (!confirm(`Remove server '${name}'?`)) return;
+  ws.send(JSON.stringify({type: 'server_remove', name}));
+}
+
+function openAddModal() {
+  document.getElementById('newName').value   = '';
+  document.getElementById('newDesc').value   = '';
+  document.getElementById('newCode').value   = '';
+  document.getElementById('modalResult').textContent = '';
+  document.getElementById('addModal').classList.add('visible');
+  document.getElementById('newName').focus();
+}
+
+function closeAddModal() {
+  document.getElementById('addModal').classList.remove('visible');
+}
+
+function submitAddServer() {
+  const name = document.getElementById('newName').value.trim();
+  const desc = document.getElementById('newDesc').value.trim();
+  const code = document.getElementById('newCode').value.trim();
+  if (!name || !desc || !code) {
+    document.getElementById('modalResult').textContent = '⚠ All fields are required.';
+    document.getElementById('modalResult').style.color = 'var(--yellow)';
+    return;
+  }
+  document.getElementById('modalResult').textContent = 'Adding…';
+  document.getElementById('modalResult').style.color = 'var(--dim)';
+  ws.send(JSON.stringify({type: 'server_add', name, description: desc, source_code: code}));
+}
+
+// Close modal on overlay click
+document.getElementById('addModal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeAddModal();
+});
+
+connect();
+input.focus();
+</script>
+</body>
+</html>

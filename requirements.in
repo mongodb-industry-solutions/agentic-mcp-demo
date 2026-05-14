@@ -7,4 +7,5 @@ pymongo
 python-pptx
 requests
 rich
+uv
 websockets
