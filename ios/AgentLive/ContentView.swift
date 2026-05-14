@@ -22,7 +22,7 @@ struct ContentView: View {
             Circle()
                 .fill(client.isConnected ? Color(hex: "00FF88") : Color(hex: "FF4D6A"))
                 .frame(width: 8, height: 8)
-            Text(client.isConnected ? "live" : "connecting…")
+            Text(client.isConnected ? "live" : "offline")
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundColor(.white.opacity(0.5))
             Spacer()
