@@ -1,5 +1,6 @@
 import Foundation
 
+@MainActor
 class SSEClient: ObservableObject {
     @Published var messages: [LogMessage] = []
     @Published var isConnected = false
@@ -14,43 +15,42 @@ class SSEClient: ObservableObject {
 
     func disconnect() {
         streamTask?.cancel()
-        DispatchQueue.main.async { self.isConnected = false }
+        isConnected = false
     }
 
     func clear() {
-        DispatchQueue.main.async { self.messages = [] }
+        messages = []
     }
 
     private func stream() async {
         while !Task.isCancelled {
-            DispatchQueue.main.async { self.isConnected = false }
+            isConnected = false
             do {
                 var request = URLRequest(url: url)
                 request.timeoutInterval = .infinity
                 let (bytes, _) = try await URLSession.shared.bytes(for: request)
-                DispatchQueue.main.async { self.isConnected = true }
+                isConnected = true
 
-                var buffer = ""
+                // Buffer raw bytes and split on 0x0A — decode each line as UTF-8
+                // so that multi-byte characters (emoji, ✓, ○, …) are preserved.
+                var lineBuffer = Data()
                 for try await byte in bytes {
                     if Task.isCancelled { return }
-                    let ch = Character(UnicodeScalar(byte))
-                    if ch == "\n" {
-                        if let msg = LogMessage.parse(line: buffer) {
-                            let captured = msg
-                            DispatchQueue.main.async {
-                                self.messages.append(captured)
-                                if self.messages.count > 1000 {
-                                    self.messages.removeFirst(self.messages.count - 1000)
-                                }
+                    if byte == UInt8(ascii: "\n") {
+                        let line = String(data: lineBuffer, encoding: .utf8) ?? ""
+                        lineBuffer = Data()
+                        if let msg = LogMessage.parse(line: line) {
+                            messages.append(msg)
+                            if messages.count > 1000 {
+                                messages.removeFirst(messages.count - 1000)
                             }
                         }
-                        buffer = ""
                     } else {
-                        buffer.append(ch)
+                        lineBuffer.append(byte)
                     }
                 }
             } catch {
-                DispatchQueue.main.async { self.isConnected = false }
+                isConnected = false
                 if Task.isCancelled { return }
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
             }

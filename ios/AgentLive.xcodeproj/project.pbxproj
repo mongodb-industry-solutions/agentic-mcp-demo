@@ -6,15 +6,16 @@
 	objectVersion = 56;
 	objects = {
 
-/* ── Build files ─────────────────────────────────────────────────────── */
+/* Begin PBXBuildFile section */
 		D2D2D2D2D2D2D2D2D2D2D2D2 /* AgentLiveApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2C2C2C2C2C2C2C2C2C2C2C2 /* AgentLiveApp.swift */; };
 		D3D3D3D3D3D3D3D3D3D3D3D3 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3C3C3C3C3C3C3C3C3C3C3C3 /* ContentView.swift */; };
 		D4D4D4D4D4D4D4D4D4D4D4D4 /* SSEClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4C4C4C4C4C4C4C4C4C4C4C4 /* SSEClient.swift */; };
 		D5D5D5D5D5D5D5D5D5D5D5D5 /* LogMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5C5C5C5C5C5C5C5C5C5C5C5 /* LogMessage.swift */; };
 		D6D6D6D6D6D6D6D6D6D6D6D6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C6C6C6C6C6C6C6C6C6C6C6C6 /* Assets.xcassets */; };
 		D7D7D7D7D7D7D7D7D7D7D7D7 /* PreviewAssets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C7C7C7C7C7C7C7C7C7C7C7C7 /* PreviewAssets.xcassets */; };
+/* End PBXBuildFile section */
 
-/* ── File references ─────────────────────────────────────────────────── */
+/* Begin PBXFileReference section */
 		C1C1C1C1C1C1C1C1C1C1C1C1 /* AgentLive.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AgentLive.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C2C2C2C2C2C2C2C2C2C2C2C2 /* AgentLiveApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLiveApp.swift; sourceTree = "<group>"; };
 		C3C3C3C3C3C3C3C3C3C3C3C3 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -22,37 +23,20 @@
 		C5C5C5C5C5C5C5C5C5C5C5C5 /* LogMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogMessage.swift; sourceTree = "<group>"; };
 		C6C6C6C6C6C6C6C6C6C6C6C6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C7C7C7C7C7C7C7C7C7C7C7C7 /* PreviewAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = PreviewAssets.xcassets; sourceTree = "<group>"; };
+/* End PBXFileReference section */
 
-/* ── Build phases ────────────────────────────────────────────────────── */
+/* Begin PBXFrameworksBuildPhase section */
 		B3B3B3B3B3B3B3B3B3B3B3B3 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
-			files = ();
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		B4B4B4B4B4B4B4B4B4B4B4B4 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
-				D2D2D2D2D2D2D2D2D2D2D2D2 /* AgentLiveApp.swift in Sources */,
-				D3D3D3D3D3D3D3D3D3D3D3D3 /* ContentView.swift in Sources */,
-				D4D4D4D4D4D4D4D4D4D4D4D4 /* SSEClient.swift in Sources */,
-				D5D5D5D5D5D5D5D5D5D5D5D5 /* LogMessage.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		B5B5B5B5B5B5B5B5B5B5B5B5 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				D6D6D6D6D6D6D6D6D6D6D6D6 /* Assets.xcassets in Resources */,
-				D7D7D7D7D7D7D7D7D7D7D7D7 /* PreviewAssets.xcassets in Resources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
+/* End PBXFrameworksBuildPhase section */
 
-/* ── Groups ──────────────────────────────────────────────────────────── */
-		A9A9A9A9A9A9A9A9A9A9A9A9 /* root */ = {
+/* Begin PBXGroup section */
+		A9A9A9A9A9A9A9A9A9A9A9A9 = {
 			isa = PBXGroup;
 			children = (
 				B1B1B1B1B1B1B1B1B1B1B1B1 /* AgentLive */,
@@ -89,8 +73,9 @@
 			path = PreviewContent;
 			sourceTree = "<group>";
 		};
+/* End PBXGroup section */
 
-/* ── Native target ───────────────────────────────────────────────────── */
+/* Begin PBXNativeTarget section */
 		A2A2A2A2A2A2A2A2A2A2A2A2 /* AgentLive */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = A4A4A4A4A4A4A4A4A4A4A4A4 /* Build configuration list for PBXNativeTarget "AgentLive" */;
@@ -99,21 +84,24 @@
 				B4B4B4B4B4B4B4B4B4B4B4B4 /* Sources */,
 				B5B5B5B5B5B5B5B5B5B5B5B5 /* Resources */,
 			);
-			buildRules = ();
-			dependencies = ();
+			buildRules = (
+			);
+			dependencies = (
+			);
 			name = AgentLive;
 			productName = AgentLive;
 			productReference = C1C1C1C1C1C1C1C1C1C1C1C1 /* AgentLive.app */;
 			productType = "com.apple.product-type.application";
 		};
+/* End PBXNativeTarget section */
 
-/* ── Project ─────────────────────────────────────────────────────────── */
+/* Begin PBXProject section */
 		A1A1A1A1A1A1A1A1A1A1A1A1 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1500;
-				LastUpgradeCheck = 1500;
+				LastUpgradeCheck = 2650;
 				TargetAttributes = {
 					A2A2A2A2A2A2A2A2A2A2A2A2 = {
 						CreatedOnToolsVersion = 15.0;
@@ -124,7 +112,10 @@
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
-			knownRegions = (en, Base);
+			knownRegions = (
+				en,
+				Base,
+			);
 			mainGroup = A9A9A9A9A9A9A9A9A9A9A9A9;
 			productRefGroup = B2B2B2B2B2B2B2B2B2B2B2B2 /* Products */;
 			projectDirPath = "";
@@ -133,9 +124,36 @@
 				A2A2A2A2A2A2A2A2A2A2A2A2 /* AgentLive */,
 			);
 		};
+/* End PBXProject section */
 
-/* ── Build configurations ────────────────────────────────────────────── */
-		A5A5A5A5A5A5A5A5A5A5A5A5 /* Debug (project) */ = {
+/* Begin PBXResourcesBuildPhase section */
+		B5B5B5B5B5B5B5B5B5B5B5B5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D6D6D6D6D6D6D6D6D6D6D6D6 /* Assets.xcassets in Resources */,
+				D7D7D7D7D7D7D7D7D7D7D7D7 /* PreviewAssets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		B4B4B4B4B4B4B4B4B4B4B4B4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D2D2D2D2D2D2D2D2D2D2D2D2 /* AgentLiveApp.swift in Sources */,
+				D3D3D3D3D3D3D3D3D3D3D3D3 /* ContentView.swift in Sources */,
+				D4D4D4D4D4D4D4D4D4D4D4D4 /* SSEClient.swift in Sources */,
+				D5D5D5D5D5D5D5D5D5D5D5D5 /* LogMessage.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A5A5A5A5A5A5A5A5A5A5A5A5 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -143,24 +161,55 @@
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = K9LSAPMDRX;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_OPTIMIZATION_LEVEL = 0;
-				GCC_PREPROCESSOR_DEFINITIONS = ("DEBUG=1", "$(inherited)");
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
 			name = Debug;
 		};
-		A6A6A6A6A6A6A6A6A6A6A6A6 /* Release (project) */ = {
+		A6A6A6A6A6A6A6A6A6A6A6A6 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -168,27 +217,55 @@
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = K9LSAPMDRX;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
 		};
-		A7A7A7A7A7A7A7A7A7A7A7A7 /* Debug (target) */ = {
+		A7A7A7A7A7A7A7A7A7A7A7A7 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_ASSET_PATHS = "AgentLive/PreviewContent";
+				DEVELOPMENT_ASSET_PATHS = AgentLive/PreviewContent;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -196,7 +273,10 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mongodbdemo.AgentLive;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -206,14 +286,14 @@
 			};
 			name = Debug;
 		};
-		A8A8A8A8A8A8A8A8A8A8A8A8 /* Release (target) */ = {
+		A8A8A8A8A8A8A8A8A8A8A8A8 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_ASSET_PATHS = "AgentLive/PreviewContent";
+				DEVELOPMENT_ASSET_PATHS = AgentLive/PreviewContent;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -221,7 +301,10 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mongodbdemo.AgentLive;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -231,8 +314,9 @@
 			};
 			name = Release;
 		};
+/* End XCBuildConfiguration section */
 
-/* ── Configuration lists ─────────────────────────────────────────────── */
+/* Begin XCConfigurationList section */
 		A3A3A3A3A3A3A3A3A3A3A3A3 /* Build configuration list for PBXProject "AgentLive" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -251,7 +335,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-
+/* End XCConfigurationList section */
 	};
 	rootObject = A1A1A1A1A1A1A1A1A1A1A1A1 /* Project object */;
 }
