@@ -15,7 +15,7 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .onAppear  { client.connect()    }
         .onDisappear { client.disconnect() }
-        .onChange(of: scenePhase) { _, phase in
+        .onChange(of: scenePhase) { phase in
             switch phase {
             case .background: client.didEnterBackground()
             case .active:     client.didEnterForeground()
