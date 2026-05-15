@@ -15,9 +15,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "9CEB2DBE07A44FE85E9487C5"
-               BuildableName = "AgentLiveWatch Watch App.app"
-               BlueprintName = "AgentLiveWatch Watch App"
+               BlueprintIdentifier = "BBD7A72327F6CA798949E927"
+               BuildableName = "AgentLiveWatch.app"
+               BlueprintName = "AgentLiveWatch"
                ReferencedContainer = "container:AgentLiveWatch.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -32,9 +32,9 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "9CEB2DBE07A44FE85E9487C5"
-            BuildableName = "AgentLiveWatch Watch App.app"
-            BlueprintName = "AgentLiveWatch Watch App"
+            BlueprintIdentifier = "BBD7A72327F6CA798949E927"
+            BuildableName = "AgentLiveWatch.app"
+            BlueprintName = "AgentLiveWatch"
             ReferencedContainer = "container:AgentLiveWatch.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
@@ -57,9 +57,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "9CEB2DBE07A44FE85E9487C5"
-            BuildableName = "AgentLiveWatch Watch App.app"
-            BlueprintName = "AgentLiveWatch Watch App"
+            BlueprintIdentifier = "BBD7A72327F6CA798949E927"
+            BuildableName = "AgentLiveWatch.app"
+            BlueprintName = "AgentLiveWatch"
             ReferencedContainer = "container:AgentLiveWatch.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -76,9 +76,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "9CEB2DBE07A44FE85E9487C5"
-            BuildableName = "AgentLiveWatch Watch App.app"
-            BlueprintName = "AgentLiveWatch Watch App"
+            BlueprintIdentifier = "BBD7A72327F6CA798949E927"
+            BuildableName = "AgentLiveWatch.app"
+            BlueprintName = "AgentLiveWatch"
             ReferencedContainer = "container:AgentLiveWatch.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

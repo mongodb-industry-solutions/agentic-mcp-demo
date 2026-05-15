@@ -4,9 +4,14 @@ options:
   deploymentTarget:
     watchOS: "10.0"
   xcodeVersion: "16.0"
+  defaultConfig: Release
+
+configs:
+  Debug: debug
+  Release: release
 
 targets:
-  AgentLiveWatch Watch App:
+  AgentLiveWatch:
     type: application
     platform: watchOS
     deploymentTarget: "10.0"
@@ -16,7 +21,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.mongodbdemo.AgentLiveWatch
-        PRODUCT_NAME: AgentLiveWatch
+        PRODUCT_NAME: "$(TARGET_NAME)"
         SDKROOT: watchos
         TARGETED_DEVICE_FAMILY: "4"
         SUPPORTED_PLATFORMS: "watchos watchsimulator"
@@ -36,10 +41,10 @@ targets:
         SKIP_INSTALL: NO
 
 schemes:
-  AgentLiveWatch Watch App:
+  AgentLiveWatch:
     build:
       targets:
-        AgentLiveWatch Watch App: all
+        AgentLiveWatch: all
     run:
       config: Debug
     test:
