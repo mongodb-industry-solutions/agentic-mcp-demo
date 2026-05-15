@@ -15,7 +15,6 @@ struct ContentView: View {
         .onDisappear { client.disconnect(); session.stop() }
     }
 
-    // ── Header ────────────────────────────────────────────────────────────
     private var header: some View {
         HStack {
             Circle()
@@ -37,12 +36,9 @@ struct ContentView: View {
         .background(Color(hex: "111111"))
     }
 
-    // ── Log ───────────────────────────────────────────────────────────────
     private var logView: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                // VStack (not Lazy) so all rows are in the hierarchy —
-                // keeps the "bottom" anchor always reachable on watchOS.
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(client.messages) { msg in
                         Text(msg.text)
@@ -64,7 +60,6 @@ struct ContentView: View {
     }
 }
 
-// Keeps the display active so watchOS doesn't throttle SwiftUI redraws.
 @MainActor
 class ExtendedSession: NSObject, ObservableObject, WKExtendedRuntimeSessionDelegate {
     private var session: WKExtendedRuntimeSession?

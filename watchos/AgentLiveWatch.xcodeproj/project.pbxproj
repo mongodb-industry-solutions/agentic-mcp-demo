@@ -7,56 +7,70 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		11E68572249DC5005E4BEE6C /* LogMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF6BAF4845BCF5B2F340F04C /* LogMessage.swift */; };
-		77DEF04D368F960188231978 /* SSEClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03A3C0DAB5DA241CC63E05FF /* SSEClient.swift */; };
-		A0C92D17FD3FC52C2D02C95B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D6517711CE58651486A6B3A4 /* Assets.xcassets */; };
-		A18ECAD9C60C84C95CCF2AD9 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E42C8ACE38B4264AE389E9EC /* ContentView.swift */; };
-		D625C479791616C21B80856D /* AgentLiveWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65D4DCF874858BD092F8C332 /* AgentLiveWatchApp.swift */; };
+		813CD6DC2FB7432600659024 /* AgentLiveWatch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 813CD6DB2FB7432600659024 /* AgentLiveWatch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		813CD6DD2FB7432600659024 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 813CD6CF2FB7432600659024 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 813CD6DA2FB7432600659024;
+			remoteInfo = "AgentLiveWatch Watch App";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		813CD6EB2FB7432700659024 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				813CD6DC2FB7432600659024 /* AgentLiveWatch Watch App.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
-		03A3C0DAB5DA241CC63E05FF /* SSEClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSEClient.swift; sourceTree = "<group>"; };
-		49E025A6C1EB3137C3112E17 /* AgentLiveWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AgentLiveWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		65D4DCF874858BD092F8C332 /* AgentLiveWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLiveWatchApp.swift; sourceTree = "<group>"; };
-		BF6BAF4845BCF5B2F340F04C /* LogMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogMessage.swift; sourceTree = "<group>"; };
-		D6517711CE58651486A6B3A4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		E42C8ACE38B4264AE389E9EC /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		813CD6D52FB7432600659024 /* AgentLiveWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AgentLiveWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		813CD6DB2FB7432600659024 /* AgentLiveWatch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "AgentLiveWatch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		813CD6DF2FB7432600659024 /* AgentLiveWatch Watch App */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "AgentLiveWatch Watch App";
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		813CD6D82FB7432600659024 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
 /* Begin PBXGroup section */
-		50F8A7A9C133B70D53E54F33 = {
+		813CD6CE2FB7432600659024 = {
 			isa = PBXGroup;
 			children = (
-				A70495A9F54CFED8C23B31E4 /* AgentLiveWatch */,
-				A55DD01B1667AF30260BBA3A /* Sources */,
-				AC6CC932D3F852C4EB697356 /* Products */,
+				813CD6DF2FB7432600659024 /* AgentLiveWatch Watch App */,
+				813CD6D62FB7432600659024 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		A55DD01B1667AF30260BBA3A /* Sources */ = {
+		813CD6D62FB7432600659024 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				65D4DCF874858BD092F8C332 /* AgentLiveWatchApp.swift */,
-				E42C8ACE38B4264AE389E9EC /* ContentView.swift */,
-				BF6BAF4845BCF5B2F340F04C /* LogMessage.swift */,
-				03A3C0DAB5DA241CC63E05FF /* SSEClient.swift */,
-			);
-			name = Sources;
-			path = AgentLiveWatch/Sources;
-			sourceTree = "<group>";
-		};
-		A70495A9F54CFED8C23B31E4 /* AgentLiveWatch */ = {
-			isa = PBXGroup;
-			children = (
-				D6517711CE58651486A6B3A4 /* Assets.xcassets */,
-			);
-			path = AgentLiveWatch;
-			sourceTree = "<group>";
-		};
-		AC6CC932D3F852C4EB697356 /* Products */ = {
-			isa = PBXGroup;
-			children = (
-				49E025A6C1EB3137C3112E17 /* AgentLiveWatch.app */,
+				813CD6D52FB7432600659024 /* AgentLiveWatch.app */,
+				813CD6DB2FB7432600659024 /* AgentLiveWatch Watch App.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -64,198 +78,129 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		BBD7A72327F6CA798949E927 /* AgentLiveWatch */ = {
+		813CD6D42FB7432600659024 /* AgentLiveWatch */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 817C3A670E370D170973DCA6 /* Build configuration list for PBXNativeTarget "AgentLiveWatch" */;
+			buildConfigurationList = 813CD6EC2FB7432700659024 /* Build configuration list for PBXNativeTarget "AgentLiveWatch" */;
 			buildPhases = (
-				9C1061B78E119C27F8843B3D /* Sources */,
-				D9F4FC508B7A7A774D7EC3E7 /* Resources */,
+				813CD6D32FB7432600659024 /* Resources */,
+				813CD6EB2FB7432700659024 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				813CD6DE2FB7432600659024 /* PBXTargetDependency */,
 			);
 			name = AgentLiveWatch;
 			packageProductDependencies = (
 			);
 			productName = AgentLiveWatch;
-			productReference = 49E025A6C1EB3137C3112E17 /* AgentLiveWatch.app */;
+			productReference = 813CD6D52FB7432600659024 /* AgentLiveWatch.app */;
+			productType = "com.apple.product-type.application.watchapp2-container";
+		};
+		813CD6DA2FB7432600659024 /* AgentLiveWatch Watch App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 813CD6E82FB7432700659024 /* Build configuration list for PBXNativeTarget "AgentLiveWatch Watch App" */;
+			buildPhases = (
+				813CD6D72FB7432600659024 /* Sources */,
+				813CD6D82FB7432600659024 /* Frameworks */,
+				813CD6D92FB7432600659024 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				813CD6DF2FB7432600659024 /* AgentLiveWatch Watch App */,
+			);
+			name = "AgentLiveWatch Watch App";
+			packageProductDependencies = (
+			);
+			productName = "AgentLiveWatch Watch App";
+			productReference = 813CD6DB2FB7432600659024 /* AgentLiveWatch Watch App.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		DD7E1D6DC580DFD306A5F02D /* Project object */ = {
+		813CD6CF2FB7432600659024 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
-				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 1600;
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2650;
+				LastUpgradeCheck = 2650;
 				TargetAttributes = {
-					BBD7A72327F6CA798949E927 = {
-						DevelopmentTeam = K9LSAPMDRX;
-						ProvisioningStyle = Automatic;
+					813CD6D42FB7432600659024 = {
+						CreatedOnToolsVersion = 26.5;
+					};
+					813CD6DA2FB7432600659024 = {
+						CreatedOnToolsVersion = 26.5;
 					};
 				};
 			};
-			buildConfigurationList = BDEFB3B5ED3CDBD8AD9A5B71 /* Build configuration list for PBXProject "AgentLiveWatch" */;
+			buildConfigurationList = 813CD6D22FB7432600659024 /* Build configuration list for PBXProject "AgentLiveWatch" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
-				Base,
 				en,
+				Base,
 			);
-			mainGroup = 50F8A7A9C133B70D53E54F33;
+			mainGroup = 813CD6CE2FB7432600659024;
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
-			productRefGroup = AC6CC932D3F852C4EB697356 /* Products */;
+			productRefGroup = 813CD6D62FB7432600659024 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				BBD7A72327F6CA798949E927 /* AgentLiveWatch */,
+				813CD6D42FB7432600659024 /* AgentLiveWatch */,
+				813CD6DA2FB7432600659024 /* AgentLiveWatch Watch App */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		D9F4FC508B7A7A774D7EC3E7 /* Resources */ = {
+		813CD6D32FB7432600659024 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A0C92D17FD3FC52C2D02C95B /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		813CD6D92FB7432600659024 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		9C1061B78E119C27F8843B3D /* Sources */ = {
+		813CD6D72FB7432600659024 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				D625C479791616C21B80856D /* AgentLiveWatchApp.swift in Sources */,
-				A18ECAD9C60C84C95CCF2AD9 /* ContentView.swift in Sources */,
-				11E68572249DC5005E4BEE6C /* LogMessage.swift in Sources */,
-				77DEF04D368F960188231978 /* SSEClient.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		813CD6DE2FB7432600659024 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 813CD6DA2FB7432600659024 /* AgentLiveWatch Watch App */;
+			targetProxy = 813CD6DD2FB7432600659024 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
-		A13EC00D81ACC8EDF2CA7250 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = K9LSAPMDRX;
-				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = AgentLive;
-				INFOPLIST_KEY_WKApplication = YES;
-				INFOPLIST_KEY_WKWatchOnly = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.mongodbdemo.AgentLiveWatch;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = watchos;
-				SKIP_INSTALL = NO;
-				SUPPORTED_PLATFORMS = "watchos watchsimulator";
-				SWIFT_VERSION = 5.9;
-				TARGETED_DEVICE_FAMILY = 4;
-				WATCHOS_DEPLOYMENT_TARGET = 10.0;
-			};
-			name = Debug;
-		};
-		AF792B9C2763B9EEA6649D7A /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = K9LSAPMDRX;
-				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = AgentLive;
-				INFOPLIST_KEY_WKApplication = YES;
-				INFOPLIST_KEY_WKWatchOnly = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.mongodbdemo.AgentLiveWatch;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = watchos;
-				SKIP_INSTALL = NO;
-				SUPPORTED_PLATFORMS = "watchos watchsimulator";
-				SWIFT_VERSION = 5.9;
-				TARGETED_DEVICE_FAMILY = 4;
-				WATCHOS_DEPLOYMENT_TARGET = 10.0;
-			};
-			name = Release;
-		};
-		C235F2905205186E259EEFC0 /* Release */ = {
+		813CD6E62FB7432700659024 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
-				CLANG_CXX_LIBRARY = "libc++";
-				CLANG_ENABLE_MODULES = YES;
-				CLANG_ENABLE_OBJC_ARC = YES;
-				CLANG_ENABLE_OBJC_WEAK = YES;
-				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
-				CLANG_WARN_BOOL_CONVERSION = YES;
-				CLANG_WARN_COMMA = YES;
-				CLANG_WARN_CONSTANT_CONVERSION = YES;
-				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
-				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
-				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
-				CLANG_WARN_EMPTY_BODY = YES;
-				CLANG_WARN_ENUM_CONVERSION = YES;
-				CLANG_WARN_INFINITE_RECURSION = YES;
-				CLANG_WARN_INT_CONVERSION = YES;
-				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
-				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
-				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
-				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
-				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
-				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
-				CLANG_WARN_STRICT_PROTOTYPES = YES;
-				CLANG_WARN_SUSPICIOUS_MOVE = YES;
-				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
-				CLANG_WARN_UNREACHABLE_CODE = YES;
-				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
-				COPY_PHASE_STRIP = NO;
-				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				ENABLE_NS_ASSERTIONS = NO;
-				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				GCC_C_LANGUAGE_STANDARD = gnu11;
-				GCC_NO_COMMON_BLOCKS = YES;
-				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
-				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
-				GCC_WARN_UNDECLARED_SELECTOR = YES;
-				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
-				GCC_WARN_UNUSED_FUNCTION = YES;
-				GCC_WARN_UNUSED_VARIABLE = YES;
-				MTL_ENABLE_DEBUG_INFO = NO;
-				MTL_FAST_MATH = YES;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = watchos;
-				SWIFT_COMPILATION_MODE = wholemodule;
-				SWIFT_OPTIMIZATION_LEVEL = "-O";
-				SWIFT_VERSION = 5.0;
-				WATCHOS_DEPLOYMENT_TARGET = 10.0;
-			};
-			name = Release;
-		};
-		F11BFD01F462600B1391618A /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ALWAYS_SEARCH_USER_PATHS = NO;
-				CLANG_ANALYZER_NONNULL = YES;
-				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
-				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
 				CLANG_ENABLE_OBJC_WEAK = YES;
@@ -283,15 +228,17 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = K9LSAPMDRX;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				GCC_C_LANGUAGE_STANDARD = gnu11;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_OPTIMIZATION_LEVEL = 0;
 				GCC_PREPROCESSOR_DEFINITIONS = (
-					"$(inherited)",
 					"DEBUG=1",
+					"$(inherited)",
 				);
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
@@ -299,40 +246,202 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		813CD6E72FB7432700659024 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = K9LSAPMDRX;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		813CD6E92FB7432700659024 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = K9LSAPMDRX;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = AgentLive;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKWatchOnly = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mongodbdemo.AgentLiveWatch.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
-				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
 				WATCHOS_DEPLOYMENT_TARGET = 10.0;
 			};
 			name = Debug;
 		};
+		813CD6EA2FB7432700659024 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = K9LSAPMDRX;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = AgentLive;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKWatchOnly = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mongodbdemo.AgentLiveWatch.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
+		813CD6ED2FB7432700659024 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = K9LSAPMDRX;
+				INFOPLIST_KEY_CFBundleDisplayName = AgentLive;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mongodbdemo.AgentLiveWatch;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		813CD6EE2FB7432700659024 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = K9LSAPMDRX;
+				INFOPLIST_KEY_CFBundleDisplayName = AgentLive;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mongodbdemo.AgentLiveWatch;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		817C3A670E370D170973DCA6 /* Build configuration list for PBXNativeTarget "AgentLiveWatch" */ = {
+		813CD6D22FB7432600659024 /* Build configuration list for PBXProject "AgentLiveWatch" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				A13EC00D81ACC8EDF2CA7250 /* Debug */,
-				AF792B9C2763B9EEA6649D7A /* Release */,
+				813CD6E62FB7432700659024 /* Debug */,
+				813CD6E72FB7432700659024 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		BDEFB3B5ED3CDBD8AD9A5B71 /* Build configuration list for PBXProject "AgentLiveWatch" */ = {
+		813CD6E82FB7432700659024 /* Build configuration list for PBXNativeTarget "AgentLiveWatch Watch App" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				F11BFD01F462600B1391618A /* Debug */,
-				C235F2905205186E259EEFC0 /* Release */,
+				813CD6E92FB7432700659024 /* Debug */,
+				813CD6EA2FB7432700659024 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		813CD6EC2FB7432700659024 /* Build configuration list for PBXNativeTarget "AgentLiveWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				813CD6ED2FB7432700659024 /* Debug */,
+				813CD6EE2FB7432700659024 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
 	};
-	rootObject = DD7E1D6DC580DFD306A5F02D /* Project object */;
+	rootObject = 813CD6CF2FB7432600659024 /* Project object */;
 }
