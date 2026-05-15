@@ -24,4 +24,4 @@ targets:
         ENABLE_PREVIEWS: YES
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: AgentLive
-        INFOPLIST_KEY_UISupportedInterfaceOrientations: ""
+        INFOPLIST_KEY_WKWatchOnly: YES

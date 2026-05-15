@@ -53,7 +53,7 @@ struct ContentView: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
             }
-            .onChange(of: client.messages.count) { _ in
+            .onChange(of: client.messages.count) {
                 proxy.scrollTo("bottom")
             }
         }
