@@ -30,3 +30,19 @@ targets:
         INFOPLIST_KEY_WKWatchOnly: YES
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: K9LSAPMDRX
+
+schemes:
+  AgentLiveWatch Watch App:
+    build:
+      targets:
+        AgentLiveWatch Watch App: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+    archive:
+      config: Release
+    analyze:
+      config: Debug
+    profile:
+      config: Release
