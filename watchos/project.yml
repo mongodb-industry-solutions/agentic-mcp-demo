@@ -27,6 +27,7 @@ targets:
         ENABLE_PREVIEWS: YES
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: AgentLive
+        INFOPLIST_KEY_WKApplication: YES
         INFOPLIST_KEY_WKWatchOnly: YES
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: K9LSAPMDRX
