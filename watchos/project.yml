@@ -1,6 +1,6 @@
 name: AgentLiveWatch
 options:
-  bundleIdPrefix: com.benjaminlorenz
+  bundleIdPrefix: com.mongodbdemo
   deploymentTarget:
     watchOS: "10.0"
   xcodeVersion: "16.0"
@@ -15,7 +15,7 @@ targets:
       - path: AgentLiveWatch/Assets.xcassets
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.benjaminlorenz.agentlivewatch
+        PRODUCT_BUNDLE_IDENTIFIER: com.mongodbdemo.AgentLiveWatch
         PRODUCT_NAME: AgentLiveWatch
         SDKROOT: watchos
         TARGETED_DEVICE_FAMILY: "4"
