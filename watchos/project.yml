@@ -17,6 +17,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.benjaminlorenz.agentlivewatch
         PRODUCT_NAME: AgentLiveWatch
+        SDKROOT: watchos
+        TARGETED_DEVICE_FAMILY: "4"
+        SUPPORTED_PLATFORMS: "watchos watchsimulator"
         WATCHOS_DEPLOYMENT_TARGET: "10.0"
         SWIFT_VERSION: "5.9"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -25,3 +28,5 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: AgentLive
         INFOPLIST_KEY_WKWatchOnly: YES
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: K9LSAPMDRX
