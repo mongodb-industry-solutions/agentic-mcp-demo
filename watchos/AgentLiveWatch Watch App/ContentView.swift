@@ -1,10 +1,8 @@
 import SwiftUI
 import Combine
-import WatchKit
 
 struct ContentView: View {
     @StateObject private var client = SSEClient()
-    @StateObject private var session = ExtendedSession()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -12,8 +10,8 @@ struct ContentView: View {
             logView
         }
         .background(Color(hex: "0A0A0A"))
-        .onAppear  { client.connect(); session.start() }
-        .onDisappear { client.disconnect(); session.stop() }
+        .onAppear  { client.connect()    }
+        .onDisappear { client.disconnect() }
     }
 
     private var header: some View {
@@ -61,26 +59,3 @@ struct ContentView: View {
     }
 }
 
-@MainActor
-class ExtendedSession: NSObject, ObservableObject, WKExtendedRuntimeSessionDelegate {
-    private var session: WKExtendedRuntimeSession?
-
-    func start() {
-        guard session == nil else { return }
-        let s = WKExtendedRuntimeSession()
-        s.delegate = self
-        s.start()
-        session = s
-    }
-
-    func stop() {
-        session?.invalidate()
-        session = nil
-    }
-
-    nonisolated func extendedRuntimeSessionDidStart(_ session: WKExtendedRuntimeSession) {}
-    nonisolated func extendedRuntimeSessionWillExpire(_ session: WKExtendedRuntimeSession) {}
-    nonisolated func extendedRuntimeSession(_ session: WKExtendedRuntimeSession,
-                                            didInvalidateWith reason: WKExtendedRuntimeSessionInvalidationReason,
-                                            error: Error?) {}
-}
