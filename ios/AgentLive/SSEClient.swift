@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 @MainActor
 class SSEClient: ObservableObject {
@@ -9,6 +10,7 @@ class SSEClient: ObservableObject {
     private var streamTask: Task<Void, Never>?
     private var dataTask: URLSessionDataTask?
     private var lineBuffer = Data()
+    private var bgTaskID: UIBackgroundTaskIdentifier = .invalid
 
     func connect() {
         streamTask?.cancel()
@@ -22,6 +24,23 @@ class SSEClient: ObservableObject {
     }
 
     func clear() { messages = [] }
+
+    func didEnterBackground() {
+        guard bgTaskID == .invalid else { return }
+        bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "SSEStream") { [weak self] in
+            self?.endBackgroundTask()
+        }
+    }
+
+    func didEnterForeground() {
+        endBackgroundTask()
+    }
+
+    private func endBackgroundTask() {
+        guard bgTaskID != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(bgTaskID)
+        bgTaskID = .invalid
+    }
 
     private func stream() async {
         while !Task.isCancelled {

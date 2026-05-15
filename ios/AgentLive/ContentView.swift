@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var client = SSEClient()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack {
@@ -14,6 +15,13 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .onAppear  { client.connect()    }
         .onDisappear { client.disconnect() }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background: client.didEnterBackground()
+            case .active:     client.didEnterForeground()
+            default: break
+            }
+        }
     }
 
     // ── Header ────────────────────────────────────────────────────────────
