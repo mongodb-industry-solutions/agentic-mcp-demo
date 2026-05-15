@@ -1,7 +1,9 @@
 import SwiftUI
+import WatchKit
 
 struct ContentView: View {
     @StateObject private var client = SSEClient()
+    @StateObject private var session = ExtendedSession()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -9,8 +11,8 @@ struct ContentView: View {
             logView
         }
         .background(Color(hex: "0A0A0A"))
-        .onAppear  { client.connect()    }
-        .onDisappear { client.disconnect() }
+        .onAppear  { client.connect(); session.start() }
+        .onDisappear { client.disconnect(); session.stop() }
     }
 
     // ── Header ────────────────────────────────────────────────────────────
@@ -39,7 +41,9 @@ struct ContentView: View {
     private var logView: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 1) {
+                // VStack (not Lazy) so all rows are in the hierarchy —
+                // keeps the "bottom" anchor always reachable on watchOS.
+                VStack(alignment: .leading, spacing: 1) {
                     ForEach(client.messages) { msg in
                         Text(msg.text)
                             .font(.system(size: 9, design: .monospaced))
@@ -54,8 +58,33 @@ struct ContentView: View {
                 .padding(.vertical, 4)
             }
             .onChange(of: client.messages.count) {
-                proxy.scrollTo("bottom")
+                proxy.scrollTo("bottom", anchor: .bottom)
             }
         }
     }
+}
+
+// Keeps the display active so watchOS doesn't throttle SwiftUI redraws.
+@MainActor
+class ExtendedSession: NSObject, ObservableObject, WKExtendedRuntimeSessionDelegate {
+    private var session: WKExtendedRuntimeSession?
+
+    func start() {
+        guard session == nil else { return }
+        let s = WKExtendedRuntimeSession()
+        s.delegate = self
+        s.start()
+        session = s
+    }
+
+    func stop() {
+        session?.invalidate()
+        session = nil
+    }
+
+    nonisolated func extendedRuntimeSessionDidStart(_ session: WKExtendedRuntimeSession) {}
+    nonisolated func extendedRuntimeSessionWillExpire(_ session: WKExtendedRuntimeSession) {}
+    nonisolated func extendedRuntimeSession(_ session: WKExtendedRuntimeSession,
+                                            didInvalidateWith reason: WKExtendedRuntimeSessionInvalidationReason,
+                                            error: Error?) {}
 }
