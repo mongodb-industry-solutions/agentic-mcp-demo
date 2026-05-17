@@ -3,6 +3,8 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var client = SSEClient()
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("sseEndpoint") private var savedEndpoint: String = ""
+    @State private var showEndpointSheet = false
 
     var body: some View {
         ZStack {
@@ -13,14 +15,26 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .onAppear  { client.connect()    }
+        .onAppear {
+            if savedEndpoint.isEmpty {
+                showEndpointSheet = true
+            } else {
+                client.connect()
+            }
+        }
         .onDisappear { client.disconnect() }
-        .onChange(of: scenePhase) { phase in
+        .onChange(of: scenePhase, perform: { phase in
             switch phase {
             case .background: client.didEnterBackground()
             case .active:     client.didEnterForeground()
             default: break
             }
+        })
+        .sheet(isPresented: $showEndpointSheet) {
+            EndpointSheet(savedEndpoint: $savedEndpoint) {
+                client.reconnect()
+            }
+            .interactiveDismissDisabled(savedEndpoint.isEmpty)
         }
     }
 
@@ -41,10 +55,19 @@ struct ContentView: View {
                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                 .foregroundColor(Color(hex: "00FF88"))
 
-            Button("clear") { client.clear() }
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(.white.opacity(0.35))
-                .frame(maxWidth: .infinity, alignment: .trailing)
+            HStack(spacing: 12) {
+                Button {
+                    showEndpointSheet = true
+                } label: {
+                    Image(systemName: "link")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.35))
+                }
+                Button("clear") { client.clear() }
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.35))
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)

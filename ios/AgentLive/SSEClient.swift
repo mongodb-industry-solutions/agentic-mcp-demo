@@ -6,11 +6,15 @@ class SSEClient: ObservableObject {
     @Published var messages: [LogMessage] = []
     @Published var isConnected = false
 
-    private let url = URL(string: "https://notify.bjjl.dev/receive")!
     private var streamTask: Task<Void, Never>?
     private var dataTask: URLSessionDataTask?
     private var lineBuffer = Data()
     private var bgTaskID: UIBackgroundTaskIdentifier = .invalid
+
+    var endpointURL: URL? {
+        guard let s = UserDefaults.standard.string(forKey: "sseEndpoint"), !s.isEmpty else { return nil }
+        return URL(string: s)
+    }
 
     func connect() {
         streamTask?.cancel()
@@ -21,6 +25,11 @@ class SSEClient: ObservableObject {
         streamTask?.cancel()
         dataTask?.cancel()
         isConnected = false
+    }
+
+    func reconnect() {
+        disconnect()
+        connect()
     }
 
     func clear() { messages = [] }
@@ -59,6 +68,10 @@ class SSEClient: ObservableObject {
     // Uses URLSessionDataDelegate so didReceive(response:) fires as soon as
     // HTTP headers arrive — before any body bytes — regardless of server buffering.
     private func openConnection() async throws {
+        guard let url = endpointURL else {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            return
+        }
         var request = URLRequest(url: url)
         request.timeoutInterval = .infinity
 
@@ -85,6 +98,9 @@ class SSEClient: ObservableObject {
                 let task = session.dataTask(with: request)
                 Task { @MainActor [weak self] in self?.dataTask = task }
                 task.resume()
+                // URLSession retains its delegate until invalidated; without this
+                // every reconnect leaks a session + delegate pair for app lifetime.
+                session.finishTasksAndInvalidate()
             }
         } onCancel: {
             Task { @MainActor [weak self] in self?.dataTask?.cancel() }

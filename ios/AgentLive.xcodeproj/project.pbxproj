@@ -11,6 +11,7 @@
 		D3D3D3D3D3D3D3D3D3D3D3D3 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3C3C3C3C3C3C3C3C3C3C3C3 /* ContentView.swift */; };
 		D4D4D4D4D4D4D4D4D4D4D4D4 /* SSEClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4C4C4C4C4C4C4C4C4C4C4C4 /* SSEClient.swift */; };
 		D5D5D5D5D5D5D5D5D5D5D5D5 /* LogMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5C5C5C5C5C5C5C5C5C5C5C5 /* LogMessage.swift */; };
+		D8D8D8D8D8D8D8D8D8D8D8D8 /* EndpointSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8C8C8C8C8C8C8C8C8C8C8C8 /* EndpointSheet.swift */; };
 		D6D6D6D6D6D6D6D6D6D6D6D6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C6C6C6C6C6C6C6C6C6C6C6C6 /* Assets.xcassets */; };
 		D7D7D7D7D7D7D7D7D7D7D7D7 /* PreviewAssets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C7C7C7C7C7C7C7C7C7C7C7C7 /* PreviewAssets.xcassets */; };
 /* End PBXBuildFile section */
@@ -21,6 +22,7 @@
 		C3C3C3C3C3C3C3C3C3C3C3C3 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		C4C4C4C4C4C4C4C4C4C4C4C4 /* SSEClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSEClient.swift; sourceTree = "<group>"; };
 		C5C5C5C5C5C5C5C5C5C5C5C5 /* LogMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogMessage.swift; sourceTree = "<group>"; };
+		C8C8C8C8C8C8C8C8C8C8C8C8 /* EndpointSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointSheet.swift; sourceTree = "<group>"; };
 		C6C6C6C6C6C6C6C6C6C6C6C6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C7C7C7C7C7C7C7C7C7C7C7C7 /* PreviewAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = PreviewAssets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -51,6 +53,7 @@
 				C3C3C3C3C3C3C3C3C3C3C3C3 /* ContentView.swift */,
 				C4C4C4C4C4C4C4C4C4C4C4C4 /* SSEClient.swift */,
 				C5C5C5C5C5C5C5C5C5C5C5C5 /* LogMessage.swift */,
+				C8C8C8C8C8C8C8C8C8C8C8C8 /* EndpointSheet.swift */,
 				C6C6C6C6C6C6C6C6C6C6C6C6 /* Assets.xcassets */,
 				E1E1E1E1E1E1E1E1E1E1E1E1 /* PreviewContent */,
 			);
@@ -147,6 +150,7 @@
 				D3D3D3D3D3D3D3D3D3D3D3D3 /* ContentView.swift in Sources */,
 				D4D4D4D4D4D4D4D4D4D4D4D4 /* SSEClient.swift in Sources */,
 				D5D5D5D5D5D5D5D5D5D5D5D5 /* LogMessage.swift in Sources */,
+				D8D8D8D8D8D8D8D8D8D8D8D8 /* EndpointSheet.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
