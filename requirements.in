@@ -8,4 +8,5 @@ python-pptx
 requests
 rich
 uv
+watchfiles
 websockets

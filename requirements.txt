@@ -144,6 +144,8 @@ uv==0.11.13
     # via -r requirements.in
 uvicorn==0.46.0
     # via mcp
+watchfiles==1.1.1
+    # via -r requirements.in
 websockets==16.0
     # via -r requirements.in
 xlsxwriter==3.2.9

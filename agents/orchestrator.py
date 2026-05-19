@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 from contextlib import AsyncExitStack
 from typing import List, Dict
+from watchfiles import awatch
 from pymongo import AsyncMongoClient
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -139,6 +140,7 @@ class OrchestratorAgent:
         self.http_client = httpx.AsyncClient()
         self.tool_cache: Dict[str, List[Dict]] = {}  # server_name → openai tool dicts
         self.temp_dir = Path(tempfile.mkdtemp(prefix="mcp_cloud_"))
+        self._watcher_task: asyncio.Task | None = None
 
     async def _broadcast(self, title: str = "", message: str = "", tags: str = "robot"):
         """Send a live update and wait for delivery (preserves message ordering)."""
@@ -160,12 +162,25 @@ class OrchestratorAgent:
 
     async def __aenter__(self):
         await self._sync_registry()
+        self._watcher_task = asyncio.create_task(self._watch_servers())
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self._watcher_task:
+            self._watcher_task.cancel()
+            await asyncio.gather(self._watcher_task, return_exceptions=True)
         await self.exit_stack.aclose()
         await self.http_client.aclose()
         await self.mongo_client.close()
+
+    async def _watch_servers(self):
+        """Re-sync registry whenever a .py file in mcp_servers/ is added,
+        changed, or deleted. watchfiles debounces rapid saves automatically."""
+        try:
+            async for _ in awatch(self.server_dir, watch_filter=lambda _, p: p.endswith(".py")):
+                await self._sync_registry()
+        except asyncio.CancelledError:
+            pass
 
     def _extract_docstring(self, file_path: Path) -> str:
         try:
@@ -267,13 +282,19 @@ class OrchestratorAgent:
                     {"server_name": name},
                     {"$set": local_servers[name]}
                 )
-                await self._broadcast("BOOTSTRAP", f"    ↻ {name} (description or content changed)")
+                if name in self.sessions:
+                    del self.sessions[name]
+                    self.tool_cache.pop(name, None)
+                await self._broadcast("BOOTSTRAP", f"    ↻ {name} (session evicted, will reload on next query)")
 
         # 3. Remove deleted servers
         if deleted_servers:
             await self._broadcast("BOOTSTRAP", f"🗑️  Removing {len(deleted_servers)} deleted server(s):")
             for name in deleted_servers:
                 await self.collection.delete_one({"server_name": name})
+                if name in self.sessions:
+                    del self.sessions[name]
+                    self.tool_cache.pop(name, None)
                 await self._broadcast("BOOTSTRAP", f"    - {name}")
 
         await self._broadcast("BOOTSTRAP", f"✓ Registry sync complete\n")
