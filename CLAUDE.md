@@ -39,7 +39,9 @@ There is no test suite or linter configured — this is a prototype/demo project
 - `mcp_servers/*.py` — Pluggable FastMCP service modules
 - `web/portfolio_dashboard.py` — FastAPI + WebSocket dashboard for the portfolio service, driven by MongoDB Change Streams (run separately on `localhost:8050`)
 - `web/ibn_dashboard.py` — FastAPI + WebSocket dashboard for the Intent-Based Networking demo, driven by Change Streams across `ibn_intents`, `ibn_compliance_events`, `ibn_telemetry`, `ibn_policy_snapshots` (run separately on `localhost:8060`; supports `?mode=eng` and `?mode=exec`)
+- `web/dtw_dashboard.py` — FastAPI + WebSocket dashboard for the Digital Twin (ACME what-if) demo, driven by Change Streams on `dtw_scenarios` (run separately on `localhost:8080`; supports `?mode=eng` and `?mode=exec`)
 - `seed/ibn_seed.py` — One-shot loader for the IBN demo fixtures (sites, customers, resources, knowledge_chunks, intents). Run once before starting the demo; supports `--reset`
+- `seed/dtw_seed.py` — One-shot loader for the Digital Twin demo fixtures (plans, QoS profiles, network elements, topology edges, subscribers, traffic models, knowledge chunks, sample scenarios). Run once before starting the DTW demo; supports `--reset`
 
 ### Orchestrator Flow (`agents/orchestrator.py`)
 
@@ -79,6 +81,29 @@ A 5-service flow demonstrating Atlas as the operational memory + decision layer 
 **Dashboard modes.** The IBN dashboard reads `?mode=` from the URL. `eng` (default) shows the raw aggregation pipeline modal during diagnose and the parsed-JSON intent block; `exec` hides those, replaces them with prose callouts and a similarity bar without numerical score. Same chat backbone, two render styles for two audiences.
 
 **Demo collections** in `agent_registry`: `ibn_customers`, `ibn_sites` (with `2dsphere` index), `ibn_resources` (with `2dsphere`), `ibn_intents`, `ibn_knowledge_chunks` (vector-indexed in Atlas UI), `ibn_policy_snapshots`, `ibn_compliance_events`, `ibn_telemetry` (a Time Series collection — created by the seed script).
+
+### DTW Demo (Digital Twin — ACME Mobile what-if simulations)
+
+A 5-service flow building a **digital twin** of ACME Mobile's HLR/HSS-relevant world in MongoDB, then letting an LLM + MCP agents run what-if simulations on it. The pitch focus is two realistic scenarios:
+
+- **Flow A (QoS uplift):** "Raise prepaid ACME M downlink from 7.2 Mbps to 20 Mbps in NYC and LA Saturday evening — where do we bottleneck?"
+- **Flow B (Policy change):** "Migrate ACME M to a new APN, update the PCRF template, and enable Canada roaming — what control-plane pressure do we expect?"
+
+The five services live alongside the others in `mcp_servers/`:
+
+- `dtw_plan_service` — plans, QoS profiles, subscriber samples (`describe_plan`, `get_qos_profile`, `list_plans`, `compare_qos_profiles`, `subscribers_for_plan`)
+- `dtw_topology_service` — RAN + core inventory and dependency graph; wraps `$graphLookup` over `dtw_topology_edges` (`get_network_element`, `find_cells_in_market`, `traverse_dependencies`, `find_path_between`, `list_markets`)
+- `dtw_traffic_service` — per-cell traffic models and load estimation by time window (`get_traffic_model`, `estimate_cell_load`, `list_time_windows`, `peak_hours_for_market`)
+- `dtw_scenario_service` — NL → structured what-if scenario (`gpt-4o`); lifecycle (`create_scenario`, `list_scenarios`, `get_scenario`, `cancel_scenario`)
+- `dtw_simulation_service` — the **hero**. `simulate_qos_change` runs `$graphLookup` for scope + per-cell load projection from `dtw_traffic_models` + hybrid `$vectorSearch` against `dtw_knowledge_chunks` for analogous past scenarios — in one tool call. `simulate_roaming_change` does the Flow B control-plane variant. Also `diff_scenarios`, `get_simulation_result`
+
+**The WOW combo** in `dtw_simulation_service.simulate_qos_change`: $graphLookup walks the dependency tree from `plan_ACME_M` downstream through QoS → cells → eNBs → SGW → PGW, while a hybrid `$vectorSearch` against `dtw_knowledge_chunks.text` (with structured pre-filters on `segment`, `market`, `kind`) surfaces semantically similar past incidents and their mitigation runbooks. Graph for *operational structure*, vector for *institutional memory* — both in one Atlas store, both invoked at simulate-time.
+
+**Atlas Vector Search index required.** The `dtw_knowledge_index` on `dtw_knowledge_chunks` must be created in the Atlas UI before the hybrid query works. The seed script prints the exact JSON config; the index needs `text` configured with auto-embedding (`voyage-3-large`, 1024 dims) and `kind`, `segment`, `market`, `plan_id`, `ts`, `lng`, `lat` as filter fields. If the index isn't ready, `simulate_qos_change` still runs and persists graph + load projections — only the "similar past scenarios" panel will be empty.
+
+**Dashboard modes.** The DTW dashboard reads `?mode=` from the URL. `eng` (default) shows the raw aggregation pipeline and the graph-walk edge list; `exec` hides those and renders only narrative panels with a similarity bar (no numerical score).
+
+**Demo collections** in `agent_registry`: `dtw_markets`, `dtw_plans`, `dtw_qos_profiles`, `dtw_subscribers`, `dtw_network_elements` (polymorphic — HSS/HLR/MME/SGW/PGW/eNodeB/Cell in one collection), `dtw_topology_edges` (the dependency graph), `dtw_traffic_models`, `dtw_scenarios`, `dtw_knowledge_chunks` (vector-indexed in Atlas UI).
 
 ## Key Dependencies
 

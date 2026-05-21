@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DTW — Digital Twin Dashboard</title>
+<style>
+  :root {
+    --bg:        #0A0A0A;
+    --panel:    #121212;
+    --panel2:   #181818;
+    --border:   #262626;
+    --text:     #E8E8E8;
+    --mute:     #8A8A8A;
+    --accent:   #00D4FF;
+    --green:    #00FF88;
+    --yellow:   #FFD700;
+    --red:      #FF4D6A;
+    --brand:    #7B5BFF;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    font-size: 13px;
+  }
+  code, .mono { font-family: "JetBrains Mono", "SF Mono", Menlo, monospace; font-size: 12px; }
+  a { color: var(--accent); }
+
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 18px; border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  header .logo { color: var(--brand); font-weight: 700; letter-spacing: 0.5px; }
+  header .title { font-weight: 600; }
+  header .mode  { margin-left: auto; font-size: 11px; color: var(--mute); }
+  header .mode .pill { display: inline-block; padding: 2px 8px; border-radius: 999px;
+                       border: 1px solid var(--border); margin-left: 6px; }
+  header .live { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--mute); }
+  header .live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); }
+  header .live.on .dot { background: var(--green); }
+
+  .layout {
+    display: grid; grid-template-columns: 320px 1fr; gap: 0;
+    height: calc(100vh - 44px);
+  }
+
+  aside {
+    border-right: 1px solid var(--border); overflow-y: auto; background: var(--panel);
+  }
+  aside .section-title {
+    padding: 10px 14px 4px; color: var(--mute); font-size: 10px;
+    letter-spacing: 0.6px; text-transform: uppercase;
+  }
+  .scenario-row {
+    padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--border);
+  }
+  .scenario-row:hover { background: var(--panel2); }
+  .scenario-row.active { background: #1f2933; border-left: 2px solid var(--accent); padding-left: 12px; }
+  .scenario-row .id { font-family: "SF Mono", monospace; font-size: 11px; color: var(--accent); }
+  .scenario-row .desc { font-size: 12px; margin-top: 2px; color: var(--text); }
+  .scenario-row .meta { font-size: 10px; color: var(--mute); margin-top: 2px; }
+
+  main { overflow-y: auto; padding: 18px 24px; }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    margin-bottom: 16px; overflow: hidden;
+  }
+  .panel h2 {
+    margin: 0; padding: 10px 14px; font-size: 12px; font-weight: 600;
+    letter-spacing: 0.4px; text-transform: uppercase; color: var(--mute);
+    border-bottom: 1px solid var(--border); background: var(--panel2);
+  }
+  .panel .body { padding: 14px; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+  .kv { display: grid; grid-template-columns: 140px 1fr; gap: 6px 12px; font-size: 12px; }
+  .kv .k { color: var(--mute); }
+  .kv .v { color: var(--text); }
+
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px;
+           border: 1px solid var(--border); font-size: 10px;
+           text-transform: uppercase; letter-spacing: 0.4px; }
+  .badge.green   { color: var(--green);   border-color: rgba(0,255,136,0.4); }
+  .badge.yellow  { color: var(--yellow);  border-color: rgba(255,215,0,0.4); }
+  .badge.red     { color: var(--red);     border-color: rgba(255,77,106,0.5); }
+  .badge.block   { color: #fff; background: var(--red); border-color: var(--red); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--mute); font-weight: 500; font-size: 10px;
+       text-transform: uppercase; letter-spacing: 0.4px; }
+  td.mono { font-family: "SF Mono", Menlo, monospace; font-size: 11px; color: #cfd8dc; }
+
+  .util-bar { position: relative; width: 100px; height: 6px; background: #222; border-radius: 3px; overflow: hidden; }
+  .util-bar .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--green); }
+  .util-bar .delta-orig {
+    position: absolute; top: 0; bottom: 0; width: 1px; background: var(--mute);
+  }
+
+  pre.pipeline {
+    background: #0e0e0e; border: 1px solid var(--border); padding: 12px;
+    border-radius: 4px; font-family: "SF Mono", Menlo, monospace; font-size: 11px;
+    color: #bdbdbd; overflow-x: auto; white-space: pre-wrap;
+    max-height: 360px; overflow-y: auto;
+  }
+
+  .empty {
+    padding: 24px; text-align: center; color: var(--mute); font-style: italic;
+  }
+
+  .similarity-bar {
+    display: inline-block; vertical-align: middle; width: 80px; height: 4px;
+    background: #222; border-radius: 2px; overflow: hidden; margin-right: 6px;
+  }
+  .similarity-bar .fill { height: 100%; background: var(--accent); }
+
+  .scope-pills .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    border: 1px solid var(--border); margin-right: 4px; font-size: 11px;
+  }
+
+  .narrative {
+    background: linear-gradient(135deg, rgba(0,212,255,0.08), rgba(226,0,116,0.04));
+    border: 1px solid rgba(0,212,255,0.25);
+    border-radius: 6px; padding: 12px 14px; color: #d6e6ee; font-size: 13px; line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">DTW</div>
+  <div class="title">Digital Twin — ACME Mobile</div>
+  <div class="live" id="live"><span class="dot"></span><span id="liveLabel">offline</span></div>
+  <div class="mode">mode <span class="pill" id="modePill">eng</span></div>
+</header>
+
+<div class="layout">
+  <aside id="sidebar">
+    <div class="section-title">Scenarios</div>
+    <div id="scenarioList"><div class="empty">loading…</div></div>
+  </aside>
+
+  <main id="main">
+    <div class="empty">Select a scenario from the left.</div>
+  </main>
+</div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const MODE = (params.get("mode") || "eng").toLowerCase() === "exec" ? "exec" : "eng";
+document.getElementById("modePill").textContent = MODE;
+
+const state = { scenarios: [], focusedId: null };
+
+function setLive(on) {
+  const el = document.getElementById("live");
+  el.classList.toggle("on", on);
+  document.getElementById("liveLabel").textContent = on ? "live" : "offline";
+}
+
+function classifyRisk(util) {
+  if (util >= 0.95) return "BLOCK";
+  if (util >= 0.85) return "RED";
+  if (util >= 0.70) return "YELLOW";
+  return "GREEN";
+}
+function riskBadge(level) {
+  const cls = (level || "green").toLowerCase();
+  return `<span class="badge ${cls}">${level || "GREEN"}</span>`;
+}
+function fmtPct(v) { return Math.round((v || 0) * 100) + "%"; }
+
+function renderScenarioList() {
+  const root = document.getElementById("scenarioList");
+  if (!state.scenarios.length) {
+    root.innerHTML = '<div class="empty">No scenarios yet.<br><br>Submit one via the agent:<br><code>"what if we raise prepaid M to 20 Mbps in NYC and LA"</code></div>';
+    return;
+  }
+  root.innerHTML = state.scenarios.map(s => {
+    const active = s._id === state.focusedId ? "active" : "";
+    const status = (s.status || "—");
+    const cs = s.change_set || {};
+    let delta = "";
+    if (cs.old_qos_profile_id && cs.new_qos_profile_id)
+      delta = `QoS ${cs.old_qos_profile_id} → ${cs.new_qos_profile_id}`;
+    else if (cs.apn_change)
+      delta = `APN ${cs.apn_change.from} → ${cs.apn_change.to}`;
+    else if (cs.roaming_enable)
+      delta = `roam +${(cs.roaming_enable || []).join(",")}`;
+    return `<div class="scenario-row ${active}" data-id="${s._id}">
+      <div class="id">${s._id}</div>
+      <div class="desc">${(s.description || "—").substring(0, 80)}</div>
+      <div class="meta">${status} · ${delta || "—"}</div>
+    </div>`;
+  }).join("");
+  root.querySelectorAll(".scenario-row").forEach(el => {
+    el.addEventListener("click", () => focusScenario(el.dataset.id));
+  });
+}
+
+function renderFocused(s) {
+  const root = document.getElementById("main");
+  if (!s) { root.innerHTML = '<div class="empty">No scenario.</div>'; return; }
+  const cs    = s.change_set || {};
+  const scope = s.scope       || {};
+  const r     = s.results     || null;
+
+  let html = `
+    <div class="panel">
+      <h2>${s._id} — ${s.scenario_type || "scenario"} — ${s.status || ""}</h2>
+      <div class="body">
+        <div class="narrative">${(s.description || "")}</div>
+        <div style="height:10px"></div>
+        <div class="kv">
+          <div class="k">plan</div><div class="v mono">${cs.plan_id || "—"}</div>
+          ${cs.old_qos_profile_id ? `
+            <div class="k">QoS change</div>
+            <div class="v mono">${cs.old_qos_profile_id} → ${cs.new_qos_profile_id}</div>` : ""}
+          ${cs.apn_change ? `
+            <div class="k">APN change</div>
+            <div class="v mono">${cs.apn_change.from} → ${cs.apn_change.to}</div>` : ""}
+          ${cs.pcrf_template_change ? `
+            <div class="k">PCRF change</div>
+            <div class="v mono">${cs.pcrf_template_change.from} → ${cs.pcrf_template_change.to}</div>` : ""}
+          ${cs.roaming_enable ? `
+            <div class="k">roaming</div>
+            <div class="v mono">+${(cs.roaming_enable || []).join(", ")}</div>` : ""}
+          <div class="k">markets</div>
+          <div class="v scope-pills">${(scope.markets || []).map(m => `<span class="pill mono">${m}</span>`).join("") || "(all)"}</div>
+          <div class="k">time windows</div>
+          <div class="v scope-pills">${(scope.time_windows || []).map(t => `<span class="pill mono">${t}</span>`).join("") || "(all)"}</div>
+        </div>
+      </div>
+    </div>`;
+
+  if (!r) {
+    html += `<div class="panel"><h2>Simulation result</h2>
+      <div class="empty">Not yet simulated. Run <code>simulate_qos_change("${s._id}")</code> via the agent.</div>
+    </div>`;
+    root.innerHTML = html;
+    return;
+  }
+
+  // Risk summary
+  const cellsCount = (r.cell_projections || []).length;
+  const over = (r.cells_over_capacity || []).length;
+  const coreRisk = (r.core_elements_at_risk || []).length;
+
+  html += `<div class="panel"><h2>Result summary</h2><div class="body">
+    <div class="narrative">${r.narrative_summary || ""}</div>
+    <div style="height:10px"></div>
+    <div class="kv">
+      <div class="k">computed_at</div><div class="v mono">${(r.computed_at || "").substring(0,19)}</div>
+      <div class="k">cells modeled</div><div class="v mono">${cellsCount}</div>
+      <div class="k">over capacity</div><div class="v mono">${over}</div>
+      <div class="k">core at risk</div><div class="v mono">${coreRisk}</div>
+      <div class="k">filter level</div><div class="v mono">${r.vector_filter_level || "—"}</div>
+    </div>
+  </div></div>`;
+
+  // Cell projections table (top by projected utilization)
+  const cells = (r.cell_projections || [])
+    .slice().sort((a, b) => b.projected_utilization - a.projected_utilization).slice(0, 12);
+  if (cells.length) {
+    html += `<div class="panel"><h2>Cell projections (top 12)</h2>
+      <div class="body"><table>
+      <thead><tr>
+        <th>cell</th><th>market</th><th>tech</th><th>orig</th><th>proj</th>
+        <th>Δ</th><th>subs</th><th>risk</th>
+      </tr></thead><tbody>
+      ${cells.map(c => `<tr>
+        <td class="mono">${c.cell_id}</td>
+        <td>${c.market}</td>
+        <td>${c.tech}</td>
+        <td>${fmtPct(c.original_utilization)}</td>
+        <td>
+          <div class="util-bar">
+            <div class="fill" style="width:${Math.min(100, c.projected_utilization*100)}%; background:${c.projected_utilization>=0.85 ? 'var(--red)' : c.projected_utilization>=0.70 ? 'var(--yellow)' : 'var(--green)'}"></div>
+            <div class="delta-orig" style="left:${Math.min(100, c.original_utilization*100)}%"></div>
+          </div>
+          ${fmtPct(c.projected_utilization)}
+        </td>
+        <td>${c.delta_pct>=0?"+":""}${c.delta_pct.toFixed(1)}pp</td>
+        <td>${c.contributing_subs}</td>
+        <td>${riskBadge(c.risk)}</td>
+      </tr>`).join("")}
+      </tbody></table></div></div>`;
+  }
+
+  // Core elements at risk
+  if ((r.core_elements_at_risk || []).length) {
+    html += `<div class="panel"><h2>Core elements at risk</h2>
+      <div class="body"><table>
+      <thead><tr><th>element</th><th>type</th><th>market</th><th>orig</th><th>proj</th><th>risk</th></tr></thead>
+      <tbody>
+      ${r.core_elements_at_risk.map(e => `<tr>
+        <td class="mono">${e.neId}</td>
+        <td>${e.type}</td>
+        <td>${e.market || "—"}</td>
+        <td>${fmtPct(e.original_utilization)}</td>
+        <td>${fmtPct(e.projected_utilization)}</td>
+        <td>${riskBadge(e.risk)}</td>
+      </tr>`).join("")}
+      </tbody></table></div></div>`;
+  }
+
+  // Similar past scenarios — hybrid vector search results
+  const sims = r.similar_past_scenarios || [];
+  if (sims.length) {
+    html += `<div class="panel"><h2>Hybrid vector search — similar past scenarios</h2>
+      <div class="body">
+      <div style="font-size:11px;color:var(--mute);margin-bottom:8px">
+        filter level: <code class="mono">${r.vector_filter_level || "—"}</code>
+      </div>
+      <table>
+      <thead><tr>
+        <th>title</th><th>market</th><th>kind</th><th>when</th><th>similarity</th><th>runbook</th>
+      </tr></thead><tbody>
+      ${sims.map(m => {
+        const s_pct = Math.round((m.score || 0) * 100);
+        const exec_bar = MODE === "exec"
+          ? `<div class="similarity-bar"><div class="fill" style="width:${s_pct}%"></div></div>`
+          : `<div class="similarity-bar"><div class="fill" style="width:${s_pct}%"></div></div><span class="mono">${(m.score||0).toFixed(3)}</span>`;
+        const ts = (m.ts || "").substring(0,10);
+        return `<tr>
+          <td>${m.title || "—"}</td>
+          <td class="mono">${m.market || "—"}</td>
+          <td class="mono">${m.kind || "—"}</td>
+          <td class="mono">${ts}</td>
+          <td>${exec_bar}</td>
+          <td class="mono">${m.linked_runbook || "—"}</td>
+        </tr>`;
+      }).join("")}
+      </tbody></table>
+      </div></div>`;
+  }
+
+  // Engineer-mode aggregation pipeline preview
+  if (MODE === "eng" && r.vector_pipeline) {
+    html += `<div class="panel"><h2>Aggregation pipeline ($vectorSearch + filters)</h2>
+      <div class="body"><pre class="pipeline">${JSON.stringify(r.vector_pipeline, null, 2)}</pre>
+      <div style="font-size:11px;color:var(--mute);margin-top:8px">
+        Pre-filtered semantic search over <code>dtw_knowledge_chunks</code>. The filter narrows
+        the candidate set by structured fields (segment, market, kind) <em>inside</em> the
+        <code>$vectorSearch</code> stage — the hybrid query that separates Atlas from a stack
+        of Postgres + pgvector + a search engine.
+      </div></div></div>`;
+  }
+
+  // Graph walk
+  if (MODE === "eng" && r.graph_walk && r.graph_walk.length) {
+    const top = r.graph_walk.slice(0, 30);
+    html += `<div class="panel"><h2>Graph walk ($graphLookup over dtw_topology_edges)</h2>
+      <div class="body">
+      <div style="font-size:11px;color:var(--mute);margin-bottom:8px">
+        ${r.graph_walk.length} edge(s) discovered downstream from <code>${cs.plan_id}</code>.
+        Top 30 shown.
+      </div>
+      <table>
+      <thead><tr><th>from</th><th>relation</th><th>to</th><th>hop</th></tr></thead>
+      <tbody>
+      ${top.map(e => `<tr>
+        <td class="mono">${e.from_id}</td>
+        <td class="mono">${e.relation || "—"}</td>
+        <td class="mono">${e.to_id}</td>
+        <td>${(e.depth || 0) + 1}</td>
+      </tr>`).join("")}
+      </tbody></table></div></div>`;
+  }
+
+  root.innerHTML = html;
+}
+
+function focusScenario(id) {
+  state.focusedId = id;
+  const s = state.scenarios.find(x => x._id === id);
+  renderScenarioList();
+  if (s) renderFocused(s);
+}
+
+// ─── WebSocket ───────────────────────────────────────────────────────────
+let ws;
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen   = () => setLive(true);
+  ws.onclose  = () => { setLive(false); setTimeout(connect, 2000); };
+  ws.onerror  = () => { setLive(false); };
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.type === "snapshot") {
+      state.scenarios = m.scenarios || [];
+      if (m.focused && !state.focusedId) state.focusedId = m.focused._id;
+      renderScenarioList();
+      const s = state.scenarios.find(x => x._id === state.focusedId);
+      renderFocused(s);
+    } else if (m.type === "scenario_update") {
+      const idx = state.scenarios.findIndex(x => x._id === m.doc._id);
+      if (idx >= 0) state.scenarios[idx] = m.doc; else state.scenarios.unshift(m.doc);
+      renderScenarioList();
+      if (state.focusedId === m.doc._id) renderFocused(m.doc);
+      else if (!state.focusedId) { state.focusedId = m.doc._id; renderFocused(m.doc); }
+    }
+  };
+}
+connect();
+</script>
+</body>
+</html>

@@ -1,0 +1,375 @@
+#
+# Copyright (c) 2026 MongoDB Inc.
+# Author: Benjamin Lorenz <benjamin.lorenz@mongodb.com>
+#
+
+"""
+DTW Scenario Service — What-if scenario lifecycle for the digital twin demo.
+
+The submit-and-track surface of the Digital Twin demo. Owns dtw_scenarios.
+Captures natural-language what-if requests ("raise prepaid M to 20 Mbps in
+NYC and LA on Saturday night"), parses them into a structured change_set +
+scope via gpt-4o, and tracks lifecycle status. The actual numerical
+simulation is performed by the simulation service.
+
+Use this service when users say:
+- Submit:   "what if we raise prepaid M to 20 Mbps in NYC",
+            "simulate raising the cap", "model the effect of …",
+            "I want to run a what-if", "new scenario",
+            "what happens if we change APN for plan X"
+- List:    "list scenarios", "show all what-ifs",
+           "show submitted scenarios", "completed scenarios"
+- Detail: "get scenario DTW-SCN-001", "show me the scenario",
+          "scenario details"
+- Cancel: "cancel scenario X", "discard scenario X"
+
+This service does NOT run the actual simulation, traverse the topology, or
+return load-projection results. Once a scenario is submitted, call
+simulate_qos_change (or simulate_roaming_change) from the simulation
+service to compute outcomes.
+
+This service is NOT the IBN intent service — that lives in ibn_intent_service
+and handles retail-network customer intents, not mobile-network what-ifs.
+"""
+
+import datetime
+import json
+import logging
+import os
+
+from pymongo import MongoClient, DESCENDING
+from openai import OpenAI
+from mcp.server.fastmcp import FastMCP
+
+logging.disable(logging.WARNING)
+
+mcp           = FastMCP("dtw_scenario_service")
+logger        = logging.getLogger("dtw_scenario_service")
+
+mongo_client  = MongoClient(os.environ["MONGODB_URI"])
+db            = mongo_client["agent_registry"]
+scenarios     = db["dtw_scenarios"]
+plans         = db["dtw_plans"]
+qos_profiles  = db["dtw_qos_profiles"]
+markets_coll  = db["dtw_markets"]
+
+openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+PARSE_MODEL   = os.environ.get("OPENAI_MODEL", "gpt-4o")
+
+
+def _next_scenario_id() -> str:
+    last = scenarios.find_one(
+        {"_id": {"$regex": r"^DTW-SCN-\d+$"}},
+        sort=[("_id", DESCENDING)],
+    )
+    if not last:
+        return "DTW-SCN-001"
+    n = int(last["_id"].split("-")[-1])
+    return f"DTW-SCN-{n + 1:03d}"
+
+
+def _known_plans() -> list[str]:
+    return [p["_id"] for p in plans.find({}, {"_id": 1})]
+
+
+def _known_qos() -> list[str]:
+    return [q["_id"] for q in qos_profiles.find({}, {"_id": 1})]
+
+
+def _known_markets() -> list[str]:
+    return [m["_id"] for m in markets_coll.find({}, {"_id": 1})]
+
+
+def _resolve_plan_id(hint: str) -> str | None:
+    if not hint:
+        return None
+    if plans.find_one({"_id": hint}):
+        return hint
+    doc = plans.find_one({"name": {"$regex": hint, "$options": "i"}})
+    return doc["_id"] if doc else None
+
+
+def _resolve_qos_id(hint: str) -> str | None:
+    if not hint:
+        return None
+    if qos_profiles.find_one({"_id": hint}):
+        return hint
+    doc = qos_profiles.find_one({"name": {"$regex": hint, "$options": "i"}})
+    return doc["_id"] if doc else None
+
+
+def _resolve_market_id(hint: str) -> str | None:
+    if not hint:
+        return None
+    if markets_coll.find_one({"_id": hint}):
+        return hint
+    doc = markets_coll.find_one({"name": {"$regex": hint, "$options": "i"}})
+    if doc:
+        return doc["_id"]
+    h = hint.lower()
+    for m in _known_markets():
+        if m.lower().startswith(h):
+            return m
+    return None
+
+
+def _parse_natural_language(text: str) -> dict:
+    """Use gpt-4o to extract a structured what-if scenario from natural language."""
+    today = datetime.date.today().isoformat()
+    prompt = (
+        f"You are a parser for telecom what-if scenarios on a digital twin. "
+        f"Today is {today}.\n\n"
+        f"Extract structured fields from this request:\n\n{text!r}\n\n"
+        f"Known plans: {', '.join(_known_plans())}\n"
+        f"Known QoS profiles: {', '.join(_known_qos())}\n"
+        f"Known markets: {', '.join(_known_markets())}\n\n"
+        "Return ONLY valid JSON, no prose, with this schema:\n"
+        "{\n"
+        '  "scenario_type": "qos_change" | "policy_change" | "subscriber_shift" | "other",\n'
+        '  "change_set": {\n'
+        '    "plan_id": string | null,\n'
+        '    "old_qos_profile_id": string | null,\n'
+        '    "new_qos_profile_id": string | null,\n'
+        '    "apn_change": { "from": string, "to": string } | null,\n'
+        '    "pcrf_template_change": { "from": string, "to": string } | null,\n'
+        '    "roaming_enable": string[] | null      // country codes\n'
+        "  },\n"
+        '  "scope": {\n'
+        '    "markets": string[],          // subset of known markets, [] = all\n'
+        '    "time_windows": string[]      // e.g. ["Saturday_20_23"], [] = all known\n'
+        "  },\n"
+        '  "summary": string                // one short sentence\n'
+        "}\n\n"
+        "Use null/[] for fields not mentioned. Do not invent plan or market ids "
+        "outside the known lists. If a user says '7.2 to 20 Mbps', map to "
+        "qos_prepaid_7_2 and qos_prepaid_20 if those exist. Prefer 'Saturday_20_23' "
+        "when the user mentions Saturday evening/night."
+    )
+    resp = openai_client.chat.completions.create(
+        model=PARSE_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
+    return json.loads(resp.choices[0].message.content)
+
+
+def _format_scenario_card(s: dict) -> str:
+    status = s.get("status", "—")
+    status_emoji = {
+        "submitted": "📝",
+        "scoped":    "🎯",
+        "simulated": "🧮",
+        "completed": "✓",
+        "cancelled": "⊗",
+    }.get(status, "•")
+
+    cs   = s.get("change_set") or {}
+    scope = s.get("scope") or {}
+    bits = []
+    if cs.get("plan_id"):
+        bits.append(f"plan {cs['plan_id']}")
+    if cs.get("old_qos_profile_id") and cs.get("new_qos_profile_id"):
+        bits.append(f"QoS {cs['old_qos_profile_id']} → {cs['new_qos_profile_id']}")
+    if cs.get("apn_change"):
+        bits.append(f"APN {cs['apn_change'].get('from')} → {cs['apn_change'].get('to')}")
+    if cs.get("roaming_enable"):
+        bits.append(f"roam +{','.join(cs['roaming_enable'])}")
+
+    lines = [f"**{s['_id']}** · {status_emoji} {status} · {s.get('scenario_type', '—')}"]
+    if s.get("description"):
+        lines.append(f"  {s['description']}")
+    if bits:
+        lines.append(f"  Δ: {' · '.join(bits)}")
+    if scope.get("markets") or scope.get("time_windows"):
+        scope_bits = []
+        if scope.get("markets"):
+            scope_bits.append(f"markets: {', '.join(scope['markets'])}")
+        if scope.get("time_windows"):
+            scope_bits.append(f"windows: {', '.join(scope['time_windows'])}")
+        lines.append("  " + " · ".join(scope_bits))
+    return "\n".join(lines)
+
+
+# ─── Tools ─────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+def create_scenario(text: str) -> str:
+    """
+    Submit a new natural-language what-if scenario. The service parses the
+    request via LLM, extracts change_set (plan, QoS old→new, APN/roaming
+    changes) and scope (markets, time windows), and stores it in
+    dtw_scenarios with status='submitted'.
+
+    Next step: call simulate_qos_change (or simulate_roaming_change) from
+    the simulation service with the returned scenario_id.
+
+    Args:
+        text: The user's natural-language what-if request.
+    """
+    parsed = _parse_natural_language(text)
+
+    # Light id-normalization in case the LLM produced near-misses
+    cs = parsed.get("change_set") or {}
+    cs["plan_id"]             = _resolve_plan_id(cs.get("plan_id") or "")  or cs.get("plan_id")
+    cs["old_qos_profile_id"]  = _resolve_qos_id (cs.get("old_qos_profile_id") or "")  or cs.get("old_qos_profile_id")
+    cs["new_qos_profile_id"]  = _resolve_qos_id (cs.get("new_qos_profile_id") or "")  or cs.get("new_qos_profile_id")
+    sc = parsed.get("scope") or {}
+    sc["markets"] = [m for m in (sc.get("markets") or []) if _resolve_market_id(m)] \
+                    or (sc.get("markets") or [])
+
+    sid = _next_scenario_id()
+    doc = {
+        "_id":            sid,
+        "description":    parsed.get("summary") or text[:120],
+        "scenario_type":  parsed.get("scenario_type") or "other",
+        "raw_text":       text,
+        "change_set":     cs,
+        "scope":          sc,
+        "status":         "submitted",
+        "submitted_at":   datetime.datetime.now(),
+        "history":        [{"ts": datetime.datetime.now(), "event": "submitted",
+                            "note": "parsed from natural language"}],
+        "results":        None,
+    }
+    scenarios.insert_one(doc)
+    logger.info(f"Created scenario {sid}")
+
+    lines = [
+        f"📝 Scenario **{sid}** submitted.",
+        f"  Type: {doc['scenario_type']}",
+        f"  {doc['description']}",
+    ]
+    if cs.get("plan_id"):
+        lines.append(f"  Plan: {cs['plan_id']}")
+    if cs.get("old_qos_profile_id") and cs.get("new_qos_profile_id"):
+        lines.append(f"  QoS: {cs['old_qos_profile_id']} → {cs['new_qos_profile_id']}")
+    if cs.get("apn_change"):
+        lines.append(f"  APN: {cs['apn_change'].get('from')} → {cs['apn_change'].get('to')}")
+    if cs.get("roaming_enable"):
+        lines.append(f"  Roaming enable: {', '.join(cs['roaming_enable'])}")
+    if sc.get("markets"):
+        lines.append(f"  Markets: {', '.join(sc['markets'])}")
+    if sc.get("time_windows"):
+        lines.append(f"  Time windows: {', '.join(sc['time_windows'])}")
+    lines.append("")
+    lines.append(f"  Next: call simulate_qos_change('{sid}') "
+                 "(or simulate_roaming_change for policy-only scenarios).")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def list_scenarios(status_filter: str = None) -> str:
+    """
+    List scenarios, optionally filtered by status.
+
+    Args:
+        status_filter: Optional. Common values: 'submitted', 'simulated',
+                       'completed', 'cancelled'.
+    """
+    q = {"status": status_filter} if status_filter else {}
+    docs = list(scenarios.find(q).sort("submitted_at", DESCENDING))
+    if not docs:
+        scope = f" with status '{status_filter}'" if status_filter else ""
+        return f"No scenarios found{scope}."
+    header = f"**{len(docs)} scenario{'s' if len(docs) != 1 else ''}" + \
+             (f" with status '{status_filter}'" if status_filter else "") + ":**"
+    return header + "\n\n" + "\n\n".join(_format_scenario_card(s) for s in docs)
+
+
+@mcp.tool()
+def get_scenario(scenario_id: str) -> str:
+    """
+    Get full details for one scenario: raw request, parsed change_set, scope,
+    lifecycle history, and a summary of simulation results (if any).
+
+    Args:
+        scenario_id: Scenario id, e.g. 'DTW-SCN-003'.
+    """
+    s = scenarios.find_one({"_id": scenario_id})
+    if not s:
+        return f"❌ Scenario {scenario_id} not found."
+
+    lines = [
+        f"## Scenario {s['_id']}",
+        f"**Status:** {s.get('status')}",
+        f"**Type:** {s.get('scenario_type')}",
+        f"**Submitted:** {s.get('submitted_at').strftime('%Y-%m-%d %H:%M') if s.get('submitted_at') else '—'}",
+        "",
+        f"**Description:** {s.get('description', '—')}",
+        "",
+        "**Verbatim request:**",
+        f"> {s.get('raw_text', '—')}",
+        "",
+        "**Change set:**",
+    ]
+    cs = s.get("change_set") or {}
+    if cs.get("plan_id"):                 lines.append(f"- plan: {cs['plan_id']}")
+    if cs.get("old_qos_profile_id"):      lines.append(f"- old QoS: {cs['old_qos_profile_id']}")
+    if cs.get("new_qos_profile_id"):      lines.append(f"- new QoS: {cs['new_qos_profile_id']}")
+    if cs.get("apn_change"):              lines.append(f"- APN: {cs['apn_change'].get('from')} → {cs['apn_change'].get('to')}")
+    if cs.get("pcrf_template_change"):    lines.append(f"- PCRF: {cs['pcrf_template_change'].get('from')} → {cs['pcrf_template_change'].get('to')}")
+    if cs.get("roaming_enable"):          lines.append(f"- roaming enable: {', '.join(cs['roaming_enable'])}")
+
+    sc = s.get("scope") or {}
+    lines.append("")
+    lines.append("**Scope:**")
+    lines.append(f"- markets: {', '.join(sc.get('markets') or []) or '(all)'}")
+    lines.append(f"- time windows: {', '.join(sc.get('time_windows') or []) or '(all)'}")
+
+    results = s.get("results")
+    if results:
+        lines.append("")
+        lines.append("**Simulation result summary:**")
+        cells = results.get("cells_over_capacity") or []
+        cores = results.get("core_elements_at_risk") or []
+        lines.append(f"- {len(cells)} cell(s) over capacity threshold")
+        lines.append(f"- {len(cores)} core element(s) at risk")
+        if results.get("similar_past_scenarios"):
+            lines.append(f"- {len(results['similar_past_scenarios'])} similar past scenario(s) "
+                         "from hybrid vector search")
+        if results.get("narrative_summary"):
+            lines.append("")
+            lines.append(results["narrative_summary"])
+    else:
+        lines.append("")
+        lines.append("**Results:** not yet simulated. "
+                     f"Call simulate_qos_change('{s['_id']}') to compute.")
+
+    history = s.get("history") or []
+    if history:
+        lines.append("")
+        lines.append("**History:**")
+        for h in history:
+            ts = h["ts"].strftime("%Y-%m-%d %H:%M") if isinstance(h.get("ts"), datetime.datetime) else h.get("ts", "—")
+            lines.append(f"- {ts} · {h.get('event')} · {h.get('note', '')}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def cancel_scenario(scenario_id: str, reason: str = "user request") -> str:
+    """
+    Cancel a scenario. Sets status='cancelled' and records the reason.
+
+    Args:
+        scenario_id: Scenario id.
+        reason:      Optional reason recorded in history.
+    """
+    s = scenarios.find_one({"_id": scenario_id})
+    if not s:
+        return f"❌ Scenario {scenario_id} not found."
+    if s.get("status") == "cancelled":
+        return f"ℹ️  Scenario {scenario_id} already cancelled."
+    scenarios.update_one(
+        {"_id": scenario_id},
+        {
+            "$set": {"status": "cancelled"},
+            "$push": {"history": {"ts": datetime.datetime.now(),
+                                  "event": "cancelled", "note": reason}},
+        },
+    )
+    return f"⊗ Scenario {scenario_id} cancelled. Reason: {reason}"
+
+
+if __name__ == "__main__":
+    mcp.run()
