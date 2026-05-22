@@ -398,17 +398,15 @@ class OrchestratorAgent:
             return []
         if len(by_domain) == 1:
             only = next(iter(by_domain))
-            await self._broadcast("ROUTING",
-                f"Stage 1 — only one domain registered ('{only}'), skipping classification")
+            await self._broadcast("ROUTING", f"Stage 1 → {only} (only domain)")
             return [only]
 
-        # Build a compact taxonomy: domain name + up to 3 member services with
-        # the first line of each docstring. Keeps the prompt small even at
-        # hundreds of services — bounded by domain count × 3.
+        # Build a compact taxonomy for the LLM (sent in the prompt only, NOT
+        # broadcast — the BOOTSTRAP line already enumerates the taxonomy once
+        # for the audience).
         lines = []
         for d, members in sorted(by_domain.items()):
             members_str = ", ".join(m["server_name"] for m in members[:5])
-            # First non-empty line of any member docstring as a hint
             blurb = ""
             for m in members:
                 desc = (m.get("description") or "").strip()
@@ -423,11 +421,6 @@ class OrchestratorAgent:
             hint = (f"\n\nPrevious turn used domain '{sticky_hint}'. For short or "
                     f"ambiguous follow-up queries, prefer the same domain unless "
                     f"the new query clearly belongs elsewhere.")
-
-        await self._broadcast("ROUTING", f"Stage 1 — domain classification "
-                                          f"({len(by_domain)} domain(s))")
-        for line in lines:
-            await self._broadcast("ROUTING", f"  {line}")
 
         try:
             resp = await self.openai.chat.completions.create(
@@ -457,10 +450,10 @@ class OrchestratorAgent:
         valid = [d for d in candidates if d in by_domain]
         if not valid:
             await self._broadcast("ROUTING",
-                f"⚠ Stage 1 returned unknown domain(s) {candidates!r}; "
-                f"falling back to all domains for Stage 2")
+                f"⚠ Stage 1: unknown domain(s) {candidates!r}; using all")
             return list(by_domain.keys())
-        await self._broadcast("ROUTING", f"✓ Stage 1 selected: {', '.join(valid)}")
+        await self._broadcast("ROUTING",
+            f"Stage 1 → {', '.join(valid)} ({len(by_domain)} domains)")
         return valid
 
     async def _is_session_continuation(self, query: str, service: str,
@@ -505,22 +498,27 @@ class OrchestratorAgent:
         domains = await self._classify_domain(query, sticky_hint=sticky_hint)
 
         # ── Stage 2 — vector search within selected domain(s) ─────────────
-        scope = f"within domain(s) {', '.join(domains)}" if domains else "(unscoped)"
-        await self._broadcast("ROUTING", f"Stage 2 — vector search {scope}")
         candidates = await self._semantic_search(query, limit=5, domains=domains)
 
         if not candidates:
+            scope = ', '.join(domains) if domains else "(unscoped)"
             await self._broadcast("ERROR",
-                f"No results from vector search in {scope} - embeddings and index exist?")
+                f"Stage 2 in '{scope}' returned no vector hits — index built?")
             return []
 
         best_score = candidates[0].get("score", 0)
         second_score = candidates[1].get("score", 0) if len(candidates) > 1 else 0
         gap = best_score - second_score
 
+        # Compact Stage 2 broadcast: one header line + one line per candidate
+        # without redundant [domain] tag (Stage 1 already announced the domain).
+        multi_domain = domains and len(domains) > 1
+        scope_label = ', '.join(domains) if domains else "(unscoped)"
+        await self._broadcast("ROUTING", f"Stage 2 in '{scope_label}':")
         for c in candidates:
+            tag = f" [{c.get('domain', '?')}]" if multi_domain else ""
             await self._broadcast("ROUTING",
-                f"  {c['server_name']} [{c.get('domain', '?')}]: {c.get('score', 0):.3f}")
+                f"  {c['server_name']}{tag}: {c.get('score', 0):.3f}")
 
         # Clear winner: decent score + decisive lead over runner-up
         if best_score > 0.65 and gap > 0.03:
@@ -557,11 +555,7 @@ class OrchestratorAgent:
                 self.last_service = None
                 self.last_domain  = None
 
-        # Medium confidence → LLM validation
-        await self._broadcast("ROUTING",
-                        ( f"🤔 Medium confidence ({best_score:.3f}), "
-                          "asking LLM to validate..." ))
-
+        # Medium confidence → LLM validation (silent until the result line)
         # Use descriptions already returned by _semantic_search
         candidate_details = []
         for i, c in enumerate(candidates[:5]):
@@ -593,7 +587,8 @@ class OrchestratorAgent:
             )
 
             result = resp.choices[0].message.content.strip()
-            await self._broadcast("ROUTING", f"💡 LLM decision: {result}")
+            await self._broadcast("ROUTING",
+                f"🤔 Tie-break ({best_score:.3f}) → LLM: {result}")
 
             if result == "NONE":
                 return []
