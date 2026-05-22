@@ -550,12 +550,12 @@ class OrchestratorAgent:
                             f"✓ Clear winner (gap {gap:.3f}), using: {candidates[0]['server_name']}")
             return [candidates[0]["server_name"]]
 
-        # Session stickiness for very vague queries
-        if use_stickiness and self.last_service and best_score < 0.6:
-            await self._broadcast("ROUTING",
-                            ( f"⚡ Low confidence ({best_score:.3f}), "
-                              "using session stickiness: {self.last_service}" ))
-            return [self.last_service]
+        # Stickiness is intentionally NOT applied here — it runs as a last-
+        # resort fallback AFTER the LLM tie-break, not as a shortcut around
+        # it. The previous behaviour ("if best_score < 0.6 and use_stickiness
+        # → reuse last_service") short-circuited the LLM exactly in the
+        # cases where the LLM was needed most. With model upgrades (voyage-4)
+        # absolute scores compress, so any absolute threshold misfires.
 
         # Conversational lock: services like acc_proof_point_service hold a
         # session lock once selected — but check whether the user has switched
@@ -615,17 +615,27 @@ class OrchestratorAgent:
                 f"🤔 Tie-break ({best_score:.3f}) → LLM: {result}")
 
             if result == "NONE":
+                # LLM refused. Stickiness is the right last-resort here —
+                # the user is in a session, we'd rather stay than give up.
+                if use_stickiness and self.last_service:
+                    await self._broadcast("ROUTING",
+                        f"⚡ LLM returned NONE, stickiness → {self.last_service}")
+                    return [self.last_service]
                 return []
 
-            # Parse comma-separated service names
+            # Parse comma-separated service names, filter to valid candidates
             services = [s.strip() for s in result.split(",") if s.strip()]
-            # Filter to only valid service names from candidates
             valid_services = [s for s in services if s in [c["server_name"] for c in candidates]]
 
             return valid_services if valid_services else [candidates[0]["server_name"]]
 
         except Exception as e:
-            print(f"  ⚠️ LLM validation failed: {e}, falling back to top match")
+            print(f"  ⚠️ LLM validation failed: {e}, falling back")
+            # LLM call failed — stickiness is again the safer fallback than
+            # blindly taking the top vector hit (which can be noise with
+            # voyage-4-tight clusters).
+            if use_stickiness and self.last_service:
+                return [self.last_service]
             return [candidates[0]["server_name"]]
 
     async def _activate_servers(self, servers: List[Dict]):
