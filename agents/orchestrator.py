@@ -610,10 +610,38 @@ class OrchestratorAgent:
         if len(candidates) == 1:
             return [candidates[0]["server_name"]]
 
-        # Clear winner: decent score + decisive lead over runner-up
-        if best_score > 0.65 and gap > 0.03:
+        # Clear winner — either of two criteria fires the fast-path so the
+        # logic stays correct regardless of which embedding model the index
+        # uses.
+        #
+        #   (a) Absolute: best_score > 0.65 AND gap > 0.03.
+        #       Tuned for older models (voyage-3-large) that spread scores
+        #       wide. Almost never fires on voyage-4 because unit-norm
+        #       vectors compress all related docs into 0.45-0.55.
+        #
+        #   (b) Relative: gap_1→2 ≥ 3 × gap_2→3 AND gap_1→2 ≥ 0.0005.
+        #       The winner stands alone at the top — its lead over runner-up
+        #       is at least triple the spacing between the rest of the pack.
+        #       This is the criterion that actually fires on voyage-4 scores.
+        #       The floor (0.0005) rules out cases where every gap is
+        #       essentially zero and the ratio is just numerical noise.
+        absolute_winner = best_score > 0.65 and gap > 0.03
+        relative_winner = False
+        if len(candidates) >= 3:
+            third_score = candidates[2].get("score", 0)
+            gap_23 = max(second_score - third_score, 1e-9)
+            if gap >= 0.0005 and gap / gap_23 >= 3.0:
+                relative_winner = True
+
+        if absolute_winner or relative_winner:
+            if absolute_winner:
+                why = f"score {best_score:.3f}, gap {gap:.3f}"
+            else:
+                ratio = gap / gap_23
+                ratio_str = f"{ratio:.1f}×" if ratio < 100 else "decisive"
+                why = f"standalone winner, gap ratio {ratio_str}"
             await self._broadcast("ROUTING",
-                            f"✓ Clear winner (gap {gap:.3f}), using: {candidates[0]['server_name']}")
+                f"✓ Clear winner ({why}): {candidates[0]['server_name']}")
             return [candidates[0]["server_name"]]
 
         # Stickiness is intentionally NOT applied here — it runs as a last-

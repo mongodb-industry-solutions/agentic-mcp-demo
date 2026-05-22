@@ -133,11 +133,14 @@ Stage 1 (breadth):  classify the query into 1–2 domain tags
 Stage 2 (depth):    $vectorSearch with filter: {domain: {$in: [...]}}
                     Small N → high resolution
                     Same vector index, just pre-filtered
-                    Decision pipeline:
+                    Decision pipeline (top-to-bottom, first match wins):
                       ① sole candidate → return (no LLM call)
-                      ② clear winner (gap > 0.03) → return
-                      ③ LLM tie-break (prefers a single service)
-                      ④ session stickiness as last-resort fallback
+                      ② absolute clear winner (best > 0.65, gap > 0.03)
+                                                         → return (no LLM)
+                      ③ relative clear winner (gap_1→2 ≥ 3 × gap_2→3)
+                                                         → return (no LLM)
+                      ④ LLM tie-break (prefers a single service)
+                      ⑤ session stickiness as last-resort fallback
 ```
 
 The Stage 2 aggregation pipeline:
@@ -164,7 +167,7 @@ The Stage 2 aggregation pipeline:
 
 Neither is what production agent platforms do. Atlas lets you express the pre-filter natively in the same aggregation that runs the semantic match.
 
-**Ranking vs. absolute scores — talk-track for the audience.** Modern embedding models (voyage-4, OpenAI `text-embedding-3`, Cohere `embed-v3`, Anthropic's own) output unit-norm vectors. dotProduct on unit-norm vectors equals cosine, and the scores for semantically-related documents compress into a narrow ~0.45–0.55 band. *The ranking is correct; the absolute scores are deliberately compressed by the model.* The orchestrator's Stage 2 broadcast highlights the winner with `▶` and shows the gap-to-winner per candidate so the visual differentiation is unambiguous — even when the absolute spread looks small. **This is not a MongoDB property; it is a property of the embedding model the customer would use anywhere.**
+**Ranking vs. absolute scores — talk-track for the audience.** Modern embedding models (voyage-4, OpenAI `text-embedding-3`, Cohere `embed-v3`, Anthropic's own) output unit-norm vectors. dotProduct on unit-norm vectors equals cosine, and the scores for semantically-related documents compress into a narrow ~0.45–0.55 band. *The ranking is correct; the absolute scores are deliberately compressed by the model.* The orchestrator's Stage 2 broadcast highlights the winner with `▶` and shows the gap-to-winner per candidate so the visual differentiation is unambiguous — even when the absolute spread looks small. **This is not a MongoDB property; it is a property of the embedding model the customer would use anywhere.** The Stage 2 fast-path is dual-criterion (absolute OR relative gap-ratio) precisely so it stays useful under either score distribution — voyage-3-large's wide spread fires the absolute path; voyage-4's tight cluster fires the relative path when there's a genuine standout. Five canonical demo queries: three short-circuit through the relative fast-path with no LLM call, two genuinely-ambiguous ones fall to the LLM tie-break. No LLM cost paid when none is needed.
 
 **Session context.** `last_domain` is always passed to the Stage 1 classifier as a sticky hint, not just when the orchestrator would also apply last-resort stickiness. So a short ambiguous follow-up like *"feasibility check!"* after an IBN intent submission stays in the `ibn` domain instead of widening to `ibn` + `dtw`. Genuine cross-domain queries with explicit identifiers ("compare intent IBN-007 with scenario DTW-SCN-003") still match multiple domains because the classifier sees those identifiers and overrides the hint.
 
