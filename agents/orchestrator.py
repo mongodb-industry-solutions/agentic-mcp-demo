@@ -539,6 +539,11 @@ class OrchestratorAgent:
             await self._broadcast("ROUTING",
                 f"  {c['server_name']}{tag}: {c.get('score', 0):.3f}")
 
+        # Sole candidate — Stage 1 already chose the domain; whatever vector
+        # search returned is the only option. No LLM tie-break needed.
+        if len(candidates) == 1:
+            return [candidates[0]["server_name"]]
+
         # Clear winner: decent score + decisive lead over runner-up
         if best_score > 0.65 and gap > 0.03:
             await self._broadcast("ROUTING",
