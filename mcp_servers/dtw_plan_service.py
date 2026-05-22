@@ -50,7 +50,8 @@ subscribers   = db["dtw_subscribers"]
 
 
 def _resolve_plan(plan_hint: str) -> dict | None:
-    """Resolve a plan by id or name fragment. Tolerates 'M', 'ACME M', 'plan_ACME_M', 'ACME M'."""
+    """Resolve a plan by id or name fragment. Tolerates 'M', 'ACME M',
+    'plan_ACME_M', 'plan-ACME-M', 'ACME-M'."""
     if not plan_hint:
         return None
     # Direct id
@@ -61,11 +62,13 @@ def _resolve_plan(plan_hint: str) -> dict | None:
     doc = plans.find_one({"name": {"$regex": plan_hint, "$options": "i"}})
     if doc:
         return doc
-    # Loose id match: strip prefix variations
+    # Loose id match: try prefix variations
+    suffix = plan_hint.replace(" ", "_").replace("-", "_")
+    bare   = suffix[len("ACME_"):] if suffix.startswith("ACME_") else suffix
     variants = [
-        plan_hint.replace(" ", "_").replace("-", "_"),
-        f"plan_TMO_{plan_hint}",
-        f"plan_TMO_{plan_hint.replace('ACME ', '').replace('ACME ', '')}",
+        suffix,
+        f"plan_ACME_{suffix}",
+        f"plan_ACME_{bare}",
     ]
     for v in variants:
         doc = plans.find_one({"_id": v})
