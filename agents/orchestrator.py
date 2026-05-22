@@ -327,10 +327,11 @@ class OrchestratorAgent:
         """Emit the canonical 'Registry: N services in M domains — …' line
         from the *actual post-sync state* of agent_registry.mcp_services
         (so adds/updates/deletes that just landed are reflected)."""
-        rows = await self.collection.aggregate([
+        cursor = await self.collection.aggregate([
             {"$group": {"_id": "$domain", "n": {"$sum": 1}}},
             {"$sort": {"_id": 1}},
-        ]).to_list()
+        ])
+        rows = await cursor.to_list()
         if not rows:
             return
         total = sum(r["n"] for r in rows)
