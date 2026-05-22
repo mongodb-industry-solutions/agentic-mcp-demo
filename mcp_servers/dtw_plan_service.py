@@ -30,6 +30,10 @@ scenario, and simulation DTW services respectively.
 This service is NOT about retail intents, retail sites, or compliance — that
 is the IBN demo. Don't confuse `plan` (mobile data plan) with `policy
 template` (provisioning template) — those are different demos.
+
+This service operates exclusively on `plan_ACME_*` plan ids and `qos_*`
+QoS profile ids. If the user's request does not name a plan or QoS
+profile, this service is the wrong tool.
 """
 
 import logging

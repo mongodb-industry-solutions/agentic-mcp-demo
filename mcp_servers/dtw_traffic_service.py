@@ -30,6 +30,11 @@ produce *projected* load.
 This service does NOT model commercial plans (that is the plan service),
 walk the dependency graph (the topology service), own scenarios, or run
 simulations (the scenario and simulation services respectively).
+
+This service is scoped exclusively to digital-twin traffic-model fixtures
+referenced by `plan_ACME_*` ids, market ids like `NYC_Metro` or `LA_Metro`,
+and time-window ids like `Saturday_20_23`. If the user's request does not
+reference one of those identifier shapes, this service is the wrong tool.
 """
 
 import logging

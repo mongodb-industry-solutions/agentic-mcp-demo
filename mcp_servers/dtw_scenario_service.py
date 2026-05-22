@@ -30,6 +30,11 @@ service to compute outcomes.
 
 This service is NOT the IBN intent service — that lives in ibn_intent_service
 and handles retail-network customer intents, not mobile-network what-ifs.
+
+This service only accepts what-if requests that name a `plan_ACME_*` plan,
+a `qos_*` profile, an APN, a PCRF template ref, or a roaming country. If
+the user's request does not mention one of those, this service is the
+wrong tool.
 """
 
 import datetime

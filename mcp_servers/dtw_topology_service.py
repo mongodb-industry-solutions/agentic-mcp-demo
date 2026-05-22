@@ -31,6 +31,11 @@ This service does NOT own plans, QoS profiles, traffic models, scenarios, or
 simulations — those are the plan, traffic, scenario, and simulation DTW
 services respectively. It does NOT serve the IBN retail demo's site/resource
 inventory either — that lives in ibn_inventory_service.
+
+This service operates exclusively on dependency-graph identifiers of the
+shape `ne_HSS_*`, `ne_HLR_*`, `ne_MME_*`, `ne_SGW_*`, `ne_PGW_*`,
+`ne_eNB_*`, `cell_*`, or `plan_ACME_*`. If the user's request does not
+reference one of those id shapes, this service is the wrong tool.
 """
 
 import logging

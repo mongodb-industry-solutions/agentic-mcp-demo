@@ -39,6 +39,12 @@ Use this service when users say:
 This service does NOT submit scenarios, look up plans/QoS/traffic models
 directly, or walk the graph standalone — those are the scenario, plan,
 traffic, and topology DTW services respectively.
+
+This service operates exclusively on a previously-submitted DTW scenario id
+of the form `DTW-SCN-###`. Its only entry points are the analytical
+`simulate_qos_change(scenario_id)` and `simulate_roaming_change(scenario_id)`
+tools. If the user's request does not name a `DTW-SCN-###` scenario id,
+this service is the wrong tool.
 """
 
 import datetime
