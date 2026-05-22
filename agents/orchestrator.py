@@ -248,8 +248,10 @@ class OrchestratorAgent:
             d = s["domain"]
             domain_counts[d] = domain_counts.get(d, 0) + 1
         if domain_counts:
+            total_services = sum(domain_counts.values())
             summary = ", ".join(f"{d}({n})" for d, n in sorted(domain_counts.items()))
-            await self._broadcast("BOOTSTRAP", f"Domains discovered: {summary}")
+            await self._broadcast("BOOTSTRAP",
+                f"Registry: {total_services} services in {len(domain_counts)} domains — {summary}")
 
         # Fetch current registry from MongoDB
         db_servers = {
@@ -398,7 +400,9 @@ class OrchestratorAgent:
             return []
         if len(by_domain) == 1:
             only = next(iter(by_domain))
-            await self._broadcast("ROUTING", f"Stage 1 → {only} (only domain)")
+            n = len(by_domain[only])
+            label = "service" if n == 1 else "services"
+            await self._broadcast("ROUTING", f"Stage 1 → {only} ({n} {label})")
             return [only]
 
         # Build a compact taxonomy for the LLM (sent in the prompt only, NOT
@@ -452,8 +456,15 @@ class OrchestratorAgent:
             await self._broadcast("ROUTING",
                 f"⚠ Stage 1: unknown domain(s) {candidates!r}; using all")
             return list(by_domain.keys())
-        await self._broadcast("ROUTING",
-            f"Stage 1 → {', '.join(valid)} ({len(by_domain)} domains)")
+
+        total_svcs = sum(len(by_domain.get(d, [])) for d in valid)
+        label = "service" if total_svcs == 1 else "services"
+        if len(valid) == 1:
+            msg = f"Stage 1 → {valid[0]} ({total_svcs} {label})"
+        else:
+            per_domain = ", ".join(f"{d}({len(by_domain.get(d, []))})" for d in valid)
+            msg = f"Stage 1 → {per_domain} — {total_svcs} {label} total"
+        await self._broadcast("ROUTING", msg)
         return valid
 
     async def _is_session_continuation(self, query: str, service: str,
