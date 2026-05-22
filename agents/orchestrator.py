@@ -500,17 +500,22 @@ class OrchestratorAgent:
         #     routing miss.
         if sticky_hint:
             hint = (
-                f"\n\nIMPORTANT: The user is in an ongoing session in the "
-                f"'{sticky_hint}' domain. Return EXACTLY ONE domain — "
-                f"'{sticky_hint}' — unless the query explicitly references "
-                f"an identifier or vocabulary from a clearly different "
-                f"domain. Continuation cues like 'plan', 'check', 'activate', "
-                f"'list', 'show', 'next', 'now do X' do NOT change the "
-                f"domain — they extend the session."
+                f"\n\nThe user is in an ongoing session in the "
+                f"'{sticky_hint}' domain.\n"
+                f" • PREFER '{sticky_hint}' for short or ambiguous follow-up "
+                f"queries (continuation cues like 'plan', 'check', "
+                f"'activate', 'list', 'show', 'next', 'now do X' extend the "
+                f"session — do NOT widen on these).\n"
+                f" • SWITCH to a different domain IF the query carries an "
+                f"explicit identifier from another domain, OR uses "
+                f"vocabulary that has no plausible reading in any "
+                f"'{sticky_hint}' service (e.g. 'what's on my TODO list', "
+                f"'show my portfolio', 'restaurant near me' — these are "
+                f"topic changes, not continuations)."
             )
             directive = (
-                "Return exactly ONE domain unless the query carries an "
-                "explicit cross-domain identifier."
+                "Return exactly ONE domain. Use the sticky domain when the "
+                "query continues the session; switch when it doesn't."
             )
         else:
             hint = ""
@@ -592,22 +597,27 @@ class OrchestratorAgent:
         except Exception:
             return True  # safe fallback: stay in session
 
-    async def _route_query(self, query: str, use_stickiness: bool = False) -> List[str]:
+    async def _route_query(self, query: str, use_stickiness: bool = False,
+                           _disable_sticky: bool = False) -> List[str]:
         """
         Two-stage hybrid routing:
           Stage 1 (breadth) — classify the query into one or more domain tags.
                               Small, stable taxonomy; scales by tree depth.
           Stage 2 (depth)   — vector search within the chosen domain(s),
                               clear-winner shortcut + LLM tie-break as before.
+
+        _disable_sticky is set on recursive retry calls — when Stage 2's LLM
+        tie-break returns NONE while we were biased by a sticky hint, the
+        user has likely changed topics and we need to re-route from scratch
+        without the sticky bias.
         """
         # ── Stage 1 — domain classification ───────────────────────────────
-        # ALWAYS feed last_domain to the classifier when it exists. Session
-        # context is informative regardless of whether we'd later fall back
-        # to stickiness as a last-resort shortcut (controlled separately by
-        # use_stickiness). Without this, short follow-ups like "feasibility
-        # check!" widen Stage 1 to multiple domains even though the user
-        # just submitted an IBN intent two turns ago.
-        domains = await self._classify_domain(query, sticky_hint=self.last_domain)
+        # ALWAYS feed last_domain to the classifier when it exists, unless
+        # we're on a topic-switch retry. Session context is informative
+        # regardless of whether we'd later fall back to stickiness as a
+        # last-resort shortcut.
+        sticky = None if _disable_sticky else self.last_domain
+        domains = await self._classify_domain(query, sticky_hint=sticky)
 
         # ── Stage 2 — vector search within selected domain(s) ─────────────
         candidates = await self._semantic_search(query, limit=5, domains=domains)
@@ -748,8 +758,25 @@ class OrchestratorAgent:
                 f"🤔 Tie-break ({best_score:.3f}) → LLM: {result}")
 
             if result == "NONE":
-                # LLM refused. Stickiness is the right last-resort here —
-                # the user is in a session, we'd rather stay than give up.
+                # LLM refused. Two possible meanings:
+                #
+                #   (a) Genuine topic switch — Stage 1 was biased by a
+                #       sticky hint into the wrong domain, and now Stage 2
+                #       (LLM tie-break) reports that no service in that
+                #       domain handles the query. Retry the WHOLE routing
+                #       without sticky to let Stage 1 re-classify.
+                #
+                #   (b) No service can handle the query at all — even a
+                #       sticky-free Stage 1 would land on the same dead
+                #       end. In that case the retry will return NONE again
+                #       and we fall through to either stickiness (if the
+                #       user is in a session) or an empty result.
+                if not _disable_sticky and self.last_domain:
+                    await self._broadcast("ROUTING",
+                        "⚡ LLM returned NONE — looks like a topic switch, "
+                        "retrying without sticky hint…")
+                    return await self._route_query(query, use_stickiness,
+                                                    _disable_sticky=True)
                 if use_stickiness and self.last_service:
                     await self._broadcast("ROUTING",
                         f"⚡ LLM returned NONE, stickiness → {self.last_service}")
