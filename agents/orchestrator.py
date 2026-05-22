@@ -482,17 +482,45 @@ class OrchestratorAgent:
             lines.append(f"- {d}: {blurb}  [services: {members_str}]")
         taxonomy = "\n".join(lines)
 
-        hint = ""
+        # Two distinct prompt regimes — follow-up vs first-touch — because
+        # they have different failure modes:
+        #
+        #   Follow-up (sticky_hint set):
+        #     The risk is hedging — adding a spurious second domain because
+        #     a verb in the query weakly resembles another domain ('plan'
+        #     → todo). Force single-domain unless the query carries an
+        #     explicit cross-domain identifier.
+        #
+        #   First-touch (no sticky_hint):
+        #     The risk is missing the right domain on a query that spans
+        #     vocabularies (e.g. opening a store sounds like both retail
+        #     intents and network monitoring). Allow up to 3 domains and
+        #     let Stage 2 vector search pick the right service from the
+        #     union. Overmatching here is cheap; undermatching is a
+        #     routing miss.
         if sticky_hint:
             hint = (
                 f"\n\nIMPORTANT: The user is in an ongoing session in the "
-                f"'{sticky_hint}' domain. Use that domain unless the query "
-                f"contains EXPLICIT vocabulary or an identifier that clearly "
-                f"belongs to a different domain (e.g. an id shape from another "
-                f"domain, or a phrase that has no plausible reading in "
-                f"'{sticky_hint}'). Vague verbs like 'plan', 'check', "
-                f"'activate', 'list', 'show' on their own do NOT override the "
-                f"session domain — they are continuation cues."
+                f"'{sticky_hint}' domain. Return EXACTLY ONE domain — "
+                f"'{sticky_hint}' — unless the query explicitly references "
+                f"an identifier or vocabulary from a clearly different "
+                f"domain. Continuation cues like 'plan', 'check', 'activate', "
+                f"'list', 'show', 'next', 'now do X' do NOT change the "
+                f"domain — they extend the session."
+            )
+            directive = (
+                "Return exactly ONE domain unless the query carries an "
+                "explicit cross-domain identifier."
+            )
+        else:
+            hint = ""
+            directive = (
+                "If the query plausibly fits multiple domains (mixed "
+                "vocabulary, ambiguous scope), return up to 3 domains. "
+                "Stage 2 vector search will pick the right service from "
+                "the union — better to overmatch slightly than miss the "
+                "right domain. If the query clearly belongs to one domain, "
+                "return just that one."
             )
 
         try:
@@ -503,18 +531,13 @@ class OrchestratorAgent:
                     "content": (
                         f"User query: '{query}'\n\n"
                         f"Available domains:\n{taxonomy}{hint}\n\n"
-                        f"Pick the SINGLE domain that handles this query.\n"
-                        f"Return more than one ONLY if the query EXPLICITLY "
-                        f"references identifiers, vocabulary, or actions from "
-                        f"multiple distinct domains in the same sentence "
-                        f"(e.g. 'compare intent IBN-007 with scenario "
-                        f"DTW-SCN-003'). Otherwise return exactly one domain.\n"
+                        f"{directive}\n"
                         f"Reply with domain name(s) only, comma-separated. "
-                        f"Never hedge, never return 'NONE'."
+                        f"Never return 'NONE'."
                     ),
                 }],
                 temperature=0,
-                max_tokens=20,
+                max_tokens=30,
             )
             raw = resp.choices[0].message.content.strip()
         except Exception as e:
