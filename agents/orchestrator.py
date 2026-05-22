@@ -489,15 +489,33 @@ class OrchestratorAgent:
         # Build a compact taxonomy for the LLM (sent in the prompt only, NOT
         # broadcast — the BOOTSTRAP line already enumerates the taxonomy once
         # for the audience).
+        #
+        # Each domain's blurb concatenates the tagline of EVERY member
+        # service so the classifier sees what the whole domain covers, not
+        # just the alphabetically-first service. Critical for multi-service
+        # domains (ibn, dtw) where a query may match the tagline of service
+        # #3, not service #1 — e.g. 'propose and activate the plan' maps to
+        # ibn_feasibility_service's tagline ('Match Intent to Inventory and
+        # Plan Activation'), but the old blurb only showed
+        # ibn_intent_service's tagline and the LLM missed the connection.
         lines = []
         for d, members in sorted(by_domain.items()):
             members_str = ", ".join(m["server_name"] for m in members[:5])
-            blurb = ""
-            for m in members:
+            taglines = []
+            for m in members[:5]:
                 desc = (m.get("description") or "").strip()
-                if desc:
-                    blurb = next((ln for ln in desc.splitlines() if ln.strip()), "")[:140]
-                    break
+                if not desc:
+                    continue
+                first_line = next((ln for ln in desc.splitlines() if ln.strip()), "")
+                # Strip the "Service Title —" prefix to keep just the unique
+                # tagline. Handles both "X Service — Y" and "SERVER: Y" forms.
+                if " — " in first_line:
+                    first_line = first_line.split(" — ", 1)[1].strip()
+                elif first_line.startswith("SERVER:"):
+                    first_line = first_line[len("SERVER:"):].strip()
+                if first_line:
+                    taglines.append(first_line[:80])
+            blurb = " · ".join(taglines) if taglines else "(no description)"
             lines.append(f"- {d}: {blurb}  [services: {members_str}]")
         taxonomy = "\n".join(lines)
 
