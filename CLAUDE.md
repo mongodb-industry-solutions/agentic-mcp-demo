@@ -45,14 +45,24 @@ There is no test suite or linter configured — this is a prototype/demo project
 
 ### Orchestrator Flow (`agents/orchestrator.py`)
 
-1. **Service Registry Sync** (`_sync_registry`): On startup, scans `mcp_servers/` for `.py` files, computes file hashes, and syncs `{server_name, description, file_hash, last_seen}` docs into MongoDB `agent_registry.mcp_services`. Detects new, changed, and deleted services. Embedding of the `description` field is performed automatically by the Atlas Vector Search index (`vector_index`) — the orchestrator passes raw text in `$vectorSearch.query`, and Atlas embeds it on the fly.
+1. **Service Registry Sync** (`_sync_registry`): On startup, scans `mcp_servers/` for `.py` files, computes file hashes, derives a `domain` tag from each filename prefix (`ibn_*` → `ibn`, `dtw_*` → `dtw`, singletons get their own one-member domain), and syncs `{server_name, description, domain, file_hash, last_seen}` docs into MongoDB `agent_registry.mcp_services`. Detects new, changed, and deleted services; also backfills `domain` on pre-upgrade registry docs. Embedding of the `description` field is performed automatically by the Atlas Vector Search index (`vector_index`) — the orchestrator passes raw text in `$vectorSearch.query`, and Atlas embeds it on the fly.
 
-2. **Semantic Routing** (`_route_query`): Runs `$vectorSearch` against `vector_index` (top 5 candidates with score). Decision tree:
-   - **Clear winner** — `best_score > 0.65` *and* score gap to runner-up `> 0.03` → return top match without LLM.
-   - **Session stickiness** — only when `use_stickiness=True` (set after follow-up detection) and `best_score < 0.6` and `self.last_service` exists → reuse last service.
-   - **Otherwise (medium confidence)** — LLM validation: gpt-4o-mini picks from the top 5 by description, may return multiple comma-separated services or `NONE`.
+2. **Two-Stage Hierarchical Routing** (`_route_query`):
 
-3. **Follow-up Detection** (`_needs_context_enrichment`): For short queries (< 5 words) that don't start with a self-contained verb (`list`, `show`, `add`, …), asks gpt-4o-mini whether the current query is a follow-up to the previous one. If yes, the query is prepended with the prior user message before re-routing with `use_stickiness=True`. Routing and enrichment-detection run concurrently via `asyncio.gather`.
+   This is the architectural beat about scale: a single embedding can't disambiguate hundreds of services. Routing is a pipeline.
+
+   - **Stage 1 — Domain classification** (`_classify_domain`): gpt-4o-mini sees the *taxonomy of domains* (3–4 lines per domain, never per-service) and picks 1–2 domains for the query, or all domains if unsure. Scales by tree depth, not leaf count. Skipped when only one domain is registered. The same step also takes a sticky hint from `last_domain` so short follow-ups stay in the current demo.
+   - **Stage 2 — Vector search within domain(s)** (`_semantic_search`): `$vectorSearch` against `vector_index` with `filter: {"domain": {"$in": stage1_domains}}` so DTW and IBN never compete on similarity. Top 5 returned with score. If the Atlas index hasn't been re-configured to include `domain` as a filter field, the orchestrator detects the error, flips `_domain_filter_supported = False` for the session, and falls back to unfiltered search with a one-time warning broadcast.
+   - **Stage 2 decision tree** (unchanged from the earlier single-stage form, just now scoped to a domain):
+     - **Clear winner** — `best_score > 0.65` *and* score gap to runner-up `> 0.03` → return top match without LLM.
+     - **Session stickiness** — only when `use_stickiness=True` and `best_score < 0.6` and `last_service` exists → reuse it.
+     - **Otherwise (medium confidence)** — LLM validation: gpt-4o-mini picks from the top 5 by description, may return multiple comma-separated services or `NONE`.
+
+   **The story to customers:** Atlas isn't just where the catalog lives — it's where you route through it. Domain classification handles **breadth** (small, stable taxonomy that scales to thousands of services). Per-domain vector search handles **depth** (small-N, high-resolution semantic match). Each scale tier handled by the right Atlas primitive. We don't ask one embedding to disambiguate everything.
+
+   **Atlas index requirement:** the `vector_index` on `agent_registry.mcp_services` must declare `domain` as a filter field for the Stage 2 filter to work. JSON for the Atlas UI: add `{"type": "filter", "path": "domain"}` to the fields array. Until you do, the orchestrator falls back to unfiltered Stage 2 (you'll see a `⚠` line in the live feed).
+
+3. **Follow-up Detection** (`_needs_context_enrichment`): For short queries (< 5 words) that don't start with a self-contained verb (`list`, `show`, `add`, …), asks gpt-4o-mini whether the current query is a follow-up to the previous one. If yes, the query is prepended with the prior user message before re-routing with `use_stickiness=True` — which then makes Stage 1 prefer `last_domain`. Routing and enrichment-detection run concurrently via `asyncio.gather`.
 
 4. **Server Activation** (`_activate_servers`): Launches MCP servers as subprocesses via `uv run` (StdioServerParameters), establishing stdio-based `ClientSession` connections managed by an `AsyncExitStack`. Sessions are reused across queries.
 

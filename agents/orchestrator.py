@@ -117,7 +117,11 @@ class OrchestratorAgent:
         self.sessions = {}
         self.exit_stack = AsyncExitStack()
         self.conversation_history = []
-        self.last_service = None  # Session Stickiness
+        self.last_service = None  # Session Stickiness (service-level)
+        self.last_domain  = None  # Session Stickiness (domain-level — Stage 1)
+        # Set to False once we see the Atlas vector_index reject `domain` as
+        # a filter, so we stop trying to filter on subsequent queries.
+        self._domain_filter_supported = True
         self.local_broadcast = local_broadcast  # optional async callback(tag, msg)
 
         # Services that hold a session lock once selected — follow-up messages
@@ -198,6 +202,20 @@ class OrchestratorAgent:
         except:
             return ""
 
+    def _infer_domain(self, server_name: str) -> str:
+        """
+        Derive a domain tag from a service name with a zero-friction rule:
+        take the first underscore-separated token. Service files following
+        a prefix convention (ibn_*, dtw_*, acc_*, portfolio_*) cluster
+        naturally; singleton services (memory_service, restaurant_guide,
+        incident_analyzer) become their own one-member domain.
+
+        This means new services join an existing domain just by being named
+        with the right prefix — no docstring or registry edit required.
+        """
+        stem = server_name.strip()
+        return stem.split("_", 1)[0] if "_" in stem else stem
+
     async def _sync_registry(self):
         """Smart sync: Add new, update changed, remove deleted MCP servers"""
         if not self.server_dir.exists():
@@ -216,12 +234,22 @@ class OrchestratorAgent:
             local_servers[server_name] = {
                 "server_name": server_name,
                 "description": docstring,
-                "file_hash": file_hash,
-                "last_seen": datetime.datetime.now().isoformat()
+                "domain":      self._infer_domain(server_name),
+                "file_hash":   file_hash,
+                "last_seen":   datetime.datetime.now().isoformat()
             }
 
         await self._broadcast() # newline
         await self._broadcast("BOOTSTRAP", f"Found {len(local_servers)} local MCP servers")
+        # Show the discovered domains so the live feed makes the two-stage
+        # routing story explicit from bootstrap onward.
+        domain_counts: dict[str, int] = {}
+        for s in local_servers.values():
+            d = s["domain"]
+            domain_counts[d] = domain_counts.get(d, 0) + 1
+        if domain_counts:
+            summary = ", ".join(f"{d}({n})" for d, n in sorted(domain_counts.items()))
+            await self._broadcast("BOOTSTRAP", f"Domains discovered: {summary}")
 
         # Fetch current registry from MongoDB
         db_servers = {
@@ -249,13 +277,15 @@ class OrchestratorAgent:
         deleted_servers = db_names - local_names
         potential_updates = local_names & db_names
 
-        # Check for actual changes (hash comparison)
+        # Check for actual changes (hash comparison) OR missing-domain
+        # backfill needed (registry doc predates the two-stage routing upgrade).
         changed_servers = set()
         for name in potential_updates:
             local_hash = local_servers[name]["file_hash"]
-            db_hash = db_servers[name].get("file_hash", "")
+            db_hash   = db_servers[name].get("file_hash", "")
+            db_domain = db_servers[name].get("domain")
 
-            if local_hash != db_hash:
+            if local_hash != db_hash or not db_domain:
                 changed_servers.add(name)
 
         # Sync operations
@@ -299,29 +329,139 @@ class OrchestratorAgent:
 
         await self._broadcast("BOOTSTRAP", f"✓ Registry sync complete\n")
 
-    async def _semantic_search(self, query: str, limit: int = 5) -> List[Dict]:
-        pipeline = [
-            {
-                "$vectorSearch": {
-                    "index": "vector_index",
-                    "path": "description",
-                    "query": query,
-                    "numCandidates": 50,
-                    "limit": limit
-                }
-            },
-            {
-                "$project": {
-                    "_id": 0,
-                    "server_name": 1,
-                    "description": 1,
-                    "score": {"$meta": "vectorSearchScore"}
-                }
+    async def _semantic_search(self, query: str, limit: int = 5,
+                               domains: List[str] | None = None) -> List[Dict]:
+        """Stage 2: vector search, optionally pre-filtered to one or more
+        domains. Falls back to unfiltered search if Atlas rejects the filter
+        (index hasn't been re-configured to include `domain` yet) — flips
+        a flag so we don't keep trying."""
+        def _build_pipeline(filter_doc: dict | None):
+            vs: dict = {
+                "index": "vector_index",
+                "path":  "description",
+                "query": query,
+                "numCandidates": 50,
+                "limit": limit,
             }
-        ]
+            if filter_doc:
+                vs["filter"] = filter_doc
+            return [
+                {"$vectorSearch": vs},
+                {"$project": {
+                    "_id": 0, "server_name": 1, "description": 1,
+                    "domain": 1, "score": {"$meta": "vectorSearchScore"},
+                }},
+            ]
 
-        cursor = await self.collection.aggregate(pipeline)
-        return await cursor.to_list()
+        use_filter = domains and self._domain_filter_supported
+        pipeline = _build_pipeline({"domain": {"$in": domains}} if use_filter else None)
+
+        try:
+            cursor = await self.collection.aggregate(pipeline)
+            return await cursor.to_list()
+        except Exception as e:
+            msg = str(e).lower()
+            # Atlas raises an OperationFailure if a filter field isn't declared
+            # on the index. Disable the filter for the rest of the session,
+            # warn once, and retry unfiltered so the demo keeps working.
+            if use_filter and ("filter" in msg or "field" in msg or "path" in msg):
+                self._domain_filter_supported = False
+                await self._broadcast("ROUTING",
+                    "⚠ Atlas vector_index has no `domain` filter — "
+                    "running Stage 2 unfiltered. Add `domain` as a filter "
+                    "field in the Atlas UI to enable hierarchical scoping.")
+                cursor = await self.collection.aggregate(_build_pipeline(None))
+                return await cursor.to_list()
+            raise
+
+    async def _list_domains(self) -> Dict[str, List[Dict]]:
+        """Return {domain: [{server_name, description}, …]} — Stage 1 input."""
+        cursor = self.collection.find(
+            {}, {"_id": 0, "server_name": 1, "description": 1, "domain": 1},
+        )
+        by_domain: Dict[str, List[Dict]] = {}
+        async for doc in cursor:
+            d = doc.get("domain") or self._infer_domain(doc["server_name"])
+            by_domain.setdefault(d, []).append(doc)
+        return by_domain
+
+    async def _classify_domain(self, query: str,
+                               sticky_hint: str | None = None) -> List[str]:
+        """
+        Stage 1: classify the query into one or more domain tags. Cheap
+        gpt-4o-mini call against a *small* taxonomy (domains, not services),
+        which is what lets the routing pipeline scale by tree depth rather
+        than by leaf count. If only one domain exists in the registry, skip.
+        """
+        by_domain = await self._list_domains()
+        if not by_domain:
+            return []
+        if len(by_domain) == 1:
+            only = next(iter(by_domain))
+            await self._broadcast("ROUTING",
+                f"Stage 1 — only one domain registered ('{only}'), skipping classification")
+            return [only]
+
+        # Build a compact taxonomy: domain name + up to 3 member services with
+        # the first line of each docstring. Keeps the prompt small even at
+        # hundreds of services — bounded by domain count × 3.
+        lines = []
+        for d, members in sorted(by_domain.items()):
+            members_str = ", ".join(m["server_name"] for m in members[:5])
+            # First non-empty line of any member docstring as a hint
+            blurb = ""
+            for m in members:
+                desc = (m.get("description") or "").strip()
+                if desc:
+                    blurb = next((ln for ln in desc.splitlines() if ln.strip()), "")[:140]
+                    break
+            lines.append(f"- {d}: {blurb}  [services: {members_str}]")
+        taxonomy = "\n".join(lines)
+
+        hint = ""
+        if sticky_hint:
+            hint = (f"\n\nPrevious turn used domain '{sticky_hint}'. For short or "
+                    f"ambiguous follow-up queries, prefer the same domain unless "
+                    f"the new query clearly belongs elsewhere.")
+
+        await self._broadcast("ROUTING", f"Stage 1 — domain classification "
+                                          f"({len(by_domain)} domain(s))")
+        for line in lines:
+            await self._broadcast("ROUTING", f"  {line}")
+
+        try:
+            resp = await self.openai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        f"User query: '{query}'\n\n"
+                        f"Available domains:\n{taxonomy}{hint}\n\n"
+                        f"Which domain(s) handle this query? Reply with domain "
+                        f"name(s) only, comma-separated. If multiple are plausible, "
+                        f"list up to 2. If unsure, return your single best guess. "
+                        f"Never return 'NONE'."
+                    ),
+                }],
+                temperature=0,
+                max_tokens=30,
+            )
+            raw = resp.choices[0].message.content.strip()
+        except Exception as e:
+            await self._broadcast("ROUTING",
+                f"⚠ Stage 1 LLM call failed ({e}); using sticky/fallback")
+            return [sticky_hint] if sticky_hint and sticky_hint in by_domain \
+                                  else [next(iter(by_domain))]
+
+        candidates = [d.strip() for d in raw.split(",") if d.strip()]
+        valid = [d for d in candidates if d in by_domain]
+        if not valid:
+            await self._broadcast("ROUTING",
+                f"⚠ Stage 1 returned unknown domain(s) {candidates!r}; "
+                f"falling back to all domains for Stage 2")
+            return list(by_domain.keys())
+        await self._broadcast("ROUTING", f"✓ Stage 1 selected: {', '.join(valid)}")
+        return valid
 
     async def _is_session_continuation(self, query: str, service: str,
                                         service_description: str) -> bool:
@@ -353,22 +493,34 @@ class OrchestratorAgent:
             return True  # safe fallback: stay in session
 
     async def _route_query(self, query: str, use_stickiness: bool = False) -> List[str]:
-        """Hybrid routing: Vector Search + LLM validation for ambiguous cases"""
+        """
+        Two-stage hybrid routing:
+          Stage 1 (breadth) — classify the query into one or more domain tags.
+                              Small, stable taxonomy; scales by tree depth.
+          Stage 2 (depth)   — vector search within the chosen domain(s),
+                              clear-winner shortcut + LLM tie-break as before.
+        """
+        # ── Stage 1 — domain classification ───────────────────────────────
+        sticky_hint = self.last_domain if use_stickiness else None
+        domains = await self._classify_domain(query, sticky_hint=sticky_hint)
 
-        candidates = await self._semantic_search(query, limit=5)
+        # ── Stage 2 — vector search within selected domain(s) ─────────────
+        scope = f"within domain(s) {', '.join(domains)}" if domains else "(unscoped)"
+        await self._broadcast("ROUTING", f"Stage 2 — vector search {scope}")
+        candidates = await self._semantic_search(query, limit=5, domains=domains)
 
         if not candidates:
-            await self._broadcast("ERROR", f"No results from vector search - embeddings and index exist?")
+            await self._broadcast("ERROR",
+                f"No results from vector search in {scope} - embeddings and index exist?")
             return []
 
         best_score = candidates[0].get("score", 0)
         second_score = candidates[1].get("score", 0) if len(candidates) > 1 else 0
         gap = best_score - second_score
 
-        await self._broadcast("ROUTING", f"Vector search results:")
         for c in candidates:
-            score = c.get("score", 0)
-            await self._broadcast("ROUTING", f"  {c['server_name']}: {score:.3f}")
+            await self._broadcast("ROUTING",
+                f"  {c['server_name']} [{c.get('domain', '?')}]: {c.get('score', 0):.3f}")
 
         # Clear winner: decent score + decisive lead over runner-up
         if best_score > 0.65 and gap > 0.03:
@@ -403,6 +555,7 @@ class OrchestratorAgent:
                 await self._broadcast("ROUTING",
                                 f"🔓 Topic switch detected, releasing lock from {self.last_service}")
                 self.last_service = None
+                self.last_domain  = None
 
         # Medium confidence → LLM validation
         await self._broadcast("ROUTING",
@@ -676,11 +829,13 @@ class OrchestratorAgent:
                 "Please ensure MCP servers are installed in the mcp_servers directory."
             )
 
-        # Store last non-memory service for stickiness
+        # Store last non-memory service AND its domain for stickiness.
+        # last_domain is consulted by Stage 1 on the next short/ambiguous turn.
         for match in matches:
             name = match["server_name"]
             if name != "memory_service":
                 self.last_service = name
+                self.last_domain  = self._infer_domain(name)
                 break
 
         # Memory service is routed normally — no forced injection.
