@@ -583,15 +583,22 @@ class OrchestratorAgent:
         second_score = candidates[1].get("score", 0) if len(candidates) > 1 else 0
         gap = best_score - second_score
 
-        # Compact Stage 2 broadcast: one header line + one line per candidate
-        # without redundant [domain] tag (Stage 1 already announced the domain).
+        # Compact Stage 2 broadcast: highlight the winner with ▶ and show
+        # gap-to-winner rather than absolute scores alone. Modern embedding
+        # models (voyage-4, text-embedding-3, embed-v3) output unit-norm
+        # vectors that compress all semantically-related docs into a narrow
+        # absolute-score band; the *relative* gap is what carries the signal.
         multi_domain = domains and len(domains) > 1
         scope_label = ', '.join(domains) if domains else "(unscoped)"
         await self._broadcast("ROUTING", f"Stage 2 in '{scope_label}':")
-        for c in candidates:
+        winner_score = best_score
+        for i, c in enumerate(candidates):
             tag = f" [{c.get('domain', '?')}]" if multi_domain else ""
+            score = c.get("score", 0)
+            mark  = "▶" if i == 0 else " "
+            delta = "" if i == 0 else f"  (-{(winner_score - score):.4f})"
             await self._broadcast("ROUTING",
-                f"  {c['server_name']}{tag}: {c.get('score', 0):.3f}")
+                f"  {mark} {c['server_name']}{tag}: {score:.4f}{delta}")
 
         # Sole candidate — Stage 1 already chose the domain; whatever vector
         # search returned is the only option. No LLM tie-break needed.
