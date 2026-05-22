@@ -95,25 +95,28 @@ The framework has five layers. Each is shaded by what makes Atlas the right fit,
 
 ### Layer 1 — Service Catalog
 
-The orchestrator dynamically discovers MCP services by scanning `mcp_servers/` for `.py` files. It extracts the module-level docstring, computes a content hash, derives a domain tag from the filename prefix, and upserts a document into `agent_registry.mcp_services`:
+The orchestrator dynamically discovers MCP services by scanning `mcp_servers/` for `.py` files. It extracts the module-level docstring, splits it into a focused *discriminator* (title + first paragraph) and a *full description*, computes a content hash, derives a domain tag from the filename prefix, and upserts a document into `agent_registry.mcp_services`:
 
 ```json
 {
-  "server_name": "dtw_simulation_service",
-  "description": "DTW Simulation Service — Run what-if simulations on the …",
-  "domain":      "dtw",
-  "file_hash":   "9af3…",
-  "last_seen":   "2026-05-22T09:15:00Z"
+  "server_name":      "dtw_simulation_service",
+  "description":      "DTW Simulation Service — Run what-if simulations …\n\nThe hero service of the Digital Twin demo. Owns the simulation runtime …",
+  "full_description": "<full docstring including trigger phrases and scope guards>",
+  "domain":           "dtw",
+  "file_hash":        "9af3…",
+  "last_seen":        "2026-05-22T09:15:00Z"
 }
 ```
 
-**Why MongoDB:** Three reasons stack on each other.
+**Why MongoDB:** Four reasons stack on each other.
 
 1. *Heterogeneous shapes.* Cloud-managed services carry a `source_code` field; local services don't. Some services declare custom `claims` (id-shape regexes for routing); most don't. Adding a new service shape never requires a migration. A polyglot system would either denormalize into 10 sparse columns or split into multiple tables joined on `server_name`.
 
-2. *Auto-embedding vector index.* Atlas Vector Search supports `type: "text"` with a model declaration — `voyage-3-large`, `1024 dims`. On every insert and on every query, Atlas embeds the field automatically. The orchestrator never touches an embedding API directly. New services become semantically searchable within seconds of `_sync_registry()` writing them in.
+2. *Auto-embedding vector index.* Atlas Vector Search supports `type: "text"` with a model declaration (we use `voyage-4`, unit-norm output, `1024` dims). On every insert and on every query, Atlas embeds the field automatically. The orchestrator never touches an embedding API directly. New services become semantically searchable within seconds of `_sync_registry()` writing them in.
 
-3. *Live filesystem watcher.* The orchestrator runs `watchfiles.awatch()` on `mcp_servers/` and re-syncs on every save. No restart, no reload, no cache invalidation gymnastics. Write a new docstring → Atlas re-embeds → next routing decision uses the new description.
+3. *Field split for embedding precision.* We embed `description` (the focused discriminator — ~400 chars), not `full_description` (the full docstring — ~1000 chars). Shared scaffolding ("Use this service when users say…", "This service does NOT…") that all sibling services repeat would otherwise dominate the embedding and cluster sibling vectors together. The full docstring is preserved for the Stage 2 LLM tie-break, where verbose trigger phrases actually help. **Two views of the same docstring, each optimized for a different downstream consumer — easy in a document model, painful in a column store.**
+
+4. *Live filesystem watcher.* The orchestrator runs `watchfiles.awatch()` on `mcp_servers/` and re-syncs on every save. No restart, no reload, no cache invalidation gymnastics. Write a new docstring → Atlas re-embeds → next routing decision uses the new discriminator.
 
 ### Layer 2 — Two-Stage Hierarchical Routing
 
@@ -124,11 +127,17 @@ Flat vector search over a large catalog does not scale because adding any new se
 ```
 Stage 1 (breadth):  classify the query into 1–2 domain tags
                     LLM sees a *small* taxonomy (one line per domain)
+                    last_domain is ALWAYS passed as a sticky hint
                     Scales by tree depth, not leaf count
 
 Stage 2 (depth):    $vectorSearch with filter: {domain: {$in: [...]}}
                     Small N → high resolution
                     Same vector index, just pre-filtered
+                    Decision pipeline:
+                      ① sole candidate → return (no LLM call)
+                      ② clear winner (gap > 0.03) → return
+                      ③ LLM tie-break (prefers a single service)
+                      ④ session stickiness as last-resort fallback
 ```
 
 The Stage 2 aggregation pipeline:
@@ -155,7 +164,11 @@ The Stage 2 aggregation pipeline:
 
 Neither is what production agent platforms do. Atlas lets you express the pre-filter natively in the same aggregation that runs the semantic match.
 
-**Storyline value:** the live broadcast emits Stage 1 and Stage 2 separately so the dashboard tells the visual story. Audiences see *breadth then depth*, which is the canonical scaling pattern they can carry back to any future agent platform discussion.
+**Ranking vs. absolute scores — talk-track for the audience.** Modern embedding models (voyage-4, OpenAI `text-embedding-3`, Cohere `embed-v3`, Anthropic's own) output unit-norm vectors. dotProduct on unit-norm vectors equals cosine, and the scores for semantically-related documents compress into a narrow ~0.45–0.55 band. *The ranking is correct; the absolute scores are deliberately compressed by the model.* The orchestrator's Stage 2 broadcast highlights the winner with `▶` and shows the gap-to-winner per candidate so the visual differentiation is unambiguous — even when the absolute spread looks small. **This is not a MongoDB property; it is a property of the embedding model the customer would use anywhere.**
+
+**Session context.** `last_domain` is always passed to the Stage 1 classifier as a sticky hint, not just when the orchestrator would also apply last-resort stickiness. So a short ambiguous follow-up like *"feasibility check!"* after an IBN intent submission stays in the `ibn` domain instead of widening to `ibn` + `dtw`. Genuine cross-domain queries with explicit identifiers ("compare intent IBN-007 with scenario DTW-SCN-003") still match multiple domains because the classifier sees those identifiers and overrides the hint.
+
+**Storyline value:** the live broadcast emits Stage 1 (one compact line — `Stage 1 → ibn (5 services)`) and Stage 2 (header + one line per candidate with the winner marked) so the dashboard tells the visual story. Audiences see *breadth then depth*, which is the canonical scaling pattern they can carry back to any future agent platform discussion. Singleton domains (one service in the domain) skip the LLM tie-break entirely — every query that lands in `memory`, `portfolio`, `restaurant`, `todo`, etc. routes with zero LLM calls beyond Stage 1.
 
 ### Layer 3 — Operational State (the two demo domains)
 
@@ -225,10 +238,13 @@ These will come up the moment a customer architect starts probing.
 
 **Multi-tenancy and isolation.** The `domain` tag is the natural multi-tenant boundary for routing. In a customer deployment, the same pattern extends to `tenant_id` as another filter dimension on the vector index. One Atlas cluster can host many domains and many tenants with deterministic isolation in the routing layer.
 
+**Diagnostic tooling.** `seed/check_routing_index.py` is a 60-line script that inspects (a) what's actually stored in `description` / `full_description` per service, (b) the Atlas `vector_index` configuration and status, and (c) live `$vectorSearch` spread for canonical queries. Catches the three failure modes that ever bite a routing demo — orchestrator didn't write, index didn't rebuild, ranking genuinely flat — without poking at MongoDB by hand.
+
 ## 2.3 Architecture trade-offs we accept
 
 - **Atlas Vector Search has eventual consistency** between write and queryability. A new service description becomes searchable within ~30s. For our use case, this is acceptable; for a customer with stricter consistency needs (e.g. trading), call it out.
 - **Auto-embedding adds latency to writes** (small — milliseconds for short docstrings). If the customer batches mass inserts (10k+/min), explain the rate-limit posture.
+- **Modern embedding models compress absolute scores.** voyage-4, OpenAI `text-embedding-3`, Cohere `embed-v3` all output unit-norm vectors that land in a narrow similarity band (~0.45–0.55) for documents in a tight semantic neighbourhood. The orchestrator visually highlights the winner and gap-to-runner-up so the demo audience can read the routing decision at a glance — but you should *expect* the question "why are the numbers so close?" from skeptical reviewers and have the model-behaviour answer ready (see §3.4).
 - **`$graphLookup` is not infinite-depth.** We cap at 4–6 hops in our walks. For deeper traversals (e.g. full social network walks), the customer's tool of choice may still be a dedicated graph DB. We are honest about the boundary.
 - **Live broadcasts via `notify.bjjl.dev/send`** are an internal demo aid, not part of the framework. A production customer would use Change Streams or a message bus directly.
 
@@ -293,16 +309,30 @@ MongoDB has a robust SQL→Aggregation translation story and a connector ecosyst
 **"We already have an embedding pipeline."**
 Great — you'll keep it for any cross-system pipelines. Atlas auto-embed is an additive feature for the workloads where you want the freshest embeddings (typically agent grounding). Coexists, doesn't replace.
 
+**"Why are all the vector-search scores so close to each other? Looks like noise."**
+This is the most common pushback at the demo, and the honest answer is the model-behaviour one: modern embedding models (voyage-4, OpenAI `text-embedding-3`, Cohere `embed-v3`, Anthropic's own) output unit-norm vectors, so dotProduct equals cosine and semantically-related documents naturally compress into a narrow band of ~0.45–0.55. *This is not a MongoDB property — they would see the same compressed scores in Pinecone, Weaviate, or pgvector with the same model.* What matters is the **ranking**, and that's deterministic: in our diagnostic the right service won every single canonical query. The orchestrator highlights the winner with `▶` and shows the gap-to-runner-up so the visual story is unambiguous. If they want wider absolute spread, they can downgrade to an older model like `voyage-3-large` (0.65–0.85 range) — but the ranking quality on hard queries is meaningfully worse, which is why we picked voyage-4.
+
 ## 3.5 The 5-minute live demo storyline
 
 1. **Open the live feed.** Show `curl -sN https://notify.bjjl.dev/receive` streaming colored events.
-2. **`python main.py`** — orchestrator boots. Audience sees `[BOOTSTRAP] Domains discovered: acc(2), dtw(5), ibn(5), …`. Talking point: *"Atlas is the catalog. Filename prefix becomes a domain tag at sync time. No manual registration."*
-3. **Type:** *"I'm opening a new store at Munich Marienplatz. POS priority, guest WiFi strict, camera uplink."*
-4. **Live feed lights up:** `[ROUTING] Stage 1 — domain classification` → `ibn`. Then `[ROUTING] Stage 2 — vector search within domain ibn` → top match `ibn_intent_service`. Talking point: *"Breadth then depth. A 1000-service catalog scales the same way."*
-5. **Switch domain.** Type: *"What if we raise prepaid M downlink to 20 Mbps in NYC Saturday night?"*
-6. **Live feed:** Stage 1 → `dtw`, Stage 2 → `dtw_scenario_service`. Talking point: *"Same orchestrator, same store, completely different agent stack — domain-routed."*
-7. **Run the scenario:** `simulate scenario DTW-SCN-002`. The simulation service runs `$graphLookup` + `$vectorSearch` *in the same tool call*. Open the DTW dashboard at `http://localhost:8080` and show the live updates flowing via Change Streams. Talking point: *"Graph for operational structure, vector for institutional memory, change streams for the live UI — three Atlas features, one tool call."*
-8. **The closing slide:** show the polyglot-equivalent stack diagram (Postgres + pgvector + Elasticsearch + PostGIS + TimescaleDB + Debezium + Kafka). Talking point: *"Same demo on that stack: maybe four months and two more engineers. Here: one Atlas cluster, two industry demos, ten thousand lines of code."*
+2. **`python main.py`** — orchestrator boots. Audience sees `[BOOTSTRAP] Registry: 24 services in 15 domains — acc(2), dtw(5), ibn(5), …`. Talking point: *"Atlas is the catalog. Filename prefix becomes a domain tag at sync time. No manual registration."*
+3. **Type:** *"I'm opening a new Alpenmarkt store at Marienplatz Munich. POS priority, guest WiFi strict, camera uplink, online by 18:00, max 40ms POS latency, 99.95% availability."*
+4. **Live feed lights up:**
+   ```
+   [ROUTING] Stage 1 → ibn (5 services)
+   [ROUTING] Stage 2 in 'ibn':
+   [ROUTING]   ▶ ibn_intent_service: 0.5031
+   [ROUTING]     ibn_inventory_service: 0.5024  (-0.0007)
+   [ROUTING]     ibn_assurance_service: 0.5021  (-0.0010)
+   [ROUTING]     …
+   ```
+   Talking point: *"Breadth then depth. A 1000-service catalog scales the same way. The `▶` marks the winner; the gap is the routing margin. Modern embedding models compress absolute scores into a narrow band — what counts is the ranking, which is deterministic."*
+5. **Type the follow-up:** *"feasibility check!"*
+6. **Live feed:** Stage 1 → still `ibn` (sticky-hint from last domain). Stage 2 → `▶ ibn_feasibility_service`. Talking point: *"Session context keeps us in the right domain. A short follow-up doesn't widen the search."*
+7. **Switch domain.** Type: *"What if we raise prepaid M downlink to 20 Mbps in NYC Saturday night?"*
+8. **Live feed:** Stage 1 → `dtw`, Stage 2 → `dtw_scenario_service`. Talking point: *"Same orchestrator, same store, completely different agent stack — domain-routed."*
+9. **Run the scenario:** `simulate scenario DTW-SCN-002`. The simulation service runs `$graphLookup` + `$vectorSearch` *in the same tool call*. Open the DTW dashboard at `http://localhost:8080` and show the live updates flowing via Change Streams. Talking point: *"Graph for operational structure, vector for institutional memory, change streams for the live UI — three Atlas features, one tool call."*
+10. **The closing slide:** show the polyglot-equivalent stack diagram (Postgres + pgvector + Elasticsearch + PostGIS + TimescaleDB + Debezium + Kafka). Talking point: *"Same demo on that stack: maybe four months and two more engineers. Here: one Atlas cluster, two industry demos, ten thousand lines of code."*
 
 ## 3.6 The single sentence to leave behind
 
