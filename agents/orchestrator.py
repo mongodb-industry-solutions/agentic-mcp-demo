@@ -625,17 +625,19 @@ class OrchestratorAgent:
           Stage 2 (depth)   — vector search within the chosen domain(s),
                               clear-winner shortcut + LLM tie-break as before.
 
-        _disable_sticky is set on recursive retry calls — when Stage 2's LLM
-        tie-break returns NONE while we were biased by a sticky hint, the
-        user has likely changed topics and we need to re-route from scratch
-        without the sticky bias.
+        use_stickiness    — set by callers that detected a short follow-up
+                            query; biases Stage 1 toward the session's
+                            last_domain and enables the LLM-NONE retry fallback.
+        _disable_sticky   — set on recursive retry calls (internal). When
+                            Stage 2's LLM tie-break returns NONE while Stage 1
+                            was sticky-biased, retry the routing fresh.
         """
         # ── Stage 1 — domain classification ───────────────────────────────
-        # ALWAYS feed last_domain to the classifier when it exists, unless
-        # we're on a topic-switch retry. Session context is informative
-        # regardless of whether we'd later fall back to stickiness as a
-        # last-resort shortcut.
-        sticky = None if _disable_sticky else self.last_domain
+        # The sticky hint is consulted ONLY when use_stickiness is True
+        # (caller detected a short follow-up). For long, self-contained
+        # queries, the user is likely changing topic — session context
+        # would mis-bias the classifier toward a stale domain.
+        sticky = self.last_domain if (use_stickiness and not _disable_sticky) else None
         domains = await self._classify_domain(query, sticky_hint=sticky)
 
         # ── Stage 2 — vector search within selected domain(s) ─────────────
@@ -790,7 +792,7 @@ class OrchestratorAgent:
                 #       end. In that case the retry will return NONE again
                 #       and we fall through to either stickiness (if the
                 #       user is in a session) or an empty result.
-                if not _disable_sticky and self.last_domain:
+                if use_stickiness and not _disable_sticky and self.last_domain:
                     await self._broadcast("ROUTING",
                         "⚡ LLM returned NONE — looks like a topic switch, "
                         "retrying without sticky hint…")
@@ -997,10 +999,14 @@ class OrchestratorAgent:
         )
 
         if needs_enrichment_check:
-            # Run follow-up detection and optimistic routing concurrently
+            # Run follow-up detection and optimistic routing concurrently.
+            # The optimistic pass passes use_stickiness=True because reaching
+            # this branch already means the query is short enough to be a
+            # follow-up candidate — session context is the right tiebreaker
+            # for the routing decision.
             enrichment_task, routing_task = await asyncio.gather(
                 self._needs_context_enrichment(user_input, last_user_queries[-1]),
-                self._route_query(user_input, use_stickiness=False),
+                self._route_query(user_input, use_stickiness=True),
             )
             is_followup       = enrichment_task
             optimistic_result = routing_task
