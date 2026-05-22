@@ -663,10 +663,13 @@ class OrchestratorAgent:
                     "content": (
                         f"User query: '{query}'\n\n"
                         f"Top service matches:\n{candidate_list}\n\n"
-                        f"Which service(s) can handle this query?\n"
-                        f"Consider the service PURPOSE and user intent.\n"
+                        f"Pick the SINGLE best service for this query.\n"
+                        f"Only return more than one if the query EXPLICITLY asks "
+                        f"for multiple distinct actions (e.g. 'submit and then "
+                        f"check feasibility'). For vague or ambiguous queries, "
+                        f"pick the one most likely meant.\n"
                         f"Reply with service name(s) only, comma-separated.\n"
-                        f"If NONE are relevant, reply 'NONE'."
+                        f"If truly none apply, reply 'NONE'."
                     )
                 }],
                 temperature=0,
@@ -886,16 +889,23 @@ class OrchestratorAgent:
                 self._needs_context_enrichment(user_input, last_user_queries[-1]),
                 self._route_query(user_input, use_stickiness=False),
             )
-            is_followup = enrichment_task
+            is_followup       = enrichment_task
+            optimistic_result = routing_task
 
-            if is_followup:
+            # If the optimistic pass already produced a single confident
+            # service, trust it — re-routing the enriched query would just
+            # introduce contradictions when the enriched text is dominated
+            # by the prior turn's vocabulary.
+            if len(optimistic_result) == 1:
+                service_names = optimistic_result
+            elif is_followup:
                 enriched_query = f"{last_user_queries[-1]}. {user_input}"
-                await self._broadcast("AGENT", f"Follow-up detected, enriched: '{enriched_query}'")
-                # Re-route with enriched query + stickiness
+                await self._broadcast("AGENT",
+                    f"Follow-up detected, enriched: '{enriched_query}'")
                 service_names = await self._route_query(enriched_query, use_stickiness=True)
             else:
-                await self._broadcast("AGENT", f"Topic change detected, no enrichment")
-                service_names = routing_task  # use the optimistic result
+                await self._broadcast("AGENT", "Topic change detected, no enrichment")
+                service_names = optimistic_result
         else:
             service_names = await self._route_query(user_input, use_stickiness=False)
 
