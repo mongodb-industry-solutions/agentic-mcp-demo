@@ -519,40 +519,37 @@ class OrchestratorAgent:
             lines.append(f"- {d}: {blurb}  [services: {members_str}]")
         taxonomy = "\n".join(lines)
 
-        # Two distinct prompt regimes — follow-up vs first-touch — because
-        # they have different failure modes:
-        #
-        #   Follow-up (sticky_hint set):
-        #     The risk is hedging — adding a spurious second domain because
-        #     a verb in the query weakly resembles another domain ('plan'
-        #     → todo). Force single-domain unless the query carries an
-        #     explicit cross-domain identifier.
-        #
-        #   First-touch (no sticky_hint):
-        #     The risk is missing the right domain on a query that spans
-        #     vocabularies (e.g. opening a store sounds like both retail
-        #     intents and network monitoring). Allow up to 3 domains and
-        #     let Stage 2 vector search pick the right service from the
-        #     union. Overmatching here is cheap; undermatching is a
-        #     routing miss.
+        # Single prompt regime — "soft sticky": session context is an
+        # *inclusion bias*, not a lock. The classifier should:
+        #   • Include the session domain in the candidate set when the
+        #     query could plausibly continue the session.
+        #   • Also include any other domain whose content matches the
+        #     query strongly (cross-vocabulary queries, topic switches).
+        #   • Up to 3 domains total; Stage 2 vector search picks the
+        #     right service from the union — overmatching is cheap,
+        #     undermatching is a routing miss.
         if sticky_hint:
             hint = (
-                f"\n\nThe user is in an ongoing session in the "
-                f"'{sticky_hint}' domain.\n"
-                f" • PREFER '{sticky_hint}' for short or ambiguous follow-up "
-                f"queries (continuation cues like 'plan', 'check', "
-                f"'activate', 'list', 'show', 'next', 'now do X' extend the "
-                f"session — do NOT widen on these).\n"
-                f" • SWITCH to a different domain IF the query carries an "
-                f"explicit identifier from another domain, OR uses "
-                f"vocabulary that has no plausible reading in any "
-                f"'{sticky_hint}' service (e.g. 'what's on my TODO list', "
-                f"'show my portfolio', 'restaurant near me' — these are "
-                f"topic changes, not continuations)."
+                f"\n\nSESSION CONTEXT: The user's recent activity has been "
+                f"in the '{sticky_hint}' domain. Include '{sticky_hint}' "
+                f"in your candidate set whenever the query could plausibly "
+                f"continue that work — even if the query's words also fit "
+                f"another domain. Do NOT exclude '{sticky_hint}' on grounds "
+                f"of vocabulary alone; the user's intent is more informative "
+                f"than surface keywords."
             )
             directive = (
-                "Return exactly ONE domain. Use the sticky domain when the "
-                "query continues the session; switch when it doesn't."
+                f"Return 1-3 domains.\n"
+                f" • Always include '{sticky_hint}' when the query could "
+                f"continue the session (continuation cues like 'plan', "
+                f"'check', 'activate', 'list', 'show', 'next', 'and also X' "
+                f"are extensions, not topic changes).\n"
+                f" • Also include any other domain whose tagline strongly "
+                f"matches the query content.\n"
+                f" • Omit '{sticky_hint}' only when the query is a clear "
+                f"topic switch — names an entity / domain identifier from "
+                f"elsewhere, or uses vocabulary that has NO plausible "
+                f"reading in any '{sticky_hint}' service."
             )
         else:
             hint = ""
@@ -643,19 +640,24 @@ class OrchestratorAgent:
           Stage 2 (depth)   — vector search within the chosen domain(s),
                               clear-winner shortcut + LLM tie-break as before.
 
-        use_stickiness    — set by callers that detected a short follow-up
-                            query; biases Stage 1 toward the session's
-                            last_domain and enables the LLM-NONE retry fallback.
+        use_stickiness    — enables the LLM-NONE retry fallback (set by
+                            callers that detected a short follow-up).
         _disable_sticky   — set on recursive retry calls (internal). When
                             Stage 2's LLM tie-break returns NONE while Stage 1
                             was sticky-biased, retry the routing fresh.
+
+        Note on sticky_hint: it is ALWAYS passed to Stage 1 when
+        last_domain exists (regardless of use_stickiness), unless we're
+        on a topic-switch retry. The prompt treats it as a soft inclusion
+        bias — "include the session domain in your candidate set if the
+        query could continue the session" — not a hard lock. This catches
+        mid-length continuations like 'propose plan and execute it' that
+        don't match the short-follow-up heuristic but are clearly part of
+        an ongoing workflow. Multi-domain output is fine; Stage 2 vector
+        search picks the right service from the union.
         """
         # ── Stage 1 — domain classification ───────────────────────────────
-        # The sticky hint is consulted ONLY when use_stickiness is True
-        # (caller detected a short follow-up). For long, self-contained
-        # queries, the user is likely changing topic — session context
-        # would mis-bias the classifier toward a stale domain.
-        sticky = self.last_domain if (use_stickiness and not _disable_sticky) else None
+        sticky = None if _disable_sticky else self.last_domain
         domains = await self._classify_domain(query, sticky_hint=sticky)
 
         # ── Stage 2 — vector search within selected domain(s) ─────────────
