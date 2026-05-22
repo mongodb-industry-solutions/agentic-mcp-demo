@@ -11,6 +11,7 @@ import asyncio
 import os
 import json
 import ast
+import re
 import httpx
 import datetime
 import hashlib
@@ -466,6 +467,24 @@ class OrchestratorAgent:
             label = "service" if n == 1 else "services"
             await self._broadcast("ROUTING", f"Stage 1 → {only} ({n} {label})")
             return [only]
+
+        # Deterministic pre-check: if the user typed a literal domain name
+        # as a word in the query, trust that — it's an explicit selection
+        # signal that overrides sticky bias and skips the LLM call entirely.
+        # Catches cases like 'ibn feasibility check!' after a topic switch
+        # to todo, where the LLM would otherwise stay in todo because the
+        # add_todo tool can plausibly accept any text.
+        ql = query.lower()
+        explicit = [d for d in by_domain
+                    if re.search(rf"\b{re.escape(d.lower())}\b", ql)]
+        if explicit:
+            total = sum(len(by_domain[d]) for d in explicit)
+            label = "service" if total == 1 else "services"
+            scope = ', '.join(f"{d}({len(by_domain[d])})" for d in explicit) \
+                    if len(explicit) > 1 else f"{explicit[0]} ({total} {label})"
+            await self._broadcast("ROUTING",
+                f"Stage 1 → {scope}  (explicit domain mention)")
+            return explicit
 
         # Build a compact taxonomy for the LLM (sent in the prompt only, NOT
         # broadcast — the BOOTSTRAP line already enumerates the taxonomy once
