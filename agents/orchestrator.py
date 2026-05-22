@@ -194,6 +194,47 @@ class OrchestratorAgent:
         except:
             return f"Service: {file_path.stem}"
 
+    def _extract_discriminator(self, full_docstring: str, server_name: str) -> str:
+        """
+        Pull the unique semantic content out of a docstring for the embedded
+        `description` field. The goal is to make the vector representation
+        reflect what makes this service *different* from its siblings, not
+        the shared scaffolding that all our services repeat.
+
+        Convention used by our docstrings:
+          Line 1:  "Service Title — short tagline"      ← unique
+          Blank line
+          Paragraph: focused purpose statement          ← unique
+          Blank line
+          "Use this service when users say:" block      ← noise (overlaps siblings)
+          "This service does NOT …" guard              ← noise (overlaps siblings)
+
+        We take title + first body paragraph. If the docstring is short or
+        unstructured, fall back to the whole thing. Capped to keep the
+        embedder focused — voyage-4 produces tighter clusters when fed long
+        boilerplate-heavy text.
+        """
+        if not full_docstring or not full_docstring.strip():
+            return f"Service: {server_name}"
+        # Drop "Use this service" / "NOT this service" sections deterministically
+        cutoffs = [
+            "\nUse this service when users say",
+            "\nUse this service when",
+            "\n🚫 NOT this service",
+            "\nThis service does NOT",
+            "\nThis service is NOT",
+        ]
+        text = full_docstring
+        for marker in cutoffs:
+            idx = text.find(marker)
+            if idx > 0:
+                text = text[:idx]
+        # Take title + first body paragraph (paragraphs separated by blank line)
+        paragraphs = [p.strip() for p in text.strip().split("\n\n") if p.strip()]
+        keep = paragraphs[:2] if len(paragraphs) >= 2 else paragraphs[:1]
+        result = "\n\n".join(keep).strip() or full_docstring.strip()
+        return result[:600]
+
     def _compute_file_hash(self, file_path: Path) -> str:
         """Compute hash of file content to detect changes"""
         try:
@@ -228,15 +269,22 @@ class OrchestratorAgent:
 
         for f in server_files:
             server_name = f.stem
-            docstring = self._extract_docstring(f)
-            file_hash = self._compute_file_hash(f)
+            full_doc   = self._extract_docstring(f)
+            short_desc = self._extract_discriminator(full_doc, server_name)
+            file_hash  = self._compute_file_hash(f)
 
             local_servers[server_name] = {
-                "server_name": server_name,
-                "description": docstring,
-                "domain":      self._infer_domain(server_name),
-                "file_hash":   file_hash,
-                "last_seen":   datetime.datetime.now().isoformat()
+                "server_name":     server_name,
+                # `description` is the *embedded* field — short, focused,
+                # the discriminator content only. Atlas vector_index embeds
+                # this on insert/update and on every $vectorSearch.query.
+                "description":     short_desc,
+                # `full_description` is the LLM tie-break input — full
+                # docstring with trigger-phrase lists and scope guards.
+                "full_description": full_doc,
+                "domain":           self._infer_domain(server_name),
+                "file_hash":        file_hash,
+                "last_seen":        datetime.datetime.now().isoformat()
             }
 
         await self._broadcast() # newline
@@ -268,15 +316,20 @@ class OrchestratorAgent:
         deleted_servers = db_names - local_names
         potential_updates = local_names & db_names
 
-        # Check for actual changes (hash comparison) OR missing-domain
-        # backfill needed (registry doc predates the two-stage routing upgrade).
+        # Check for actual changes (hash comparison) OR missing-field
+        # backfill needed (registry doc predates a schema upgrade — missing
+        # `domain` after the two-stage routing upgrade, or missing
+        # `full_description` after the embedded-discriminator split).
         changed_servers = set()
         for name in potential_updates:
             local_hash = local_servers[name]["file_hash"]
             db_hash   = db_servers[name].get("file_hash", "")
-            db_domain = db_servers[name].get("domain")
-
-            if local_hash != db_hash or not db_domain:
+            db_doc    = db_servers[name]
+            needs_backfill = (
+                not db_doc.get("domain")
+                or not db_doc.get("full_description")
+            )
+            if local_hash != db_hash or needs_backfill:
                 changed_servers.add(name)
 
         # Sync operations
@@ -359,7 +412,8 @@ class OrchestratorAgent:
                 {"$vectorSearch": vs},
                 {"$project": {
                     "_id": 0, "server_name": 1, "description": 1,
-                    "domain": 1, "score": {"$meta": "vectorSearchScore"},
+                    "full_description": 1, "domain": 1,
+                    "score": {"$meta": "vectorSearchScore"},
                 }},
             ]
 
@@ -579,13 +633,15 @@ class OrchestratorAgent:
                 self.last_service = None
                 self.last_domain  = None
 
-        # Medium confidence → LLM validation (silent until the result line)
-        # Use descriptions already returned by _semantic_search
+        # Medium confidence → LLM validation (silent until the result line).
+        # The LLM gets the FULL docstring (trigger phrases + scope guards),
+        # which carries far more disambiguation signal than the discriminator
+        # paragraph we use for embedding.
         candidate_details = []
         for i, c in enumerate(candidates[:5]):
             service_name = c['server_name']
-            description = c.get("description", "No description")
-            short_desc = description[:400] + "..." if len(description) > 400 else description
+            description = c.get("full_description") or c.get("description") or "No description"
+            short_desc = description[:1000] + "..." if len(description) > 1000 else description
             candidate_details.append(
                 f"{i+1}. {service_name} (score: {c.get('score', 0):.2f})\n"
                 f"   Purpose: {short_desc}"
