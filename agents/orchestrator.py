@@ -484,9 +484,16 @@ class OrchestratorAgent:
 
         hint = ""
         if sticky_hint:
-            hint = (f"\n\nPrevious turn used domain '{sticky_hint}'. For short or "
-                    f"ambiguous follow-up queries, prefer the same domain unless "
-                    f"the new query clearly belongs elsewhere.")
+            hint = (
+                f"\n\nIMPORTANT: The user is in an ongoing session in the "
+                f"'{sticky_hint}' domain. Use that domain unless the query "
+                f"contains EXPLICIT vocabulary or an identifier that clearly "
+                f"belongs to a different domain (e.g. an id shape from another "
+                f"domain, or a phrase that has no plausible reading in "
+                f"'{sticky_hint}'). Vague verbs like 'plan', 'check', "
+                f"'activate', 'list', 'show' on their own do NOT override the "
+                f"session domain — they are continuation cues."
+            )
 
         try:
             resp = await self.openai.chat.completions.create(
@@ -496,14 +503,18 @@ class OrchestratorAgent:
                     "content": (
                         f"User query: '{query}'\n\n"
                         f"Available domains:\n{taxonomy}{hint}\n\n"
-                        f"Which domain(s) handle this query? Reply with domain "
-                        f"name(s) only, comma-separated. If multiple are plausible, "
-                        f"list up to 2. If unsure, return your single best guess. "
-                        f"Never return 'NONE'."
+                        f"Pick the SINGLE domain that handles this query.\n"
+                        f"Return more than one ONLY if the query EXPLICITLY "
+                        f"references identifiers, vocabulary, or actions from "
+                        f"multiple distinct domains in the same sentence "
+                        f"(e.g. 'compare intent IBN-007 with scenario "
+                        f"DTW-SCN-003'). Otherwise return exactly one domain.\n"
+                        f"Reply with domain name(s) only, comma-separated. "
+                        f"Never hedge, never return 'NONE'."
                     ),
                 }],
                 temperature=0,
-                max_tokens=30,
+                max_tokens=20,
             )
             raw = resp.choices[0].message.content.strip()
         except Exception as e:
