@@ -567,8 +567,13 @@ class OrchestratorAgent:
                               clear-winner shortcut + LLM tie-break as before.
         """
         # ── Stage 1 — domain classification ───────────────────────────────
-        sticky_hint = self.last_domain if use_stickiness else None
-        domains = await self._classify_domain(query, sticky_hint=sticky_hint)
+        # ALWAYS feed last_domain to the classifier when it exists. Session
+        # context is informative regardless of whether we'd later fall back
+        # to stickiness as a last-resort shortcut (controlled separately by
+        # use_stickiness). Without this, short follow-ups like "feasibility
+        # check!" widen Stage 1 to multiple domains even though the user
+        # just submitted an IBN intent two turns ago.
+        domains = await self._classify_domain(query, sticky_hint=self.last_domain)
 
         # ── Stage 2 — vector search within selected domain(s) ─────────────
         candidates = await self._semantic_search(query, limit=5, domains=domains)
