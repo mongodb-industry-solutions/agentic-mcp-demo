@@ -241,17 +241,6 @@ class OrchestratorAgent:
 
         await self._broadcast() # newline
         await self._broadcast("BOOTSTRAP", f"Found {len(local_servers)} local MCP servers")
-        # Show the discovered domains so the live feed makes the two-stage
-        # routing story explicit from bootstrap onward.
-        domain_counts: dict[str, int] = {}
-        for s in local_servers.values():
-            d = s["domain"]
-            domain_counts[d] = domain_counts.get(d, 0) + 1
-        if domain_counts:
-            total_services = sum(domain_counts.values())
-            summary = ", ".join(f"{d}({n})" for d, n in sorted(domain_counts.items()))
-            await self._broadcast("BOOTSTRAP",
-                f"Registry: {total_services} services in {len(domain_counts)} domains — {summary}")
 
         # Fetch current registry from MongoDB
         db_servers = {
@@ -295,6 +284,7 @@ class OrchestratorAgent:
 
         if total_changes == 0:
             await self._broadcast("BOOTSTRAP", "✓ Registry up-to-date (no changes)")
+            await self._broadcast_registry_summary()
             return
 
         #print(f"\n🔄 Syncing changes:")
@@ -329,7 +319,24 @@ class OrchestratorAgent:
                     self.tool_cache.pop(name, None)
                 await self._broadcast("BOOTSTRAP", f"    - {name}")
 
-        await self._broadcast("BOOTSTRAP", f"✓ Registry sync complete\n")
+        await self._broadcast("BOOTSTRAP", f"✓ Registry sync complete")
+        await self._broadcast_registry_summary()
+        await self._broadcast()  # newline
+
+    async def _broadcast_registry_summary(self):
+        """Emit the canonical 'Registry: N services in M domains — …' line
+        from the *actual post-sync state* of agent_registry.mcp_services
+        (so adds/updates/deletes that just landed are reflected)."""
+        rows = await self.collection.aggregate([
+            {"$group": {"_id": "$domain", "n": {"$sum": 1}}},
+            {"$sort": {"_id": 1}},
+        ]).to_list()
+        if not rows:
+            return
+        total = sum(r["n"] for r in rows)
+        breakdown = ", ".join(f"{r['_id'] or '(none)'}({r['n']})" for r in rows)
+        await self._broadcast("BOOTSTRAP",
+            f"Registry: {total} services in {len(rows)} domains — {breakdown}")
 
     async def _semantic_search(self, query: str, limit: int = 5,
                                domains: List[str] | None = None) -> List[Dict]:
