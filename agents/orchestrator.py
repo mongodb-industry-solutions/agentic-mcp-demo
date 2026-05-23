@@ -1657,24 +1657,11 @@ class OrchestratorAgent:
     # existing workstream's tool_calls audit with read-only meta-tool
     # calls. _is_meta_query is the upfront heuristic; _META_TOOL_PREFIXES
     # backs a retro-detach guard for cases the heuristic missed.
+    # Workstream-related meta queries are caught by the categorical
+    # rule in _is_meta_query (any mention of 'workstream' → meta).
+    # This list covers the OTHER meta categories (memory, routing,
+    # services), where a simple noun-match would over-trigger.
     _META_QUERY_PATTERNS = (
-        # Workstream introspection (read-side)
-        "what are my workstream", "list my workstream", "list workstream",
-        "list open workstream", "list the workstream",
-        "show me my workstream", "show my workstream", "show workstream",
-        "which workstream", "open workstream", "active workstream",
-        "any workstream", "current workstream",
-        # Workstream bulk management (write-side — also meta, since
-        # they operate on the agent's own state machine rather than
-        # any domain entity).
-        "close all workstream", "close every workstream",
-        "close all my workstream", "close all the workstream",
-        "delete all workstream", "delete every workstream",
-        "purge workstream", "purge all workstream",
-        "reset workstream", "reset all workstream",
-        "clear workstream", "clear all workstream",
-        "wipe workstream", "wipe all workstream",
-        "remove all workstream",
         # Memory introspection (read-side)
         "what do you remember", "what's in memor", "whats in memor",
         "list memorie", "list memor", "list my memor",
@@ -1709,18 +1696,35 @@ class OrchestratorAgent:
     def _is_meta_query(cls, query: str) -> bool:
         """
         Detect introspection / observability queries that should NOT
-        open or attach to any workstream. Pattern-based, substring
-        match on lowercased query. Cheap, deterministic, low false-
-        positive rate.
+        open or attach to any workstream.
 
-        False-positive guard: queries that LOOK observability but are
-        about domain entities (e.g. 'show me my TODOs' — TODOs are a
-        domain noun, not workstream nouns) are NOT matched — the
-        patterns target workstream/memory/routing nouns specifically.
+        Rule (categorical, ends whack-a-mole):
+          ① Any query containing the literal word "workstream" is meta.
+             Workstreams are an INTERNAL concept of the orchestrator;
+             if the user names them in a query, they're operating on
+             the agent's state machine — not doing domain work. This
+             subsumes every workstream-related variant ('list', 'close
+             all', 'delete all completed', 'how many', 'what's the
+             title of WS-...', etc.) without a pattern enumeration.
+          ② Memory and routing-analytics queries are matched via the
+             _META_QUERY_PATTERNS list with narrower phrasing rules
+             (to avoid false positives like 'remember to buy milk').
+
+        Closure ergonomics: natural-language goodbyes ('done with X',
+        "we're finished") DON'T mention 'workstream' — they go through
+        the regular classifier's closure short-circuit path.
+
+        Domain queries are unaffected: 'add a TODO', 'set up
+        Marienplatz', 'simulate QoS uplift' contain none of the meta
+        signals.
         """
         q = (query or "").strip().lower()
         if not q:
             return False
+        # ① Categorical: any mention of 'workstream' (singular or plural).
+        if "workstream" in q:
+            return True
+        # ② Narrower phrasing rules for memory + analytics.
         return any(p in q for p in cls._META_QUERY_PATTERNS)
 
     # Known proper-noun entity names that the demo data uses. Used by
