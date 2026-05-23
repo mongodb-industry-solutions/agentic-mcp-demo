@@ -220,32 +220,61 @@ def get_compliance(intent_id: str = None, site: str = None) -> str:
     if not active:
         return "No active intents."
 
-    green = []
-    red   = []
+    rows = []
     for it in active:
-        t = it.get("parsed", {}).get("targets", {})
+        t         = it.get("parsed", {}).get("targets", {})
         threshold = t.get("pos_latency_ms")
-        latest = _latest_metric(it["_id"], "pos_latency_ms")
+        latest    = _latest_metric(it["_id"], "pos_latency_ms")
+        site_doc  = sites.find_one({"_id": it.get("site_id")})
+        site_name = site_doc["name"] if site_doc else "—"
         if latest is None:
-            green.append(it)  # no recent samples — assume idle, not failing
+            violated = False
         elif threshold and latest > threshold:
-            red.append(it)
+            violated = True
         else:
-            green.append(it)
+            violated = False
+        rows.append({
+            "it": it, "site_name": site_name,
+            "latest": latest, "threshold": threshold, "violated": violated,
+        })
 
-    lines = [f"**Fleet compliance:** {len(green)}/{len(active)} green"]
-    if red:
-        lines.append("")
+    green_rows = [r for r in rows if not r["violated"]]
+    red_rows   = [r for r in rows if r["violated"]]
+
+    lines = [f"**Fleet compliance:** {len(green_rows)}/{len(rows)} green", ""]
+
+    def _row_line(r):
+        it, name = r["it"], r["site_name"]
+        latest, thr = r["latest"], r["threshold"]
+        emoji = "🔴" if r["violated"] else "🟢"
+        if latest is None:
+            metric_str = "no telemetry yet"
+        else:
+            utilisation = f"{int(100 * latest / thr)}% of SLA" if thr else ""
+            metric_str = (
+                f"POS {latest:.1f}ms / {thr}ms SLA  ({utilisation})"
+                if thr else f"POS {latest:.1f}ms"
+            )
+        return f"- {emoji} **{it['_id']}** · {name} · {metric_str}"
+
+    if red_rows:
         lines.append("**🔴 Violations:**")
-        for it in red:
-            site = sites.find_one({"_id": it.get("site_id")})
-            lines.append(f"  - {it['_id']} · {site['name'] if site else '—'}")
-    if green:
+        for r in red_rows:
+            lines.append(_row_line(r))
+            ev = compliance_events.find_one(
+                {"intent_id": r["it"]["_id"], "kind": "violation"},
+                sort=[("ts", DESCENDING)],
+            )
+            if ev:
+                lines.append(f"  ↳ violation since {ev['ts'].strftime('%H:%M:%S')} "
+                             f"— run diagnose_violation('{r['it']['_id']}')")
         lines.append("")
+
+    if green_rows:
         lines.append("**🟢 Compliant:**")
-        for it in green:
-            site = sites.find_one({"_id": it.get("site_id")})
-            lines.append(f"  - {it['_id']} · {site['name'] if site else '—'}")
+        for r in green_rows:
+            lines.append(_row_line(r))
+
     return "\n".join(lines)
 
 
