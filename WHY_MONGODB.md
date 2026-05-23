@@ -185,7 +185,14 @@ Neither is what production agent platforms do. Atlas lets you express the pre-fi
 
 **Session context.** `last_domain` is always passed to the Stage 1 classifier as a sticky hint, not just when the orchestrator would also apply last-resort stickiness. So a short ambiguous follow-up like *"feasibility check!"* after an IBN intent submission stays in the `ibn` domain instead of widening to `ibn` + `dtw`. Genuine cross-domain queries with explicit identifiers ("compare intent IBN-007 with scenario DTW-SCN-003") still match multiple domains because the classifier sees those identifiers and overrides the hint.
 
-**Storyline value:** the live broadcast emits Stage 1 (one compact line — `Stage 1 → ibn (5 services)`) and Stage 2 (header + one line per candidate with the winner marked) so the dashboard tells the visual story. Audiences see *breadth then depth*, which is the canonical scaling pattern they can carry back to any future agent platform discussion. Singleton domains (one service in the domain) skip the LLM tie-break entirely — every query that lands in `memory`, `portfolio`, `restaurant`, `todo`, etc. routes with zero LLM calls beyond Stage 1.
+**Explicit-domain-mention bypass — both stages, plural-aware.** When the user types a domain name verbatim (`"delete all workstreams"`, `"list my IBN intents"`, `"add a TODO"`), the literal mention is a stronger signal than any vector score or LLM judgement. Both Stage 1 and Stage 2 have a deterministic shortcut:
+
+- **Stage 1**: regex `\b{domain}s?\b` (plural-aware) over the lowercased query. If exactly one domain matches, Stage 1 returns it without an LLM call.
+- **Stage 2**: same regex over every candidate's domain. If any candidate's domain is literally mentioned, the highest-scoring matched candidate wins — the LLM tie-break is skipped entirely.
+
+The invariant: *when the user names a domain literally, that domain wins.* No close-vector-race or LLM judgement error can override an explicit user signal. This is the structural answer to the destructive-misfire class of bug (*"user said 'delete all workstreams', system deleted all TODOs"* — impossible after this shortcut). `routing_decisions.stage2.method = "explicit_domain_mention"` makes the shortcut auditable in analytics.
+
+**Storyline value:** the live broadcast emits Stage 1 (one compact line — `Stage 1 → ibn (5 services)`) and Stage 2 (header + one line per candidate with the winner marked) so the dashboard tells the visual story. Audiences see *breadth then depth*, which is the canonical scaling pattern they can carry back to any future agent platform discussion. Singleton domains (one service in the domain) skip the LLM tie-break entirely — every query that lands in `preferences`, `portfolio`, `restaurant`, `todo`, etc. routes with zero LLM calls beyond Stage 1.
 
 ### Layer 3 — Operational State (the two demo domains)
 
@@ -338,13 +345,13 @@ The dashboard sees each layer act:
 
 **Why MongoDB specifically.** Every layer above is one Atlas primitive: `find_one` + `update_one` for the safety-merge; `$vectorSearch` filtered by `domain` for Stage 2; `find` with `state: "open"` + domain filter for the classifier's candidate pool; one document per workstream — no separate state store, no Redis for in-flight tracking, no lock service for the merge invariant. The defence is at the data layer because the data layer is the same primitive as everything else in the architecture.
 
-#### 5b. Long-term memory — workstream summaries + extracted facts
+#### 5b. Long-term memory — three planes, all auto-recalled
 
-Long-term memory in this framework has two complementary surfaces, both vector-indexed in Atlas.
+Long-term memory in this framework has three complementary surfaces, all vector-indexed in Atlas, all surfaced into the agent's context without explicit user query.
 
-**Per-workstream summaries.** Each workstream's `summary` is auto-rewritten by `gpt-4o-mini` after every turn and stored on the workstream document. A dedicated Atlas Vector Search index (`workstream_vector_index`) embeds these summaries on insert/update. Result: questions like *"what was I working on about Munich last week?"* run a single `$vectorSearch` aggregation over `agent_workstreams.summary` and surface the right past workstream — title, entities, last activity, full tool-call trail.
+**Plane A — Per-workstream summaries (`agent_workstreams.summary`).** Each workstream's `summary` is auto-rewritten by `gpt-4o-mini` after every turn and stored on the workstream document. A dedicated Atlas Vector Search index (`workstream_vector_index`) embeds these summaries on insert/update. Result: questions like *"what was I working on about Munich last week?"* run a single `$vectorSearch` aggregation over `agent_workstreams.summary` and surface the right past workstream — title, entities, last activity, full tool-call trail.
 
-**Extracted reusable facts in `agent_memories`.** When a workstream transitions to `state="completed"`, a background change-stream watcher in the orchestrator calls `gpt-4o-mini` against the workstream's summary + tool-call audit trail and asks it to extract **0–5 reusable facts** — preferences, templates, targets, configs, lessons. Each fact lands in its own document:
+**Plane B — Agent-extracted reusable facts (`agent_memories`).** When a workstream transitions to `state="completed"`, a background change-stream watcher in the orchestrator calls `gpt-4o-mini` against the workstream's summary + tool-call audit trail and asks it to extract **0–5 reusable facts** — templates, targets, configs, lessons. Each fact lands in its own document:
 
 ```json
 {
@@ -359,11 +366,64 @@ Long-term memory in this framework has two complementary surfaces, both vector-i
 }
 ```
 
-The `text` field is vector-indexed (`agent_memories_index`, same auto-embed pattern). The orchestrator's ReAct loop pulls top-K relevant facts from `agent_memories` (filtered by the active workstream's domain) into the system prompt at the start of every turn, so past lessons are silently in the agent's context whenever it picks tools. The `workstream_service` MCP also exposes `recall_facts(text, domain)`, `list_memories()`, and `forget_memory(id)` so the user can interrogate the memory layer directly.
+The `text` field is vector-indexed (`agent_memories_index`, auto-embed via voyage-4). The `workstream_service` MCP also exposes `recall_facts(text, domain)`, `list_memories()`, and `forget_memory(id)` so the user can interrogate the plane directly.
 
-Two safety properties worth pitching:
+**Plane C — User-stated preferences (`user_preferences`).** The agent's view of itself isn't enough — the user also has things they want the agent to remember about THEM. The `preferences_service` MCP exposes `remember_fact`, `recall_preferences`, `list_preferences`, `forget_preference`, `forget_all_preferences`. A preference like *"I love to play basketball"* lands as:
+
+```json
+{
+  "_id": "...",
+  "text": "User loves to play basketball",
+  "category": "sports_interest",
+  "is_temporary": false,
+  "createdAt": "2026-05-23T18:42:00Z"
+}
+```
+
+Temporary preferences (10-minute TTL via `expireAfterSeconds` partial index) hold transient context like *"I'm hungry now"*; permanent ones persist forever. The same vector-search + auto-embed pattern (`user_preferences_index`) — distinct collection, identical machinery.
+
+**The architectural beat: dual-plane parallel auto-recall.** Every turn, the orchestrator runs `$vectorSearch` on **both** `agent_memories` (plane B) **and** `user_preferences` (plane C) — in parallel via `asyncio.gather` — and injects two clearly-labelled blocks into the system prompt:
+
+```
+You previously learned the following from past workstreams (CORE facts
+are institutional knowledge with many recalls; use them when relevant):
+  • [CORE/template] Alpenmarkt's standard retail SLA is strict-retail-v3.
+  • [CORE/playbook] Tasks can be listed via list_todos before mutating.
+
+The user has explicitly told you the following about themselves
+(preferences, identity, restrictions). Treat these as authoritative
+when resolving first-person references ('the sport I love', 'my
+favourite X', 'my usual') in the query:
+  • [SPORTS_INTEREST] User loves to play basketball
+```
+
+Two broadcasts make this visible in the live feed every turn — `[MEMORY] 🧠 Recalled N facts` and `[PREFERENCES] 🧠 Recalled M preferences` — so the demo audience sees the two planes contributing distinctly.
+
+**The cross-session magic moment.** This is the demo punchline:
+
+```
+Session 1: 'I love to play basketball'
+  → preferences_service.remember_fact stores it.
+
+Session N+1 (next day, process restarted):
+  'add the sport I love to my TODOs'
+  [PREFERENCES] 🧠 Recalled 1 user preference(s)
+  [MEMORY]      🧠 Recalled 5 relevant fact(s) (5 core)
+  [ACTION]      add_todo('play basketball')
+```
+
+The resolution of *"the sport I love"* doesn't come from conversation history (gone with the process), doesn't come from a heuristic — it comes from a `$vectorSearch` against `user_preferences` that injects the fact into the LLM's context **on every turn until the user forgets it**. Single Atlas primitive; cross-session persistence; no separate user-profile service.
+
+Two safety properties worth pitching for plane B:
 - **Catch-up on restart.** If a workstream was closed while the orchestrator was down (manual DB edit, dashboard action, etc.), the boot path scans for `state=completed, memories_extracted!=true` and processes the backlog. No closure goes un-mined.
 - **Bounded LLM cost.** A fact-extraction call runs once per workstream closure and is capped at 5 facts; the workstream is marked `memories_extracted=true` so the call never repeats. Catch-up is also bounded (10 most-recent backlog entries).
+
+**Why three planes, not one?** Each answers a different question:
+- *"What was that thing I worked on?"* → plane A (workstream summaries)
+- *"What did the agent learn from doing the work?"* → plane B (agent_memories)
+- *"What did the user tell the agent about themselves?"* → plane C (user_preferences)
+
+The collections are deliberately separate because the **provenance differs** (agent observation vs. user assertion vs. work artifact) — a customer's compliance officer cares about that distinction. But the **mechanism is identical** (vector index + auto-embed + recall), which is the MongoDB consolidation pitch: three semantically distinct memory planes, one operational story.
 
 #### 5c. Raw command history — `agent_history`
 
@@ -448,21 +508,24 @@ Every call to `process_query` writes one document to `agent_registry.routing_dec
     "duration_ms":       234
   },
   "stage2": {
-    "method": "relative_winner",  // sole_candidate | absolute_winner | relative_winner | llm_tiebreak | llm_none_* | llm_error_*
+    "method": "relative_winner",  // sole_candidate | absolute_winner | relative_winner | explicit_domain_mention | llm_tiebreak | llm_none_* | llm_error_*
     "candidates":      [{"name": "ibn_feasibility_service", "domain": "ibn", "score": 0.5040}, ...],
     "best_score":      0.5040,
     "gap_12":          0.0019,
     "gap_23":          0.0001,
     "winner_services": ["ibn_feasibility_service"]
   },
-  "memory": {
+  "memory": {                              // agent_memories plane recall
     "recalled_count": 3,
     "tier_breakdown": {"core": 1, "extracted": 2}
+  },
+  "preferences": {                         // user_preferences plane recall
+    "recalled_count": 1
   },
   "outcome": {
     "tool_calls_count":   2,
     "iterations_used":    3,
-    "max_iterations_hit": false,
+    "max_iterations_hit": false,           // → trigger for adding a bulk tool to the winning service
     "had_replay_recipe":  false,
     "duration_ms":        6432
   }
@@ -489,7 +552,18 @@ Every call to `process_query` writes one document to `agent_registry.routing_dec
 
 These will come up the moment a customer architect starts probing.
 
-**Indexing strategy.** Each demo declares its indexes in the seed script: `2dsphere` on geo fields, single-field on routing keys (`status`, `intent_id`, `from_id`, `to_id`), and the vector indexes for `dtw_knowledge_chunks`, `ibn_knowledge_chunks`, and `mcp_services`. The latter three are managed in the Atlas UI today (auto-embed mode requires the search-tier configuration).
+**Indexing strategy.** Each demo declares its indexes in the seed script: `2dsphere` on geo fields, single-field on routing keys (`status`, `intent_id`, `from_id`, `to_id`), TTL with `partialFilterExpression` on `user_preferences.createdAt` (10-minute expiry for `is_temporary: true` docs), and the vector indexes for routing + the agent-memory plane:
+
+  | Index | Collection | Purpose |
+  |---|---|---|
+  | `vector_index` | `mcp_services` | Stage 2 service routing |
+  | `workstream_vector_index` | `agent_workstreams` | "what was I working on about X?" |
+  | `agent_memories_index` | `agent_memories` | Per-turn recall of agent-extracted facts |
+  | `user_preferences_index` | `user_preferences` | Per-turn recall of user-stated preferences |
+  | `ibn_knowledge_index` | `ibn_knowledge_chunks` | Hybrid diagnose query |
+  | `dtw_knowledge_index` | `dtw_knowledge_chunks` | Hybrid simulate query |
+
+All vector indexes use Atlas auto-embed (`voyage-4`, 1024 dims, cosine) and are managed in the Atlas UI today. Falls back to recency-based queries when an index isn't ready, so the demo always renders.
 
 **Sharding posture.** Both demos' high-cardinality collections (`dtw_subscribers`, `ibn_telemetry`) are designed to shard by `market` / `home_market` and by a sensible time-aligned key. No hot shard exposure. The 1000-subscriber seed is intentionally small; the schema is the production schema.
 
@@ -502,6 +576,27 @@ These will come up the moment a customer architect starts probing.
 **Multi-tenancy and isolation.** The `domain` tag is the natural multi-tenant boundary for routing. In a customer deployment, the same pattern extends to `tenant_id` as another filter dimension on the vector index. One Atlas cluster can host many domains and many tenants with deterministic isolation in the routing layer.
 
 **Diagnostic tooling.** `seed/check_routing_index.py` is a 60-line script that inspects (a) what's actually stored in `description` / `full_description` per service, (b) the Atlas `vector_index` configuration and status, and (c) live `$vectorSearch` spread for canonical queries. Catches the three failure modes that ever bite a routing demo — orchestrator didn't write, index didn't rebuild, ranking genuinely flat — without poking at MongoDB by hand.
+
+**Bulk-operations tool hierarchy.** The ReAct loop caps at 5 iterations per turn to prevent runaway loops. For list-like state (workstreams, todos, intents, scenarios, memories, …), iterating `delete_X(id)` over N items hits the cap whenever N > 4. The pattern across the framework's mutating services:
+
+```
+per-item:       delete_X(id)
+filtered bulk:  delete_completed_X()        // server-side delete_many({state: 'completed'})
+nuclear bulk:   delete_all_X()              // server-side delete_many({})
+```
+
+Both `workstream_service` and `todo_service` expose all three. Adding a bulk tool to a new domain is data-driven, not guesswork: `routing_decisions.outcome.max_iterations_hit = true` filtered by service tells you exactly which services need bulking next. The system self-diagnoses:
+
+```javascript
+db.routing_decisions.aggregate([
+  {$match: {"outcome.max_iterations_hit": true}},
+  {$unwind: "$stage2.winner_services"},
+  {$group: {_id: "$stage2.winner_services", n: {$sum: 1}}},
+  {$sort: {n: -1}}
+])
+```
+
+The architectural beat: the orchestrator's iteration cap is a soft guarantee; MongoDB's `delete_many` / `update_many` aggregations are the structural answer to per-item loops. One round-trip handles any N.
 
 ## 2.3 Architecture trade-offs we accept
 
