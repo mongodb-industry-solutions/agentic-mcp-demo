@@ -16,6 +16,7 @@ import httpx
 import datetime
 import hashlib
 import tempfile
+import time
 from pathlib import Path
 from contextlib import AsyncExitStack
 from typing import List, Dict
@@ -169,6 +170,12 @@ class OrchestratorAgent:
         self._memory_extract_tasks: set[asyncio.Task] = set()
         self._ws_closure_watcher: asyncio.Task | None = None
         self._memory_decay_task:   asyncio.Task | None = None
+        # Routing analytics — every process_query call writes one document
+        # capturing what Stage 1, Stage 2, memory, and the ReAct loop did.
+        # Powers offline analysis (LLM-tiebreak rate, slow stages, routing
+        # misses, service usage) via the analytics_service MCP tools.
+        self.routing_decisions = self.db["routing_decisions"]
+        self._current_decision: dict | None = None
 
         if not os.environ.get("OPENAI_API_KEY"):
             raise ValueError("OPENAI_API_KEY missing")
@@ -202,6 +209,7 @@ class OrchestratorAgent:
         await self._sync_registry()
         await self._ensure_workstream_indexes()
         await self._ensure_memory_indexes()
+        await self._ensure_routing_decision_indexes()
         await self._resume_open_workstreams()
         # Background tasks:
         #   • filesystem watcher (mcp_servers/ changes)
@@ -275,6 +283,53 @@ class OrchestratorAgent:
     #   • change-stream watcher (background, auto on closure)
     #   • catch-up pass at startup (handles closures while we were down)
     #   • workstream_service MCP tools (explicit user-facing recall)
+
+    # ─── Routing-analytics helpers ────────────────────────────────────────
+
+    def _decision_set(self, **kwargs):
+        """Safely merge fields into the in-flight routing decision record.
+        No-op when no record is active (e.g. tests, status command)."""
+        if self._current_decision is None:
+            return
+        for k, v in kwargs.items():
+            self._current_decision[k] = v
+
+    def _decision_under(self, section: str, **kwargs):
+        """Same as _decision_set but for a nested sub-document."""
+        if self._current_decision is None:
+            return
+        slot = self._current_decision.setdefault(section, {})
+        for k, v in kwargs.items():
+            slot[k] = v
+
+    async def _persist_decision(self, **outcome):
+        """Insert the current routing-decision record into MongoDB and
+        reset the slot. Called at every process_query exit point. Failures
+        are logged and swallowed — analytics shouldn't break the user
+        response."""
+        if self._current_decision is None:
+            return
+        try:
+            doc = self._current_decision
+            if outcome:
+                doc.setdefault("outcome", {}).update(outcome)
+            await self.routing_decisions.insert_one(doc)
+        except Exception as e:
+            print(f"⚠️ routing-decision persist failed (non-fatal): {e}")
+        finally:
+            self._current_decision = None
+
+    async def _ensure_routing_decision_indexes(self):
+        try:
+            await self.routing_decisions.create_index([("ts", -1)],
+                name="rd_recency")
+            await self.routing_decisions.create_index([("workstream_id", 1)],
+                name="rd_by_ws")
+            await self.routing_decisions.create_index(
+                [("stage2.winner_services", 1)],
+                name="rd_by_winner")
+        except Exception as e:
+            print(f"⚠️ routing-decision index ensure failed (non-fatal): {e}")
 
     async def _ensure_memory_indexes(self):
         try:
@@ -1276,14 +1331,22 @@ class OrchestratorAgent:
         which is what lets the routing pipeline scale by tree depth rather
         than by leaf count. If only one domain exists in the registry, skip.
         """
+        stage1_t0 = time.monotonic() if hasattr(self, "_current_decision") and self._current_decision else None
         by_domain = await self._list_domains()
         if not by_domain:
+            self._decision_under("stage1", method="no_domains", duration_ms=0,
+                                 domains_selected=[])
             return []
         if len(by_domain) == 1:
             only = next(iter(by_domain))
             n = len(by_domain[only])
             label = "service" if n == 1 else "services"
             await self._broadcast("ROUTING", f"Stage 1 → {only} ({n} {label})")
+            self._decision_under("stage1",
+                method="singleton",
+                domains_available=list(by_domain.keys()),
+                domains_selected=[only],
+                duration_ms=int((time.monotonic() - stage1_t0) * 1000) if stage1_t0 else None)
             return [only]
 
         # Deterministic pre-check: if the user typed a literal domain name
@@ -1302,6 +1365,12 @@ class OrchestratorAgent:
                     if len(explicit) > 1 else f"{explicit[0]} ({total} {label})"
             await self._broadcast("ROUTING",
                 f"Stage 1 → {scope}  (explicit domain mention)")
+            self._decision_under("stage1",
+                method="explicit_mention",
+                domains_available=list(by_domain.keys()),
+                domains_selected=explicit,
+                sticky_hint=sticky_hint,
+                duration_ms=int((time.monotonic() - stage1_t0) * 1000) if stage1_t0 else None)
             return explicit
 
         # Build a compact taxonomy for the LLM (sent in the prompt only, NOT
@@ -1400,14 +1469,27 @@ class OrchestratorAgent:
         except Exception as e:
             await self._broadcast("ROUTING",
                 f"⚠ Stage 1 LLM call failed ({e}); using sticky/fallback")
-            return [sticky_hint] if sticky_hint and sticky_hint in by_domain \
-                                  else [next(iter(by_domain))]
+            fallback = [sticky_hint] if sticky_hint and sticky_hint in by_domain \
+                                      else [next(iter(by_domain))]
+            self._decision_under("stage1",
+                method="llm_failed_fallback",
+                domains_available=list(by_domain.keys()),
+                domains_selected=fallback,
+                sticky_hint=sticky_hint,
+                duration_ms=int((time.monotonic() - stage1_t0) * 1000) if stage1_t0 else None)
+            return fallback
 
         candidates = [d.strip() for d in raw.split(",") if d.strip()]
         valid = [d for d in candidates if d in by_domain]
         if not valid:
             await self._broadcast("ROUTING",
                 f"⚠ Stage 1: unknown domain(s) {candidates!r}; using all")
+            self._decision_under("stage1",
+                method="llm_unknown_domain",
+                domains_available=list(by_domain.keys()),
+                domains_selected=list(by_domain.keys()),
+                sticky_hint=sticky_hint,
+                duration_ms=int((time.monotonic() - stage1_t0) * 1000) if stage1_t0 else None)
             return list(by_domain.keys())
 
         total_svcs = sum(len(by_domain.get(d, [])) for d in valid)
@@ -1418,6 +1500,13 @@ class OrchestratorAgent:
             per_domain = ", ".join(f"{d}({len(by_domain.get(d, []))})" for d in valid)
             msg = f"Stage 1 → {per_domain} — {total_svcs} {label} total"
         await self._broadcast("ROUTING", msg)
+        self._decision_under("stage1",
+            method="llm",
+            domains_available=list(by_domain.keys()),
+            domains_selected=valid,
+            sticky_hint=sticky_hint,
+            services_in_scope=total_svcs,
+            duration_ms=int((time.monotonic() - stage1_t0) * 1000) if stage1_t0 else None)
         return valid
 
     async def _is_session_continuation(self, query: str, service: str,
@@ -1485,11 +1574,29 @@ class OrchestratorAgent:
             scope = ', '.join(domains) if domains else "(unscoped)"
             await self._broadcast("ERROR",
                 f"Stage 2 in '{scope}' returned no vector hits — index built?")
+            self._decision_under("stage2",
+                method="no_vector_hits",
+                domains_scope=list(domains) if domains else [],
+                candidates=[], winner_services=[])
             return []
 
         best_score = candidates[0].get("score", 0)
         second_score = candidates[1].get("score", 0) if len(candidates) > 1 else 0
         gap = best_score - second_score
+        third_score = candidates[2].get("score", 0) if len(candidates) > 2 else 0
+        gap_23 = max(second_score - third_score, 1e-9)
+        # Stash compact candidate snapshot for analytics; trim to the
+        # five fields we'd actually query on later.
+        self._decision_under("stage2",
+            domains_scope=list(domains) if domains else [],
+            candidates=[{
+                "name":   c["server_name"],
+                "domain": c.get("domain"),
+                "score":  float(c.get("score", 0)),
+            } for c in candidates],
+            best_score=float(best_score),
+            gap_12=float(gap),
+            gap_23=float(gap_23) if len(candidates) >= 3 else None)
 
         # Compact Stage 2 broadcast: highlight the winner with ▶ and show
         # gap-to-winner rather than absolute scores alone. Modern embedding
@@ -1511,6 +1618,9 @@ class OrchestratorAgent:
         # Sole candidate — Stage 1 already chose the domain; whatever vector
         # search returned is the only option. No LLM tie-break needed.
         if len(candidates) == 1:
+            self._decision_under("stage2",
+                method="sole_candidate",
+                winner_services=[candidates[0]["server_name"]])
             return [candidates[0]["server_name"]]
 
         # Clear winner — either of two criteria fires the fast-path so the
@@ -1532,23 +1642,26 @@ class OrchestratorAgent:
         #       genuinely co-strong matches). Anything above ~1.5× the LLM
         #       just re-confirms the vector top-1.
         absolute_winner = best_score > 0.65 and gap > 0.03
-        relative_winner = False
-        if len(candidates) >= 3:
-            third_score = candidates[2].get("score", 0)
-            gap_23 = max(second_score - third_score, 1e-9)
-            if gap >= 0.0005 and gap / gap_23 >= 1.5:
-                relative_winner = True
+        relative_winner = (len(candidates) >= 3
+                           and gap >= 0.0005
+                           and gap / gap_23 >= 1.5)
 
         if absolute_winner or relative_winner:
             if absolute_winner:
                 why = f"score {best_score:.3f}, gap {gap:.3f}"
+                method = "absolute_winner"
             else:
                 ratio = gap / gap_23
                 ratio_str = f"{ratio:.1f}×" if ratio < 100 else "decisive"
                 why = f"standalone winner, gap ratio {ratio_str}"
+                method = "relative_winner"
             await self._broadcast("ROUTING",
                 f"✓ Clear winner ({why}): {candidates[0]['server_name']}")
-            return [candidates[0]["server_name"]]
+            winner = candidates[0]["server_name"]
+            self._decision_under("stage2",
+                method=method,
+                winner_services=[winner])
+            return [winner]
 
         # Stickiness is intentionally NOT applied here — it runs as a last-
         # resort fallback AFTER the LLM tie-break, not as a shortcut around
@@ -1637,19 +1750,33 @@ class OrchestratorAgent:
                     await self._broadcast("ROUTING",
                         "⚡ LLM returned NONE — looks like a topic switch, "
                         "retrying without sticky hint…")
+                    self._decision_under("stage2",
+                        method="llm_none_retry_unsticky",
+                        winner_services=[])
                     return await self._route_query(query, use_stickiness,
                                                     _disable_sticky=True)
                 if use_stickiness and self.last_service:
                     await self._broadcast("ROUTING",
                         f"⚡ LLM returned NONE, stickiness → {self.last_service}")
+                    self._decision_under("stage2",
+                        method="llm_none_stickiness_fallback",
+                        winner_services=[self.last_service])
                     return [self.last_service]
+                self._decision_under("stage2",
+                    method="llm_none_no_fallback",
+                    winner_services=[])
                 return []
 
             # Parse comma-separated service names, filter to valid candidates
             services = [s.strip() for s in result.split(",") if s.strip()]
             valid_services = [s for s in services if s in [c["server_name"] for c in candidates]]
 
-            return valid_services if valid_services else [candidates[0]["server_name"]]
+            winner = valid_services if valid_services else [candidates[0]["server_name"]]
+            self._decision_under("stage2",
+                method="llm_tiebreak",
+                llm_response=result[:200],
+                winner_services=winner)
+            return winner
 
         except Exception as e:
             print(f"  ⚠️ LLM validation failed: {e}, falling back")
@@ -1657,7 +1784,13 @@ class OrchestratorAgent:
             # blindly taking the top vector hit (which can be noise with
             # voyage-4-tight clusters).
             if use_stickiness and self.last_service:
+                self._decision_under("stage2",
+                    method="llm_error_stickiness_fallback",
+                    winner_services=[self.last_service])
                 return [self.last_service]
+            self._decision_under("stage2",
+                method="llm_error_top_fallback",
+                winner_services=[candidates[0]["server_name"]])
             return [candidates[0]["server_name"]]
 
     async def _activate_servers(self, servers: List[Dict]):
@@ -1821,6 +1954,17 @@ class OrchestratorAgent:
         await self._broadcast("QUERY", user_input[:300])
         await self._broadcast("AGENT", "Analyzing intent...")
 
+        # Start a fresh routing-decision record for this turn. _decision_set
+        # and _decision_under helpers populate it as routing progresses; we
+        # insert it into routing_decisions in a finally block at the end so
+        # even a partial / failed turn produces an analytics row.
+        turn_t0 = time.monotonic()
+        self._current_decision = {
+            "ts":                 datetime.datetime.now(),
+            "query":              user_input[:400],
+            "query_length_words": len(user_input.split()),
+        }
+
         # Context-Aware Routing for follow-up questions
         context_window = self.conversation_history[-4:] if self.conversation_history else []
         last_user_queries = [msg["content"] for msg in context_window if msg["role"] == "user"]
@@ -1837,6 +1981,11 @@ class OrchestratorAgent:
         self.current_workstream_id = ws_id
         if not ws_is_new:
             await self._broadcast("WORKSTREAM", f"↪ {ws_id} continued")
+        self._decision_set(
+            workstream_id=ws_id,
+            workstream_is_new=ws_is_new,
+            workstream_domain=ws_domain,
+            replay_source_id=replay_source_id)
         # Workstream domain takes precedence over last_domain for stickiness
         if ws_domain:
             self.last_domain = ws_domain
@@ -1895,6 +2044,9 @@ class OrchestratorAgent:
             service_names = await self._route_query(user_input, use_stickiness=False)
 
         if not service_names:
+            await self._persist_decision(
+                no_services_found=True,
+                duration_ms=int((time.monotonic() - turn_t0) * 1000))
             return "I couldn't find relevant services for this request."
 
         # Resolve paths — local filesystem first, then cloud temp dir
@@ -1911,6 +2063,9 @@ class OrchestratorAgent:
                 print(f"⚠️ {service_name} not found locally or in cloud temp dir, skipping")
 
         if not matches:
+            await self._persist_decision(
+                services_not_resolvable=True,
+                duration_ms=int((time.monotonic() - turn_t0) * 1000))
             return (
                 "Services found in registry but not available locally. "
                 "Please ensure MCP servers are installed in the mcp_servers directory."
@@ -1997,6 +2152,9 @@ class OrchestratorAgent:
                     f"{n} {t}" for t, n in sorted(tier_counts.items()))
                 await self._broadcast("MEMORY",
                     f"🧠 Recalled {len(recalled)} relevant fact(s) ({tier_summary})")
+                self._decision_under("memory",
+                    recalled_count=len(recalled),
+                    tier_breakdown=tier_counts)
         except Exception as e:
             print(f"⚠️ memory recall failed (non-fatal): {e}")
 
@@ -2016,6 +2174,7 @@ class OrchestratorAgent:
         # before the agent gives its narrated response. Be generous.
         max_iterations = 8 if replay_recipe else 5
         iteration = 0
+        tool_calls_count = 0  # analytics
 
         while iteration < max_iterations:
             iteration += 1
@@ -2049,6 +2208,7 @@ class OrchestratorAgent:
                 if srv in self.sessions:
                     r = await self.sessions[srv].call_tool(tool, args)
                     res_txt = r.content[0].text
+                    tool_calls_count += 1
                     await self._broadcast("RESULT", self._format_result_preview(res_txt))
                     # Append every successful tool call to the workstream's
                     # audit trail. This is what survives across process
@@ -2060,6 +2220,11 @@ class OrchestratorAgent:
                         except Exception as e:
                             print(f"⚠️ workstream attach failed: {e}")
                     if res_txt.startswith("VERBATIM:"):
+                        await self._persist_decision(
+                            tool_calls_count=tool_calls_count,
+                            iterations_used=iteration,
+                            verbatim_short_circuit=True,
+                            duration_ms=int((time.monotonic() - turn_t0) * 1000))
                         return res_txt[len("VERBATIM:\n"):]
                 else:
                     print(f"  ❌ Service '{srv}' NOT in active sessions!")
@@ -2098,5 +2263,14 @@ class OrchestratorAgent:
                 self.current_workstream_id, user_input, final_answer))
             self._ws_summary_tasks.add(t)
             t.add_done_callback(self._ws_summary_tasks.discard)
+
+        # Persist the routing-decision record (analytics).
+        await self._persist_decision(
+            tool_calls_count=tool_calls_count,
+            iterations_used=iteration,
+            max_iterations=max_iterations,
+            max_iterations_hit=(iteration >= max_iterations),
+            had_replay_recipe=bool(replay_recipe),
+            duration_ms=int((time.monotonic() - turn_t0) * 1000))
 
         return final_answer

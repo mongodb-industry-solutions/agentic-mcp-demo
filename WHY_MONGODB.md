@@ -241,7 +241,7 @@ This is the layer that elevates the demo from *"clever multi-agent router"* to *
 
 > ## 🎯 The punchline
 >
-> **One pair of collections — `agent_workstreams` + `agent_memories` — drives four distinct agentic capabilities, each lighting up a different moment in the demo.**
+> **A small set of agent-state collections — `agent_workstreams`, `agent_memories`, `routing_decisions` — drives five distinct agentic capabilities, each lighting up a different moment in the demo.**
 >
 > | Use | Triggered by | Atlas primitive it leans on | Demo moment |
 > |---|---|---|---|
@@ -249,8 +249,9 @@ This is the layer that elevates the demo from *"clever multi-agent router"* to *
 > | **Memory extraction** | `state → completed` change | Change stream + LLM over the audit-trail subdoc | *"I'm done with Marienplatz"* → `💎` line appears in the live feed |
 > | **Procedural replay** | Classifier detects "same way as X" | `tool_calls` audit array used as a recipe | *"Hamburg the same way"* → 4-step replay scrolls through the feed |
 > | **Promotion / decay** | Recall counts + age | `updateMany` with pipeline stages | `⭐ Promoted to CORE` after 3 recalls; `🍂 Decayed N stale fact(s)` on the sweep |
+> | **Routing observability** | Every turn | One insert into `routing_decisions` + `$group`/`$percentile` aggregations | *"how is the routing performing?"* → live LLM-tie-break rate, slow turns, routing misses |
 >
-> Four uses, four time scales (the active turn / a session boundary / cross-session reuse / self-curation over weeks), **one document collection per concern with the right indexes**. No workflow engine, no separate memory product, no audit-log sidecar, no bespoke fact-ranker. Same primitives every time — that's the *agentic-memory-as-a-database-primitive* story compressed into one sentence.
+> Five uses, five time scales (the active turn / a session boundary / cross-session reuse / self-curation over weeks / continuous offline analysis), **document collections with the right indexes**. No workflow engine, no separate memory product, no audit-log sidecar, no bespoke fact-ranker, no observability SaaS. Same primitives every time — that's the *agentic-memory-as-a-database-primitive* story compressed into one sentence.
 
 #### 5a. Working memory — `agent_workstreams`
 
@@ -360,6 +361,59 @@ The same vector primitives that drive service routing also drive workstream reca
 
 For customers building agentic platforms, this is the single most under-pitched advantage of Atlas: you're not just buying a vector DB, you're getting an entire memory plane for the agent. Pinecone gives you semantic recall. Redis gives you working state. Postgres gives you audit. Atlas gives you all three on the same primitive: a document collection with the right indexes.
 
+### Layer 6 — Routing Observability (`routing_decisions`)
+
+Every call to `process_query` writes one document to `agent_registry.routing_decisions` capturing what the routing pipeline did. The schema is rich enough for offline analytics, prompt tuning, and live dashboards, but small enough to query cheaply at any scale:
+
+```json
+{
+  "ts": "2026-05-23T14:32:01Z",
+  "query": "propose plan and execute it",
+  "workstream_id": "WS-2026-05-23-001",
+  "workstream_is_new": false,
+  "workstream_domain": "ibn",
+  "replay_source_id": null,
+  "stage1": {
+    "method": "llm",          // singleton | explicit_mention | llm | llm_failed_fallback | llm_unknown_domain | no_domains
+    "domains_available": ["acc", "dtw", "ibn", "memory", "todo", ...],
+    "domains_selected":  ["ibn"],
+    "sticky_hint":       "ibn",
+    "services_in_scope": 5,
+    "duration_ms":       234
+  },
+  "stage2": {
+    "method": "relative_winner",  // sole_candidate | absolute_winner | relative_winner | llm_tiebreak | llm_none_* | llm_error_*
+    "candidates":      [{"name": "ibn_feasibility_service", "domain": "ibn", "score": 0.5040}, ...],
+    "best_score":      0.5040,
+    "gap_12":          0.0019,
+    "gap_23":          0.0001,
+    "winner_services": ["ibn_feasibility_service"]
+  },
+  "memory": {
+    "recalled_count": 3,
+    "tier_breakdown": {"core": 1, "extracted": 2}
+  },
+  "outcome": {
+    "tool_calls_count":   2,
+    "iterations_used":    3,
+    "max_iterations_hit": false,
+    "had_replay_recipe":  false,
+    "duration_ms":        6432
+  }
+}
+```
+
+**What this unlocks immediately**, all via the new `analytics_service` MCP — no separate observability stack:
+
+- `routing_summary(hours=24)` — turn count, LLM-tie-break rate, memory-recall rate, routing-miss rate, latency p50/p95. *One aggregation pipeline*.
+- `routing_misses(hours=24)` — recent queries that produced zero tool calls. The most useful single signal for spotting routing regressions.
+- `slow_routing(threshold_ms=5000)` — slowest decisions; tells you whether the LLM or the ReAct loop is the bottleneck.
+- `service_usage(hours=24)` — which services actually get routed to. Drives capacity planning and identifies dormant capabilities.
+
+**Why MongoDB:** observability is "just another collection". Same `$group` / `$percentile` / `$unwind` aggregations the customer already uses for their operational workloads. No Datadog, no Honeycomb, no separate retention policy — the observability data is on the same cluster as the system being observed, queryable with the same query language, governed by the same backup and BYOK policy. The agent can introspect its own routing performance, and a customer's SRE can build a dashboard against the same collection without touching a second product.
+
+**For prompt tuning and offline learning:** the `routing_decisions` documents are a labelled corpus by construction. Each one carries the query, the Stage 1 + Stage 2 method that handled it, and the outcome. Want to know which prompt phrasings end up in the LLM tie-break? Aggregate by `stage2.method == "llm_tiebreak"`. Want to know when sticky-hint over-fires? Aggregate by `stage1.method == "llm" AND sticky_hint != null AND domains_selected != [sticky_hint]`. These are one-liner aggregations against the same collection.
+
 ## 2.2 Operational considerations the architecture honors
 
 These will come up the moment a customer architect starts probing.
@@ -390,7 +444,6 @@ The framework's evolutionary path is clean:
 
 - **Capability claims** (each service declares `id-shape` regexes for routing pre-filters before Stage 1) — handles 1000+ services without LLM calls for unambiguous queries.
 - **Per-tenant vector indexes** — already supported, just needs a tenant filter on `mcp_services` and `agent_workstreams`.
-- **Routing analytics** — a `routing_decisions` collection that captures every Stage 1 + Stage 2 outcome for offline learning and prompt tuning.
 - **Workstream merge/split** — when the user explicitly relates two threads ("the Munich one and the Hamburg one are both Q3 rollouts"), merge their entities and tool-call trails.
 - **Cross-host orchestrator clustering** — workstreams already live in MongoDB, not in process memory; multi-host orchestrator setups are a one-line change away (each instance picks up workstreams from `state == "open"`).
 
@@ -402,7 +455,7 @@ None of these require a new engine. All are collections + indexes on the same At
 
 ## 3.1 The 30-second elevator
 
-> *"We replace the data plumbing of an agentic AI platform — including the agent's own memory. Every team building an LLM agent today needs a service catalog, a routing brain, a working-memory store for active workstreams, a long-term memory store for semantic recall, an operational state DB, a graph for entity dependencies, a search engine, sometimes a time-series store. Most of them are wiring seven engines together and discovering the integration tax eats their roadmap. We deliver all of that — including the agent's mind — as features of one document database with native vector, graph, geospatial, time-series, and change streams. **Two Atlas collections (`agent_workstreams` + `agent_memories`) drive routing context, long-term memory extraction, procedural replay, AND a self-curating promotion/decay lifecycle** — same primitives, four uses, four demo moments. Kill the process anywhere; restart; the agent resumes. Because the state isn't in process memory, it's in Atlas."*
+> *"We replace the data plumbing of an agentic AI platform — including the agent's own memory and its own observability. Every team building an LLM agent today needs a service catalog, a routing brain, a working-memory store for active workstreams, a long-term memory store for semantic recall, an operational state DB, a graph for entity dependencies, a search engine, sometimes a time-series store, plus a separate observability stack to make sense of any of it. Most of them are wiring eight engines together and discovering the integration tax eats their roadmap. We deliver all of that — including the agent's mind AND the agent's flight recorder — as features of one document database with native vector, graph, geospatial, time-series, and change streams. **Three Atlas collections (`agent_workstreams` + `agent_memories` + `routing_decisions`) drive routing context, long-term memory extraction, procedural replay, a self-curating promotion/decay lifecycle, AND routing observability** — same primitives, five uses, five demo moments. Kill the process anywhere; restart; the agent resumes. Because the state isn't in process memory, it's in Atlas."*
 
 ## 3.2 Talking points by stakeholder
 
@@ -521,11 +574,13 @@ This is the most common pushback at the demo, and the honest answer is the model
    On the next turn, the LLM's memory block labels these as `[CORE/template]` rather than `[EXTRACTED/template]`, signaling institutional knowledge. Talking point: *"The agent just curated its own memory. Three uses of a fact = it's not a one-off observation any more, it's how Alpenmarkt does retail. No re-training, no ML pipeline — one `updateMany` triggered by the recall counter on the same Atlas collection. The memory plane gets smarter on its own."*
 
 13. **Switch to the DTW domain.** *"What if we raise prepaid M downlink to 20 Mbps in NYC Saturday night?"* New workstream, new domain. Run `simulate scenario DTW-SCN-…` — the simulation service does `$graphLookup` + hybrid `$vectorSearch` in the same tool call. Open the DTW dashboard at `http://localhost:8080`. Talking point: *"Graph for operational structure, vector for institutional memory, change streams for the live UI — three Atlas features, one tool call. And it's all on the same cluster as the workstreams, the history, and the service catalog."*
-14. **The closing slide.** Show the polyglot-equivalent stack diagram (Postgres + pgvector + Elasticsearch + PostGIS + TimescaleDB + Debezium + Kafka + Redis-for-agent-state + Pinecone-for-agent-memory). Talking point: *"Same demo on that stack: maybe six months and three more engineers. Here: one Atlas cluster. Operational data, routing brain, agent's working memory, agent's long-term recall, raw command history, live UI — same primitives, same query language, same backup."*
+13e. **📊 The observability moment.** Ask the agent: *"how is the routing performing today?"* The query routes to `analytics_service.routing_summary` and returns — *as a single `$group` + `$percentile` aggregation against `routing_decisions`* — the live LLM-tie-break rate, memory-recall rate, routing-miss rate, replay-turn count, and latency p50/p95. Follow up with *"any routing misses?"* and the same collection produces the actual misrouted queries with their Stage 1 + Stage 2 reasoning. Talking point: *"We just asked the orchestrator how it's been thinking for itself. No Datadog, no Honeycomb, no separate observability stack. Every turn writes one document to `routing_decisions`; every analytics question is one aggregation pipeline against the same Atlas cluster the agent is running on. The agent's flight recorder is just another collection."*
+
+14. **The closing slide.** Show the polyglot-equivalent stack diagram (Postgres + pgvector + Elasticsearch + PostGIS + TimescaleDB + Debezium + Kafka + Redis-for-agent-state + Pinecone-for-agent-memory + Datadog-or-Honeycomb-for-observability). Talking point: *"Same demo on that stack: maybe seven months and four more engineers. Here: one Atlas cluster. Operational data, routing brain, agent's working memory, agent's long-term recall, agent's flight recorder, raw command history, live UI — same primitives, same query language, same backup."*
 
 ## 3.6 The single sentence to leave behind
 
-> *"Atlas isn't just where your agentic AI platform stores its data — it's the data plane of the platform and the memory plane of the agent. Vector search is routing. Graph traversal is impact analysis. Time-series is telemetry. Change streams are the live UI. **Two collections (`agent_workstreams` + `agent_memories`) drive four agentic capabilities at once — routing context, long-term memory extraction, procedural replay, and a self-curating promotion/decay lifecycle.** Same primitives, four uses. Kill the process. Restart. Resume. The agent remembers because Atlas remembers — and remembers smarter over time, because the memory plane curates itself."*
+> *"Atlas isn't just where your agentic AI platform stores its data — it's the data plane of the platform, the memory plane of the agent, AND the observability plane of the orchestrator. Vector search is routing. Graph traversal is impact analysis. Time-series is telemetry. Change streams are the live UI. **Three collections (`agent_workstreams` + `agent_memories` + `routing_decisions`) drive five agentic capabilities at once — routing context, long-term memory extraction, procedural replay, a self-curating promotion/decay lifecycle, and routing observability with `$group`/`$percentile` aggregations.** Same primitives, five uses. Kill the process. Restart. Resume. The agent remembers because Atlas remembers — remembers smarter over time, and tells you exactly how it's been routing while it does."*
 
 ---
 
