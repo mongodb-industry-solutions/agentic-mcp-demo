@@ -987,20 +987,19 @@ class OrchestratorAgent:
         #       wide. Almost never fires on voyage-4 because unit-norm
         #       vectors compress all related docs into 0.45-0.55.
         #
-        #   (b) Relative: gap_1→2 ≥ 2 × gap_2→3 AND gap_1→2 ≥ 0.0005.
-        #       The winner stands alone at the top — its lead over runner-up
-        #       is at least double the spacing among the rest of the pack.
-        #       Empirically the LLM tie-break confirms (doesn't change) the
-        #       vector ranking once the ratio crosses ~2×, so paying the LLM
-        #       call there is pure overhead. The absolute floor (0.0005)
-        #       rules out cases where every gap is essentially zero and the
-        #       ratio is just numerical noise.
+        #   (b) Relative: gap_1→2 ≥ 1.5 × gap_2→3 AND gap_1→2 ≥ 0.0005.
+        #       The winner clearly leads — its gap to runner-up is at least
+        #       50% larger than the next gap below. Empirical floor: data
+        #       collected so far shows the LLM tie-break only earns its keep
+        #       when the ratio is below ~1.3× (winner and runner-up are
+        #       genuinely co-strong matches). Anything above ~1.5× the LLM
+        #       just re-confirms the vector top-1.
         absolute_winner = best_score > 0.65 and gap > 0.03
         relative_winner = False
         if len(candidates) >= 3:
             third_score = candidates[2].get("score", 0)
             gap_23 = max(second_score - third_score, 1e-9)
-            if gap >= 0.0005 and gap / gap_23 >= 2.0:
+            if gap >= 0.0005 and gap / gap_23 >= 1.5:
                 relative_winner = True
 
         if absolute_winner or relative_winner:

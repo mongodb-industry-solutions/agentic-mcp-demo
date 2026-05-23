@@ -137,7 +137,7 @@ Stage 2 (depth):    $vectorSearch with filter: {domain: {$in: [...]}}
                       ① sole candidate → return (no LLM call)
                       ② absolute clear winner (best > 0.65, gap > 0.03)
                                                          → return (no LLM)
-                      ③ relative clear winner (gap_1→2 ≥ 2 × gap_2→3)
+                      ③ relative clear winner (gap_1→2 ≥ 1.5 × gap_2→3)
                                                          → return (no LLM)
                       ④ LLM tie-break (prefers a single service)
                       ⑤ session stickiness as last-resort fallback
