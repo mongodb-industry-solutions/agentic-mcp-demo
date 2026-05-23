@@ -86,7 +86,7 @@ A 5-service flow demonstrating Atlas as the operational memory + decision layer 
 
 **The WOW query** lives in `ibn_assurance_service.diagnose_violation` — a single `$vectorSearch` aggregation stage that combines semantic similarity over `ibn_knowledge_chunks.text`, structured equality on `kind`, a `$gte` time filter on `ts`, and a numeric bounding box on `lng`/`lat` (a 2dsphere isn't used here because Atlas Vector Search filters don't support `$geoWithin`; we precompute lng/lat fields on the chunks and box-filter instead). All four modalities pre-filter the vector search inside the index — this is the architectural beat where Atlas separates from a Postgres + pgvector + PostGIS + TimescaleDB stack.
 
-**Atlas Vector Search index required.** The `ibn_knowledge_index` index on `ibn_knowledge_chunks` must be created in the Atlas UI before the diagnose tool works. The seed script prints the exact JSON config when you run it; the index needs `text` configured as a vector field with auto-embedding (e.g. `voyage-3-large`, 1024 dims) and `kind`, `ts`, `lng`, `lat`, `customer`, `site_id` as filter fields.
+**Atlas Vector Search index required.** The `ibn_knowledge_index` index on `ibn_knowledge_chunks` must be created in the Atlas UI before the diagnose tool works. The seed script prints the exact JSON config when you run it; the index needs `text` configured with auto-embedding (`type: autoEmbed`, `modality: text`, `model: voyage-4`) and `kind`, `ts`, `lng`, `lat`, `customer`, `site_id` as filter fields.
 
 **Dashboard modes.** The IBN dashboard reads `?mode=` from the URL. `eng` (default) shows the raw aggregation pipeline modal during diagnose and the parsed-JSON intent block; `exec` hides those, replaces them with prose callouts and a similarity bar without numerical score. Same chat backbone, two render styles for two audiences.
 
@@ -109,7 +109,7 @@ The five services live alongside the others in `mcp_servers/`:
 
 **The WOW combo** in `dtw_simulation_service.simulate_qos_change`: $graphLookup walks the dependency tree from `plan_ACME_M` downstream through QoS → cells → eNBs → SGW → PGW, while a hybrid `$vectorSearch` against `dtw_knowledge_chunks.text` (with structured pre-filters on `segment`, `market`, `kind`) surfaces semantically similar past incidents and their mitigation runbooks. Graph for *operational structure*, vector for *institutional memory* — both in one Atlas store, both invoked at simulate-time.
 
-**Atlas Vector Search index required.** The `dtw_knowledge_index` on `dtw_knowledge_chunks` must be created in the Atlas UI before the hybrid query works. The seed script prints the exact JSON config; the index needs `text` configured with auto-embedding (`voyage-3-large`, 1024 dims) and `kind`, `segment`, `market`, `plan_id`, `ts`, `lng`, `lat` as filter fields. If the index isn't ready, `simulate_qos_change` still runs and persists graph + load projections — only the "similar past scenarios" panel will be empty.
+**Atlas Vector Search index required.** The `dtw_knowledge_index` on `dtw_knowledge_chunks` must be created in the Atlas UI before the hybrid query works. The seed script prints the exact JSON config; the index needs `text` configured with auto-embedding (`type: autoEmbed`, `modality: text`, `model: voyage-4`) and `kind`, `segment`, `market`, `plan_id`, `ts`, `lng`, `lat` as filter fields. If the index isn't ready, `simulate_qos_change` still runs and persists graph + load projections — only the "similar past scenarios" panel will be empty.
 
 **Dashboard modes.** The DTW dashboard reads `?mode=` from the URL. `eng` (default) shows the raw aggregation pipeline and the graph-walk edge list; `exec` hides those and renders only narrative panels with a similarity bar (no numerical score).
 
@@ -119,7 +119,7 @@ The five services live alongside the others in `mcp_servers/`:
 
 - `mcp` — Model Context Protocol client/server framework
 - `openai` — AsyncOpenAI client for chat completions (orchestrator uses `gpt-4o` by default for ReAct + `gpt-4o-mini` for routing/enrichment validation)
-- `voyageai` — used directly only by `restaurant_guide` (`voyage-3-large` for ad-hoc embedding); the main `vector_index` does its own auto-embedding inside Atlas
+- `voyageai` — used directly only by `restaurant_guide` (`voyage-4` for ad-hoc embedding); the main `vector_index` does its own auto-embedding inside Atlas
 - `pymongo` — MongoDB async driver
 - `rich` — Terminal UI rendering
 - `httpx` — Async HTTP for broadcast notifications

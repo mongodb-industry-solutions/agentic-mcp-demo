@@ -990,10 +990,10 @@ VECTOR_INDEX_CONFIG = {
     "definition": {
         "fields": [
             {
-                "type": "text",
-                "path": "text",
-                "model": "voyage-3-large",
-                "similarity": "dotProduct",
+                "type":     "autoEmbed",
+                "modality": "text",
+                "path":     "text",
+                "model":    "voyage-4",
             },
             {"type": "filter", "path": "kind"},
             {"type": "filter", "path": "ts"},
@@ -1043,7 +1043,7 @@ def print_index_instructions():
     print()
     print(_json.dumps(VECTOR_INDEX_CONFIG["definition"], indent=2))
     print()
-    print("This uses Atlas auto-embed: `type: text` + `model: voyage-3-large`.")
+    print("Atlas auto-embed (`type: autoEmbed` + `model: voyage-4`).")
     print("Atlas embeds on insert and at query time, so the diagnose tool can")
     print("pass raw text in `$vectorSearch.query` without computing vectors.")
     print("━" * 72)

@@ -35,10 +35,10 @@ INDEX     = "workstream_vector_index"
 DEFINITION = {
     "fields": [
         {
-            "type": "text",
-            "path": "summary",
-            "model": "voyage-3-large",
-            "similarity": "dotProduct",
+            "type":     "autoEmbed",
+            "modality": "text",
+            "path":     "summary",
+            "model":    "voyage-4",
         },
         {"type": "filter", "path": "state"},
         {"type": "filter", "path": "domain"},

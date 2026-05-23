@@ -35,10 +35,10 @@ INDEX     = "agent_memories_index"
 DEFINITION = {
     "fields": [
         {
-            "type": "text",
-            "path": "text",
-            "model": "voyage-3-large",
-            "similarity": "dotProduct",
+            "type":     "autoEmbed",
+            "modality": "text",
+            "path":     "text",
+            "model":    "voyage-4",
         },
         {"type": "filter", "path": "domain"},
         {"type": "filter", "path": "category"},

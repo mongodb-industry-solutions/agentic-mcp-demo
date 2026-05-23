@@ -34,7 +34,7 @@ RESTAURANT_EMBEDDINGS = []
 def _get_embedding(text: str, input_type: str = "document") -> list:
     result = voyage.embed(
         [text],
-        model="voyage-3-large",
+        model="voyage-4",
         input_type=input_type
     )
     return result.embeddings[0]

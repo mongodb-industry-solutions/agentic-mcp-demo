@@ -800,27 +800,45 @@ class OrchestratorAgent:
         prompt = (
             f"User query: '{query}'{recent_block}\n\n"
             f"Open workstreams:\n{ws_block}\n\n"
-            f"Decide which workstream this query continues, or whether "
-            f"the user is starting a new one.\n\n"
-            f"Reply with valid JSON, no prose:\n"
-            f"{{\"action\": \"continue\", \"workstream_id\": \"WS-...\"}}\n"
-            f"  OR\n"
-            f"{{\"action\": \"new\", \"title\": \"<short descriptive title, max 60 chars>\", "
-            f"\"domain_hint\": \"<one of the known domains or empty>\"}}\n\n"
-            f"Rules:\n"
+            f"Decide TWO things at once:\n"
+            f"  1. Which workstream this query continues (or whether the user "
+            f"     is starting a NEW one).\n"
+            f"  2. Whether the user is signaling that an open workstream is "
+            f"     now DONE — implicitly or explicitly.\n\n"
+            f"Reply with valid JSON only, no prose:\n"
+            f"{{\n"
+            f"  \"action\": \"continue\" | \"new\",\n"
+            f"  \"workstream_id\": \"WS-...\",       // when action=continue\n"
+            f"  \"title\": \"<short title>\",        // when action=new\n"
+            f"  \"domain_hint\": \"<domain>\",       // when action=new\n"
+            f"  \"closes_workstream\": \"WS-...\"     // ID of a workstream the\n"
+            f"                                       // user just signaled DONE,\n"
+            f"                                       // or null if none\n"
+            f"}}\n\n"
+            f"Rules for action:\n"
             f"- If the query continues an open workstream (mentions its entities, "
             f"  uses its vocabulary, or is a natural follow-up to that thread), "
             f"  prefer 'continue'.\n"
-            f"- Brief acknowledgements + follow-ups ('ok thanks', 'now do X') after "
-            f"  a recent turn in a workstream are continuations.\n"
-            f"- Brand-new entities or a clear topic switch → 'new'.\n"
+            f"- Brief acknowledgements + follow-ups ('ok thanks', 'now do X') "
+            f"  after a recent turn in a workstream are continuations.\n"
+            f"- Brand-new entities or a clear topic switch → 'new'.\n\n"
+            f"Rules for closes_workstream:\n"
+            f"- Set to the relevant workstream id when the user signals "
+            f"  COMPLETION of work. Examples that close a workstream:\n"
+            f"  • 'I'm done with the setup of Marienplatz network'\n"
+            f"  • 'we are done', 'wrap up', 'that's everything for X'\n"
+            f"  • 'close the Munich workstream'\n"
+            f"  • 'mark this complete', 'finalize', 'finished'\n"
+            f"- The query can BOTH close one workstream AND continue/start "
+            f"  another in the same turn: set both fields accordingly.\n"
+            f"- Leave null if the user is still in the middle of work.\n"
         )
         try:
             resp = await self.openai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
-                max_tokens=120,
+                max_tokens=180,
                 response_format={"type": "json_object"},
             )
             decision = json.loads(resp.choices[0].message.content)
@@ -830,15 +848,24 @@ class OrchestratorAgent:
             ws = open_ws[0]
             return ws["_id"], False, ws.get("domain")
 
+        # Honour an implicit close cue BEFORE deciding routing. Closing
+        # a workstream triggers the change-stream watcher → memory
+        # extraction; the new turn carries on with whatever action follows.
+        close_id = decision.get("closes_workstream")
+        if close_id and any(w["_id"] == close_id for w in open_ws):
+            await self._close_workstream(close_id,
+                reason="user-signaled completion in query")
+
         action = (decision.get("action") or "").lower()
         if action == "continue":
             ws_id = decision.get("workstream_id")
             ws = next((w for w in open_ws if w["_id"] == ws_id), None)
-            if ws:
+            if ws and ws_id != close_id:  # don't continue what we just closed
                 return ws["_id"], False, ws.get("domain")
-            # Hallucinated id — fall through to "new"
-            await self._broadcast("ROUTING",
-                f"⚠ Workstream classify returned unknown id {ws_id!r}; opening new WS")
+            # Hallucinated id or we just closed it — fall through to "new"
+            if not ws:
+                await self._broadcast("ROUTING",
+                    f"⚠ Workstream classify returned unknown id {ws_id!r}; opening new WS")
 
         # "new" (or fell through)
         title = decision.get("title") or query[:60]
@@ -900,6 +927,25 @@ class OrchestratorAgent:
         await self._broadcast("WORKSTREAM",
             f"🆕 {ws_id} opened — {title}" + (f" [{domain}]" if domain else ""))
         return ws_id
+
+    async def _close_workstream(self, ws_id: str, reason: str = "completed"):
+        """Mark a workstream completed. Triggers the change-stream watcher
+        which kicks off long-term memory extraction in the background. Called
+        from the workstream classifier when it detects implicit close cues
+        like 'I am done with the setup of Marienplatz network'."""
+        res = await self.workstreams.update_one(
+            {"_id": ws_id, "state": {"$ne": "completed"}},
+            {"$set": {"state": "completed",
+                      "closed_at": datetime.datetime.now(),
+                      "close_note": reason}},
+        )
+        if res.modified_count:
+            await self._broadcast("WORKSTREAM",
+                f"✓ {ws_id} closed — {reason}")
+            # If the user closed the currently-focused workstream, drop
+            # focus and let the next classifier decision adopt a new one.
+            if self.current_workstream_id == ws_id:
+                self.current_workstream_id = None
 
     async def _attach_to_workstream(self, ws_id: str, query: str,
                                      service: str | None, tool: str | None,
@@ -1221,9 +1267,11 @@ class OrchestratorAgent:
         # uses.
         #
         #   (a) Absolute: best_score > 0.65 AND gap > 0.03.
-        #       Tuned for older models (voyage-3-large) that spread scores
-        #       wide. Almost never fires on voyage-4 because unit-norm
-        #       vectors compress all related docs into 0.45-0.55.
+        #       Kept as a belt-and-braces shortcut for embedding models
+        #       that spread scores widely. Rarely fires on voyage-4
+        #       (unit-norm vectors compress everything into 0.45-0.55) —
+        #       in that regime the relative criterion below carries the
+        #       fast-path.
         #
         #   (b) Relative: gap_1→2 ≥ 1.5 × gap_2→3 AND gap_1→2 ≥ 0.0005.
         #       The winner clearly leads — its gap to runner-up is at least

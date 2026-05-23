@@ -1179,7 +1179,7 @@ VECTOR_INDEX_CONFIG = {
     "type": "vectorSearch",
     "definition": {
         "fields": [
-            {"type": "text",   "path": "text", "model": "voyage-3-large", "similarity": "dotProduct"},
+            {"type": "autoEmbed", "modality": "text", "path": "text", "model": "voyage-4"},
             {"type": "filter", "path": "kind"},
             {"type": "filter", "path": "segment"},
             {"type": "filter", "path": "market"},
@@ -1229,7 +1229,7 @@ def print_index_instructions():
     print()
     print(_json.dumps(VECTOR_INDEX_CONFIG["definition"], indent=2))
     print()
-    print("Atlas auto-embed: `type: text` + `model: voyage-3-large`. Atlas embeds")
+    print("Atlas auto-embed: `type: autoEmbed` + `model: voyage-4`. Atlas embeds")
     print("on insert and on query (raw text in $vectorSearch.query). Until this")
     print("index is Active, simulate_qos_change runs in graph-only mode and the")
     print("'similar past scenarios' panel will be empty.")
