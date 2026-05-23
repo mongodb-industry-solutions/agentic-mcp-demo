@@ -1380,6 +1380,21 @@ class OrchestratorAgent:
                 return (close_id, False, close_target.get("domain"),
                         replay_id, True, [close_id])
             if not ws:
+                # Hallucinated id with no closure intent. Before
+                # fabricating a fresh workstream out of thin air, try
+                # to redirect to ANY open workstream already in scope
+                # (Stage 1 narrowed the candidate set; the LLM likely
+                # meant ONE of those but got the id wrong).
+                open_in_scope = [w for w in open_ws
+                                 if w.get("state") == "open"]
+                if open_in_scope:
+                    redirect = open_in_scope[0]
+                    await self._broadcast("ROUTING",
+                        f"⚠ Classifier hallucinated id {ws_id!r}; "
+                        f"redirected to open {redirect['_id']} "
+                        f"(most-recent open workstream in Stage 1 scope)")
+                    return (redirect["_id"], False,
+                            redirect.get("domain"), replay_id, False, [])
                 await self._broadcast("ROUTING",
                     f"⚠ Workstream classify returned unknown id {ws_id!r}; opening new WS")
 
@@ -1643,19 +1658,33 @@ class OrchestratorAgent:
     # calls. _is_meta_query is the upfront heuristic; _META_TOOL_PREFIXES
     # backs a retro-detach guard for cases the heuristic missed.
     _META_QUERY_PATTERNS = (
-        # Workstream introspection
+        # Workstream introspection (read-side)
         "what are my workstream", "list my workstream", "list workstream",
         "list open workstream", "list the workstream",
         "show me my workstream", "show my workstream", "show workstream",
         "which workstream", "open workstream", "active workstream",
         "any workstream", "current workstream",
-        # Memory introspection
+        # Workstream bulk management (write-side — also meta, since
+        # they operate on the agent's own state machine rather than
+        # any domain entity).
+        "close all workstream", "close every workstream",
+        "close all my workstream", "close all the workstream",
+        "delete all workstream", "delete every workstream",
+        "purge workstream", "purge all workstream",
+        "reset workstream", "reset all workstream",
+        "clear workstream", "clear all workstream",
+        "wipe workstream", "wipe all workstream",
+        "remove all workstream",
+        # Memory introspection (read-side)
         "what do you remember", "what's in memor", "whats in memor",
         "list memorie", "list memor", "list my memor",
         "show memorie", "show me memor", "show memor", "show my memor",
         "my memorie", "my memories",
         "recall fact", "recall everything", "recall all",
-        "forget memor",
+        # Memory bulk management (write-side)
+        "forget memor", "forget all memor", "forget everything",
+        "clear memor", "clear all memor", "purge memor",
+        "reset memor", "wipe memor", "delete all memor",
         # Routing analytics
         "routing analytic", "routing summary", "routing stat",
         "routing performance", "routing metric", "routing miss",
