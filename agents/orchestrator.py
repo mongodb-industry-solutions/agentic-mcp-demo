@@ -1127,18 +1127,29 @@ class OrchestratorAgent:
             ws_id = await self._create_workstream(title, domain_hint, query)
             return ws_id, True, domain_hint, None, False, []
 
-        # Build compact context for the LLM
-        ws_lines = []
-        for w in open_ws:
+        # Build compact context for the LLM, GROUPED BY STATE.
+        # Closed workstreams must NEVER be picked for action=continue or
+        # closes_workstream — they are reference-only candidates for
+        # replay_from_workstream. Mixing them in a single list led the
+        # LLM to pick closed workstreams with better-matching titles as
+        # continuation targets, diverging the orchestrator's
+        # current_workstream_id from the actual DB state.
+        open_subset = [w for w in open_ws if w.get("state") == "open"]
+        closed_subset = [w for w in open_ws if w.get("state") == "completed"]
+
+        def _fmt_ws(w):
             ents = ", ".join((w.get("entities") or [])[:5])
             summary = (w.get("summary") or "").strip().replace("\n", " ")
             summary = summary[:200] + "…" if len(summary) > 200 else summary
-            ws_lines.append(
-                f"- {w['_id']} [{w.get('domain', '?')}] {w.get('title', '(untitled)')}\n"
+            return (
+                f"- {w['_id']} [{w.get('domain', '?')}] "
+                f"{w.get('title', '(untitled)')}\n"
                 f"    entities: {ents or '(none)'}\n"
                 f"    summary: {summary or '(empty)'}"
             )
-        ws_block = "\n".join(ws_lines)
+
+        open_block = "\n".join(_fmt_ws(w) for w in open_subset) or "(none)"
+        closed_block = "\n".join(_fmt_ws(w) for w in closed_subset) or "(none)"
 
         recent_block = ""
         if recent_user_msgs:
@@ -1147,7 +1158,12 @@ class OrchestratorAgent:
 
         prompt = (
             f"User query: '{query}'{recent_block}\n\n"
-            f"Open + recently-closed workstreams:\n{ws_block}\n\n"
+            f"OPEN workstreams (eligible for action='continue' AND "
+            f"'closes_workstream'):\n{open_block}\n\n"
+            f"RECENTLY-CLOSED workstreams (eligible for "
+            f"'replay_from_workstream' ONLY — these are REFERENCE/"
+            f"REPLAY sources, NEVER pick them as workstream_id for "
+            f"continue or closes_workstream):\n{closed_block}\n\n"
             f"Decide THREE things at once:\n"
             f"  1. Which workstream this query continues (or whether the user "
             f"     is starting a NEW one).\n"
@@ -1158,7 +1174,10 @@ class OrchestratorAgent:
             f"Reply with valid JSON only, no prose:\n"
             f"{{\n"
             f"  \"action\": \"continue\" | \"new\",\n"
-            f"  \"workstream_id\": \"WS-...\",         // when action=continue\n"
+            f"  \"workstream_id\": \"WS-...\",         // when action=continue;\n"
+            f"                                          // MUST be an id from the\n"
+            f"                                          // OPEN section above.\n"
+            f"                                          // Closed ids are FORBIDDEN here.\n"
             f"  \"title\": \"<short title>\",          // when action=new; describe\n"
             f"                                          // the OVERALL GOAL or topic,\n"
             f"                                          // NOT the literal query verb.\n"
@@ -1175,6 +1194,10 @@ class OrchestratorAgent:
             f"                                          // context, or null\n"
             f"}}\n\n"
             f"Rules for action:\n"
+            f"- ⛔ HARD RULE: action='continue' requires workstream_id to be "
+            f"  an id from the OPEN section above. NEVER pick a closed "
+            f"  workstream id for continuation — even if its title matches "
+            f"  better. Closed workstreams are HISTORY, not active threads.\n"
             f"- If the query continues an open workstream (mentions its entities, "
             f"  uses its vocabulary, or is a natural follow-up to that thread), "
             f"  prefer 'continue'.\n"
@@ -1281,11 +1304,47 @@ class OrchestratorAgent:
         if action == "continue":
             ws_id = decision.get("workstream_id")
             ws = next((w for w in open_ws if w["_id"] == ws_id), None)
-            if ws and ws_id != close_id:  # don't continue what we just closed
-                # If the LLM also asked to close another workstream, report it.
+
+            # Valid continuation requires: (1) known id, (2) state=='open',
+            # (3) not the workstream we just closed this turn. ANY failure
+            # in (2) is a serious classifier bug — closed workstreams are
+            # forbidden as continuation targets, even when their titles
+            # match better.
+            if ws and ws_id != close_id and ws.get("state") == "open":
                 closed = [close_id] if close_was_open else []
                 return ws["_id"], False, ws.get("domain"), replay_id, False, closed
-            # Hallucinated id or we just closed it. Two cases:
+
+            # Failure mode A: LLM picked a CLOSED workstream as continuation.
+            # Try to redirect to an open workstream in the same domain.
+            if ws and ws.get("state") == "completed" and ws_id != close_id:
+                await self._broadcast("ROUTING",
+                    f"⚠ Classifier picked CLOSED {ws_id} for continue; "
+                    f"that's forbidden — looking for open redirect in "
+                    f"domain '{ws.get('domain')}'")
+                domain = ws.get("domain")
+                same_domain_open = [w for w in open_subset
+                                    if w.get("domain") == domain]
+                if len(same_domain_open) == 1:
+                    redirect = same_domain_open[0]
+                    await self._broadcast("WORKSTREAM",
+                        f"↪ Redirected to open {redirect['_id']} "
+                        f"(only open workstream in '{domain}')")
+                    closed = [close_id] if close_was_open else []
+                    return (redirect["_id"], False, redirect.get("domain"),
+                            replay_id, False, closed)
+                if len(same_domain_open) > 1:
+                    # Multiple opens in the same domain — most-recent wins.
+                    redirect = same_domain_open[0]
+                    await self._broadcast("WORKSTREAM",
+                        f"↪ Redirected to open {redirect['_id']} "
+                        f"(most-recent of {len(same_domain_open)} open "
+                        f"workstreams in '{domain}')")
+                    closed = [close_id] if close_was_open else []
+                    return (redirect["_id"], False, redirect.get("domain"),
+                            replay_id, False, closed)
+                # No open workstream in that domain — fall through.
+
+            # Failure mode B: hallucinated id or self-closed. Two sub-cases:
             #   (a) close_id pointed at an OPEN workstream — LLM intended
             #       a closure but gave a bad continuation id. Treat as
             #       pure closure with close_id as the context target.
