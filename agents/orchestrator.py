@@ -21,7 +21,7 @@ from pathlib import Path
 from contextlib import AsyncExitStack
 from typing import List, Dict
 from watchfiles import awatch
-from pymongo import AsyncMongoClient
+from pymongo import AsyncMongoClient, ReturnDocument
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from openai import AsyncOpenAI
@@ -387,9 +387,32 @@ class OrchestratorAgent:
     async def _extract_memories(self, ws_id: str):
         """LLM-extract reusable facts from a completed workstream and
         persist them in agent_memories. Marks the workstream as extracted
-        so we don't repeat the work (or pay the LLM cost) on next restart."""
-        ws = await self.workstreams.find_one({"_id": ws_id})
-        if not ws or ws.get("memories_extracted"):
+        so we don't repeat the work (or pay the LLM cost) on next restart.
+
+        Concurrency-safe via an atomic claim: `_extract_backlog` (at boot)
+        and `_watch_workstream_closures` (change-stream replay) can both
+        queue extraction tasks for the same workstream after a restart
+        that interrupted the previous run. `find_one_and_update` ensures
+        only one task wins the race. Stale claims (>5min, e.g. when a
+        process died mid-LLM) are reclaimable so we never lose a closure
+        permanently."""
+        now = datetime.datetime.now()
+        stale_cutoff = now - datetime.timedelta(minutes=5)
+        ws = await self.workstreams.find_one_and_update(
+            {
+                "_id": ws_id,
+                "memories_extracted": {"$ne": True},
+                "$or": [
+                    {"memories_extraction_started_at": {"$exists": False}},
+                    {"memories_extraction_started_at": None},
+                    {"memories_extraction_started_at": {"$lt": stale_cutoff}},
+                ],
+            },
+            {"$set": {"memories_extraction_started_at": now}},
+            return_document=ReturnDocument.AFTER,
+        )
+        if not ws:
+            # Already claimed by another task (or already completed).
             return
 
         # Build a tight context for the LLM — title + summary + the most
@@ -417,10 +440,27 @@ class OrchestratorAgent:
             f"  • 'Alpenmarkt's standard retail SLA template is strict-retail-v3.'\n"
             f"  • 'Marienplatz site uses fiber uplink UP-MUC-MAR-F10; copper unavailable.'\n"
             f"  • 'POS latency target for German retail is 40ms; 80ms warning threshold.'\n"
-            f"BAD facts (do NOT extract these):\n"
-            f"  • Transient ids (specific intent ids, timestamps) — they don't reuse.\n"
+            f"BAD facts (do NOT extract these — return fewer or zero facts "
+            f"rather than padding with these):\n"
+            f"  • Transient ids (specific intent ids, timestamps, datestamps) — they don't reuse.\n"
             f"  • Generic best practices the LLM already knows.\n"
-            f"  • Operational data that's already in another collection.\n\n"
+            f"  • Operational data that's already in another collection.\n"
+            f"  • META-FACTS ABOUT THE WORKSTREAM ITSELF — statements about "
+            f"this workstream's id, state, last_activity, opened/closed time, "
+            f"its title, or the fact that it was completed. These describe "
+            f"the audit record, not the work. Examples to REJECT:\n"
+            f"      ✗ 'Workstream WS-... was marked as completed.'\n"
+            f"      ✗ 'The last activity on WS-... was on YYYY-MM-DD.'\n"
+            f"      ✗ 'The state of WS-... was open before it was closed.'\n"
+            f"      ✗ 'WS-... had the title \"foo\".'\n"
+            f"  • Any fact whose entities array contains a WS-... id and "
+            f"nothing else — that's a tell that the fact is about the "
+            f"workstream itself rather than something useful.\n"
+            f"  • Facts that would not help a brand-new agent on a brand-new "
+            f"problem involving the same external entities.\n\n"
+            f"If the workstream's tool calls were trivial (e.g. just listing "
+            f"things, or closing itself) and there's nothing substantive to "
+            f"distil, return {{\"facts\":[]}} — that's the correct answer.\n\n"
             f"JSON schema:\n"
             f'{{"facts":[{{"text":"...","category":"preference|template|target|config|playbook|lesson",'
             f'"entities":["..."],"confidence":0.0-1.0}}, ...]}}\n'
@@ -448,16 +488,40 @@ class OrchestratorAgent:
             return
 
         facts = payload.get("facts") or []
-        # Sanity-filter the LLM output
+        # Sanity-filter the LLM output. Last line of defence against the LLM
+        # mining workstream meta-facts despite the prompt's BAD-facts list:
+        # any fact whose entities are ONLY workstream ids (WS-…) is the doc
+        # talking about itself, not about useful institutional knowledge.
+        _ws_id_re = re.compile(r"^WS-\d{4}-\d{2}-\d{2}-\d+$")
         clean = []
         for f in facts:
             text = (f.get("text") or "").strip()
             if not text or len(text) < 10 or len(text) > 600:
                 continue
+            ents = [e for e in (f.get("entities") or []) if isinstance(e, str)][:8]
+            # Reject self-referential facts about this workstream
+            ws_only_entities = ents and all(_ws_id_re.match(e) for e in ents)
+            text_lower = text.lower()
+            mentions_ws_id = _ws_id_re.search(text) is not None or (
+                "ws-" in text_lower and ws_id.lower() in text_lower)
+            ws_meta_phrases = (
+                "marked as completed",
+                "last activity",
+                "was open before",
+                "was 'open'",
+                "state was",
+                "had the title",
+                "the workstream",
+                "workstream was",
+            )
+            looks_like_meta = mentions_ws_id and any(
+                p in text_lower for p in ws_meta_phrases)
+            if ws_only_entities or looks_like_meta:
+                continue
             clean.append({
                 "text":       text,
                 "category":   (f.get("category") or "fact").strip()[:30],
-                "entities":   [e for e in (f.get("entities") or []) if isinstance(e, str)][:8],
+                "entities":   ents,
                 "confidence": max(0.0, min(1.0, float(f.get("confidence", 0.5)))),
             })
 
@@ -487,7 +551,14 @@ class OrchestratorAgent:
                     await self._broadcast("MEMORY",
                         f"   • [{d['category']}] {d['text'][:120]}")
             except Exception as e:
-                print(f"⚠️ memory insert failed for {ws_id}: {e}")
+                # If the atomic claim raced (extremely rare) and a peer
+                # task already inserted these exact docs, we get E11000.
+                # Treat that as a benign duplicate-detection — the data
+                # is already there. Anything else is a real error.
+                if "E11000" in str(e) or "duplicate key" in str(e):
+                    print(f"ℹ️  memory insert raced (dup keys) for {ws_id} — ignoring")
+                else:
+                    print(f"⚠️ memory insert failed for {ws_id}: {e}")
         else:
             await self._broadcast("MEMORY",
                 f"💎 {ws_id} closed — no reusable facts extracted")
