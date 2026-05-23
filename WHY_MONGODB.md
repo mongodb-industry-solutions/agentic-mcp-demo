@@ -241,15 +241,16 @@ This is the layer that elevates the demo from *"clever multi-agent router"* to *
 
 > ## 🎯 The punchline
 >
-> **One collection — `agent_workstreams` — drives three distinct agentic capabilities, each lighting up a different moment in the demo.**
+> **One pair of collections — `agent_workstreams` + `agent_memories` — drives four distinct agentic capabilities, each lighting up a different moment in the demo.**
 >
 > | Use | Triggered by | Atlas primitive it leans on | Demo moment |
 > |---|---|---|---|
 > | **Routing context** | Every turn | `find_one` + sticky `domain`/`entities` fields | *"propose plan and execute it"* stays in IBN after a TODO interruption |
 > | **Memory extraction** | `state → completed` change | Change stream + LLM over the audit-trail subdoc | *"I'm done with Marienplatz"* → `💎` line appears in the live feed |
 > | **Procedural replay** | Classifier detects "same way as X" | `tool_calls` audit array used as a recipe | *"Hamburg the same way"* → 4-step replay scrolls through the feed |
+> | **Promotion / decay** | Recall counts + age | `updateMany` with pipeline stages | `⭐ Promoted to CORE` after 3 recalls; `🍂 Decayed N stale fact(s)` on the sweep |
 >
-> Three uses, three time scales (the active turn / a session boundary / cross-session reuse), **one document collection with the right indexes**. No workflow engine, no separate memory product, no audit-log sidecar. Same primitive every time — that's the *agentic-memory-as-a-database-primitive* story compressed into one sentence.
+> Four uses, four time scales (the active turn / a session boundary / cross-session reuse / self-curation over weeks), **one document collection per concern with the right indexes**. No workflow engine, no separate memory product, no audit-log sidecar, no bespoke fact-ranker. Same primitives every time — that's the *agentic-memory-as-a-database-primitive* story compressed into one sentence.
 
 #### 5a. Working memory — `agent_workstreams`
 
@@ -319,6 +320,40 @@ Cursor-up history in the web shell loads from this collection on connect (newest
 
 **The WOW moment: kill `main.py` anywhere, restart, resume.** Because workstreams persist on every turn (and command history persists per-query), the user can `Ctrl-C` the orchestrator mid-feasibility-check, run `python main.py` again, type *"how's the Munich one going?"*, and the workstream classifier matches the open workstream from before the kill, reloads its summary + entities, and routes to `ibn` to continue. The process is stateless; the agent isn't.
 
+#### 5d. Memory promotion + decay (the long-running self-curating story)
+
+A memory plane that only accumulates is a memory plane that drowns the agent in noise. The framework runs a lightweight **tier lifecycle** over `agent_memories` so the most-used facts surface as institutional knowledge and the stale ones quietly disappear from routine recall:
+
+```
+              ┌──────────────┐    recall_count crosses threshold (3 by default)
+   newly      │              ├────────────────────────────────────────────┐
+ extracted ──▶│  extracted   │                                            │
+              │              │    age > 14 days AND recall_count == 0     │
+              │              ├──────────────┐                             │
+              └──────────────┘              ▼                             │
+                    ▲                ┌──────────────┐                     ▼
+                    │                │              │            ┌──────────────┐
+                    │   recalled     │   decayed    │            │              │
+                    └────────────────┤              │            │     core     │
+                                     │              │            │              │
+                                     └──────────────┘            └──────────────┘
+                                  (filtered from ReAct       (floored confidence,
+                                   context by default;        labelled as
+                                   still listable)             institutional knowledge
+                                                               in the LLM prompt)
+```
+
+Implementation is one `updateMany` per state transition — no separate lifecycle engine, no ML scoring service:
+
+- **Promotion** runs inside `_recall_memories` itself. Every recall increments `recall_count` and bumps `last_recalled_at`. When `recall_count >= 3`, the fact transitions to `tier="core"` and `confidence` is floored at 0.9. A `[MEMORY] ⭐ Promoted to CORE` line appears in the live feed the moment it happens.
+- **Decay** is a slow background sweep (default every 6h). One `updateMany` with a pipeline stage marks `extracted` facts older than 14 days *that were never recalled* as `tier="decayed"`, multiplying their confidence by 0.7. `[MEMORY] 🍂 Decayed N stale fact(s)` shows in the feed after each sweep.
+- **Resurrection** happens automatically — if a decayed fact gets recalled again (because a new workstream is in the same neighbourhood), it transitions back to `extracted` and the cycle resumes.
+- **Filtering** keeps decayed facts out of the LLM's routine recall (the `_recall_memories` Atlas filter excludes them by default), but they're still listable via `workstream_service.list_memories` — useful for audit, debugging, or deciding whether to manually purge them.
+
+The LLM **sees the tier label** as part of the system prompt's memory block — `[CORE/template] Alpenmarkt's standard SLA is strict-retail-v3` reads differently than `[EXTRACTED/config] Marienplatz uses fiber uplink UP-MUC-MAR-F10` — so the model can weight institutional knowledge more heavily when it picks tool arguments.
+
+**For the customer:** this is what a self-curating agent memory looks like *without* the bespoke ML promotion pipeline they were imagining building. Same `agent_workstreams`/`agent_memories` collections, three more lifecycle operations expressed as one-line `updateMany` calls. The "memory plane" earns its keep by getting smarter on its own.
+
 #### Why MongoDB for all of this
 
 The same vector primitives that drive service routing also drive workstream recall. The same document model that holds operational state holds the agent's working memory. `$lookup` joins the workstream's tool-call history with the underlying state documents (intents, scenarios). Change Streams on `agent_workstreams` power the dashboard's Workstreams tab. **There is no agent-memory product to buy, no Redis to operate, no separate consistency story to defend.**
@@ -358,7 +393,6 @@ The framework's evolutionary path is clean:
 - **Routing analytics** — a `routing_decisions` collection that captures every Stage 1 + Stage 2 outcome for offline learning and prompt tuning.
 - **Workstream merge/split** — when the user explicitly relates two threads ("the Munich one and the Hamburg one are both Q3 rollouts"), merge their entities and tool-call trails.
 - **Cross-host orchestrator clustering** — workstreams already live in MongoDB, not in process memory; multi-host orchestrator setups are a one-line change away (each instance picks up workstreams from `state == "open"`).
-- **Memory promotion/decay** — track which extracted facts actually get recalled by the ReAct loop, and use the access count as a relevance signal. Stale facts can decay (lowered confidence over time); often-used facts can be promoted into a "core knowledge" tier.
 
 None of these require a new engine. All are collections + indexes on the same Atlas cluster.
 
@@ -368,7 +402,7 @@ None of these require a new engine. All are collections + indexes on the same At
 
 ## 3.1 The 30-second elevator
 
-> *"We replace the data plumbing of an agentic AI platform — including the agent's own memory. Every team building an LLM agent today needs a service catalog, a routing brain, a working-memory store for active workstreams, a long-term memory store for semantic recall, an operational state DB, a graph for entity dependencies, a search engine, sometimes a time-series store. Most of them are wiring seven engines together and discovering the integration tax eats their roadmap. We deliver all of that — including the agent's mind — as features of one document database with native vector, graph, geospatial, time-series, and change streams. **One Atlas collection (`agent_workstreams`) drives routing context, long-term memory extraction, AND procedural replay** — same primitive, three uses, three demo moments. Kill the process anywhere; restart; the agent resumes. Because the state isn't in process memory, it's in Atlas."*
+> *"We replace the data plumbing of an agentic AI platform — including the agent's own memory. Every team building an LLM agent today needs a service catalog, a routing brain, a working-memory store for active workstreams, a long-term memory store for semantic recall, an operational state DB, a graph for entity dependencies, a search engine, sometimes a time-series store. Most of them are wiring seven engines together and discovering the integration tax eats their roadmap. We deliver all of that — including the agent's mind — as features of one document database with native vector, graph, geospatial, time-series, and change streams. **Two Atlas collections (`agent_workstreams` + `agent_memories`) drive routing context, long-term memory extraction, procedural replay, AND a self-curating promotion/decay lifecycle** — same primitives, four uses, four demo moments. Kill the process anywhere; restart; the agent resumes. Because the state isn't in process memory, it's in Atlas."*
 
 ## 3.2 Talking points by stakeholder
 
@@ -460,7 +494,7 @@ This is the most common pushback at the demo, and the honest answer is the model
 
 13b. **Show recall in action.** Open a brand-new conversation by starting a different Alpenmarkt store: *"I'm opening a second Alpenmarkt branch at Hamburg Altona. Same setup as Munich."* The live feed shows the workstream classifier opening a new WS, then a `[MEMORY] 🧠 Recalled 3 relevant fact(s) for this turn` line — the agent has loaded the Munich facts before generating its tool call. The submit_intent result includes the strict-retail-v3 template *without the user having mentioned it*. Talking point: *"That's cross-session knowledge transfer through the same Atlas cluster, no fine-tuning, no RAG pipeline. A document collection with a vector index is the memory plane."*
 
-13c. **🔁 The replay moment.** Re-do the previous step with the phrasing *"done with Munich. Let's set up the Hamburg branch the same way."* This single turn does THREE things at once:
+13c. **🔁 The replay moment.** Re-do the previous step with the phrasing *"done with Munich. Let's set up the Hamburg branch the same way."* This single turn does FOUR things at once:
    ```
    [WORKSTREAM] ✓ WS-2026-05-23-001 closed — user-signaled completion in query
    [WORKSTREAM] 🆕 WS-2026-05-23-002 opened — Set up Hamburg branch [ibn]
@@ -478,12 +512,20 @@ This is the most common pushback at the demo, and the honest answer is the model
    ```
    The orchestrator builds a "replay recipe" from the closed Munich workstream's `tool_calls` audit trail, filters out read-only/destructive calls (skip-list of verbs like `list_*`, `get_*`, `cancel_*`, `delete_*`), and injects it into the ReAct loop's system prompt. The LLM follows the recipe step by step, swapping IDs as new tool calls produce them. Talking point — *the line that lands the "agentic memory as a database primitive" pitch*: **"The agent didn't have to figure out what to do for Hamburg. The full sequence is on `agent_workstreams.tool_calls` as a document audit trail. Replay is `find_one()` + smart prompt construction. No workflow engine to write, no DAG to maintain — Atlas already had the procedure stored as documents."**
 
+13d. **⭐ The promotion moment.** Open a third Alpenmarkt branch — *"now do the same for Berlin Mitte"*. The strict-retail-v3 / fiber-uplink / 40ms-POS facts are recalled for the **third** time. The `_recall_memories` lifecycle ticks each `recall_count` past `MEMORY_PROMOTE_THRESHOLD = 3`, and a fresh broadcast line appears:
+   ```
+   [MEMORY] ⭐ Promoted to CORE (3 recalls): Alpenmarkt's standard retail SLA is strict-retail-v3.
+   [MEMORY] ⭐ Promoted to CORE (3 recalls): Marienplatz site uses fiber uplink UP-MUC-MAR-F10.
+   [MEMORY] ⭐ Promoted to CORE (3 recalls): POS latency target for retail intents is 40ms.
+   ```
+   On the next turn, the LLM's memory block labels these as `[CORE/template]` rather than `[EXTRACTED/template]`, signaling institutional knowledge. Talking point: *"The agent just curated its own memory. Three uses of a fact = it's not a one-off observation any more, it's how Alpenmarkt does retail. No re-training, no ML pipeline — one `updateMany` triggered by the recall counter on the same Atlas collection. The memory plane gets smarter on its own."*
+
 13. **Switch to the DTW domain.** *"What if we raise prepaid M downlink to 20 Mbps in NYC Saturday night?"* New workstream, new domain. Run `simulate scenario DTW-SCN-…` — the simulation service does `$graphLookup` + hybrid `$vectorSearch` in the same tool call. Open the DTW dashboard at `http://localhost:8080`. Talking point: *"Graph for operational structure, vector for institutional memory, change streams for the live UI — three Atlas features, one tool call. And it's all on the same cluster as the workstreams, the history, and the service catalog."*
 14. **The closing slide.** Show the polyglot-equivalent stack diagram (Postgres + pgvector + Elasticsearch + PostGIS + TimescaleDB + Debezium + Kafka + Redis-for-agent-state + Pinecone-for-agent-memory). Talking point: *"Same demo on that stack: maybe six months and three more engineers. Here: one Atlas cluster. Operational data, routing brain, agent's working memory, agent's long-term recall, raw command history, live UI — same primitives, same query language, same backup."*
 
 ## 3.6 The single sentence to leave behind
 
-> *"Atlas isn't just where your agentic AI platform stores its data — it's the data plane of the platform and the memory plane of the agent. Vector search is routing. Graph traversal is impact analysis. Time-series is telemetry. Change streams are the live UI. **One workstream collection drives three agentic capabilities at once — routing context, long-term memory extraction, and procedural replay.** Same primitive, three uses. Kill the process. Restart. Resume. The agent remembers because Atlas remembers."*
+> *"Atlas isn't just where your agentic AI platform stores its data — it's the data plane of the platform and the memory plane of the agent. Vector search is routing. Graph traversal is impact analysis. Time-series is telemetry. Change streams are the live UI. **Two collections (`agent_workstreams` + `agent_memories`) drive four agentic capabilities at once — routing context, long-term memory extraction, procedural replay, and a self-curating promotion/decay lifecycle.** Same primitives, four uses. Kill the process. Restart. Resume. The agent remembers because Atlas remembers — and remembers smarter over time, because the memory plane curates itself."*
 
 ---
 

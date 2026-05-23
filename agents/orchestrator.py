@@ -29,6 +29,21 @@ from openai import AsyncOpenAI
 BROADCAST_URL         = "https://notify.bjjl.dev/send"
 BROADCAST_RECEIVE_URL = "https://notify.bjjl.dev/receive"
 
+# ── Memory promotion / decay knobs ────────────────────────────────────────
+# Memories carry a `tier` field that signals their standing:
+#   "extracted"  — freshly mined from a closed workstream (default)
+#   "core"       — recalled ≥ MEMORY_PROMOTE_THRESHOLD times; agent treats
+#                  these as institutional knowledge with floored confidence
+#   "decayed"    — old + never recalled; filtered out of LLM context but
+#                  still inspectable via workstream_service tools
+# Tunables are kept here so the demo can be sped up by lowering the age
+# threshold (e.g. minutes instead of days) without code archaeology.
+MEMORY_PROMOTE_THRESHOLD          = 3        # recalls → promote to core
+MEMORY_CORE_CONFIDENCE_FLOOR      = 0.9      # confidence floor once core
+MEMORY_DECAY_AGE_SECONDS          = 14 * 24 * 3600   # 14 days
+MEMORY_DECAY_CONFIDENCE_FACTOR    = 0.7      # confidence multiplier on decay
+MEMORY_DECAY_SWEEP_INTERVAL_SEC   = 6 * 3600 # background sweep every 6 hours
+
 
 class Colors:
     RESET     = "\033[0m"
@@ -153,6 +168,7 @@ class OrchestratorAgent:
         self.memories = self.db["agent_memories"]
         self._memory_extract_tasks: set[asyncio.Task] = set()
         self._ws_closure_watcher: asyncio.Task | None = None
+        self._memory_decay_task:   asyncio.Task | None = None
 
         if not os.environ.get("OPENAI_API_KEY"):
             raise ValueError("OPENAI_API_KEY missing")
@@ -187,18 +203,21 @@ class OrchestratorAgent:
         await self._ensure_workstream_indexes()
         await self._ensure_memory_indexes()
         await self._resume_open_workstreams()
-        # Background tasks: filesystem watcher + workstream-closure watcher.
-        # The latter triggers long-term memory extraction whenever a
-        # workstream transitions to state=completed.
+        # Background tasks:
+        #   • filesystem watcher (mcp_servers/ changes)
+        #   • workstream-closure watcher (triggers memory extraction)
+        #   • memory decay sweep (slow timer, ages out unrecalled facts)
         self._watcher_task        = asyncio.create_task(self._watch_servers())
         self._ws_closure_watcher  = asyncio.create_task(self._watch_workstream_closures())
+        self._memory_decay_task   = asyncio.create_task(self._memory_decay_loop())
         # Catch-up: if any workstream was closed while the orchestrator
         # wasn't running, extract its memories now.
         await self._extract_backlog()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        for t in (self._watcher_task, self._ws_closure_watcher):
+        for t in (self._watcher_task, self._ws_closure_watcher,
+                  self._memory_decay_task):
             if t:
                 t.cancel()
                 await asyncio.gather(t, return_exceptions=True)
@@ -391,14 +410,19 @@ class OrchestratorAgent:
             now = datetime.datetime.now()
             ws_seq = ws_id.replace("WS-", "")
             docs = [{
-                "_id":           f"MEM-{ws_seq}-{i+1:02d}",
-                "workstream_id": ws_id,
-                "text":          f["text"],
-                "category":      f["category"],
-                "entities":      f["entities"],
-                "domain":        ws.get("domain"),
-                "confidence":    f["confidence"],
-                "extracted_at":  now,
+                "_id":              f"MEM-{ws_seq}-{i+1:02d}",
+                "workstream_id":    ws_id,
+                "text":             f["text"],
+                "category":         f["category"],
+                "entities":         f["entities"],
+                "domain":           ws.get("domain"),
+                "confidence":       f["confidence"],
+                "extracted_at":     now,
+                # Promotion / decay state — facts start in 'extracted' and
+                # move to 'core' on enough recalls or 'decayed' on age.
+                "tier":             "extracted",
+                "recall_count":     0,
+                "last_recalled_at": None,
             } for i, f in enumerate(clean)]
             try:
                 await self.memories.insert_many(docs, ordered=False)
@@ -422,11 +446,26 @@ class OrchestratorAgent:
 
     async def _recall_memories(self, query: str, domain: str | None = None,
                                 entities: list[str] | None = None,
-                                limit: int = 5) -> list[dict]:
+                                limit: int = 5,
+                                include_decayed: bool = False) -> list[dict]:
         """Recall reusable facts relevant to the current context. Uses
         Atlas Vector Search on agent_memories.text when the index is
         configured; falls back to entity-overlap + recency otherwise so
-        the demo always has something to surface."""
+        the demo always has something to surface.
+
+        Side effects every call:
+          • Increments `recall_count` and updates `last_recalled_at` for
+            each hit (this drives the promotion lifecycle).
+          • Promotes a fact to tier='core' when its recall_count crosses
+            MEMORY_PROMOTE_THRESHOLD.
+          • Resurrects a decayed fact back to 'extracted' if it gets
+            recalled again.
+
+        Decayed facts are filtered OUT by default — they're still in the
+        collection (inspectable via list_memories) but the LLM doesn't
+        see them in routine recall."""
+        hits: list[dict] = []
+
         # Vector path first
         try:
             vs_spec = {
@@ -439,6 +478,9 @@ class OrchestratorAgent:
             flt: dict = {}
             if domain:
                 flt["domain"] = {"$eq": domain}
+            if not include_decayed:
+                # Tier may be missing on older docs — match those as well
+                flt["tier"] = {"$ne": "decayed"}
             if flt:
                 vs_spec["filter"] = flt
             cursor = await self.memories.aggregate([
@@ -446,23 +488,135 @@ class OrchestratorAgent:
                 {"$project": {
                     "_id": 1, "text": 1, "category": 1, "entities": 1,
                     "domain": 1, "confidence": 1, "workstream_id": 1,
+                    "tier": 1, "recall_count": 1,
                     "score": {"$meta": "vectorSearchScore"},
                 }},
             ])
             hits = await cursor.to_list()
-            if hits:
-                return hits
         except Exception:
-            pass
+            hits = []
 
         # Fallback: entity overlap + recency
-        q: dict = {}
-        if domain:
-            q["domain"] = domain
-        if entities:
-            q["entities"] = {"$in": entities}
-        cursor = self.memories.find(q).sort("extracted_at", -1).limit(limit)
-        return [d async for d in cursor]
+        if not hits:
+            q: dict = {}
+            if domain:
+                q["domain"] = domain
+            if entities:
+                q["entities"] = {"$in": entities}
+            if not include_decayed:
+                q["tier"] = {"$ne": "decayed"}
+            cursor = self.memories.find(q).sort("extracted_at", -1).limit(limit)
+            hits = [d async for d in cursor]
+
+        # Update lifecycle state for each surfaced fact. Done as a single
+        # bulk update so recall is still ~one network round-trip.
+        if hits:
+            await self._mark_memories_recalled(hits)
+        return hits
+
+    async def _mark_memories_recalled(self, hits: list[dict]):
+        """Bump recall_count + last_recalled_at on each hit; promote to
+        'core' when the threshold is crossed; resurrect decayed facts."""
+        now = datetime.datetime.now()
+        promoted: list[dict] = []
+        resurrected: list[dict] = []
+        for h in hits:
+            mem_id        = h.get("_id")
+            current_tier  = h.get("tier") or "extracted"
+            current_count = int(h.get("recall_count") or 0)
+            new_count     = current_count + 1
+
+            update_ops: dict = {
+                "$inc": {"recall_count": 1},
+                "$set": {"last_recalled_at": now},
+            }
+
+            # Promotion: crossed the threshold and not already core
+            if new_count >= MEMORY_PROMOTE_THRESHOLD and current_tier != "core":
+                update_ops["$set"]["tier"] = "core"
+                # Floor confidence — core facts are institutional knowledge
+                if (h.get("confidence") or 0.0) < MEMORY_CORE_CONFIDENCE_FLOOR:
+                    update_ops["$set"]["confidence"] = MEMORY_CORE_CONFIDENCE_FLOOR
+                promoted.append(h)
+
+            # Resurrection: a decayed fact got recalled, restore it
+            elif current_tier == "decayed":
+                update_ops["$set"]["tier"] = "extracted"
+                resurrected.append(h)
+
+            try:
+                await self.memories.update_one({"_id": mem_id}, update_ops)
+                # Reflect the new state on the in-memory hit so callers
+                # (broadcast formatter, system-prompt builder) see it.
+                h["recall_count"] = new_count
+                if "tier" in update_ops["$set"]:
+                    h["tier"] = update_ops["$set"]["tier"]
+                if "confidence" in update_ops["$set"]:
+                    h["confidence"] = update_ops["$set"]["confidence"]
+            except Exception as e:
+                print(f"⚠️ memory recall-state update failed for {mem_id}: {e}")
+
+        for p in promoted:
+            await self._broadcast("MEMORY",
+                f"⭐ Promoted to CORE ({p.get('recall_count')} recalls): "
+                f"{(p.get('text') or '')[:120]}")
+        for r in resurrected:
+            await self._broadcast("MEMORY",
+                f"🌱 Resurrected (recalled again): {(r.get('text') or '')[:100]}")
+
+    async def _decay_memories_sweep(self) -> int:
+        """Mark stale unrecalled extracted memories as 'decayed' and lower
+        their confidence. Runs at startup and on a slow background timer.
+        Returns the number of facts touched (for broadcast)."""
+        cutoff = (datetime.datetime.now()
+                  - datetime.timedelta(seconds=MEMORY_DECAY_AGE_SECONDS))
+        # Use updateMany so the sweep is one network round-trip regardless
+        # of how many memories are due for decay.
+        try:
+            res = await self.memories.update_many(
+                {
+                    "tier": {"$in": ["extracted", None]},
+                    "recall_count": {"$in": [0, None]},
+                    "extracted_at": {"$lt": cutoff},
+                },
+                [
+                    {"$set": {
+                        "tier": "decayed",
+                        "decayed_at": datetime.datetime.now(),
+                        "confidence": {
+                            "$multiply": [
+                                {"$ifNull": ["$confidence", 0.5]},
+                                MEMORY_DECAY_CONFIDENCE_FACTOR,
+                            ]
+                        },
+                    }}
+                ],
+            )
+            n = res.modified_count or 0
+        except Exception as e:
+            print(f"⚠️ memory decay sweep failed: {e}")
+            return 0
+        if n:
+            await self._broadcast("MEMORY",
+                f"🍂 Decayed {n} stale fact(s) (unrecalled for "
+                f"{MEMORY_DECAY_AGE_SECONDS // 86400}+ days)")
+        return n
+
+    async def _memory_decay_loop(self):
+        """Background task that runs the decay sweep on a slow timer.
+        Cheap because the sweep is one updateMany; safe to run forever."""
+        # Run once shortly after boot so the live feed shows the line
+        await asyncio.sleep(5)
+        await self._decay_memories_sweep()
+        while True:
+            try:
+                await asyncio.sleep(MEMORY_DECAY_SWEEP_INTERVAL_SEC)
+                await self._decay_memories_sweep()
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                print(f"⚠️ memory decay loop: {e}; retrying in 60s")
+                await asyncio.sleep(60)
 
     async def _watch_servers(self):
         """Re-sync registry whenever a .py file in mcp_servers/ is added,
@@ -1815,13 +1969,34 @@ class OrchestratorAgent:
                 limit    = 5,
             )
             if recalled:
-                lines = [f"  • [{m.get('category','fact')}] {m.get('text','')}"
-                         for m in recalled]
-                memory_block = ("\n\nYou previously learned the following from "
-                                "past workstreams (use only if relevant):\n"
-                                + "\n".join(lines))
+                # Sort core facts first so the LLM weights them more — vector
+                # ranking is preserved within each tier.
+                tier_order = {"core": 0, "extracted": 1, "decayed": 2}
+                recalled = sorted(recalled,
+                    key=lambda m: tier_order.get(m.get("tier") or "extracted", 1))
+                # Each line carries tier + category labels so the model can
+                # treat 'core' facts as institutional knowledge.
+                lines = [
+                    f"  • [{(m.get('tier') or 'extracted').upper()}/"
+                    f"{m.get('category','fact')}] {m.get('text','')}"
+                    for m in recalled
+                ]
+                memory_block = (
+                    "\n\nYou previously learned the following from past "
+                    "workstreams (CORE facts are institutional knowledge "
+                    "with many recalls; use them when relevant):\n"
+                    + "\n".join(lines)
+                )
+                # Tier breakdown in the broadcast so the demo audience sees
+                # whether the agent is pulling fresh facts or settled ones.
+                tier_counts: dict = {}
+                for m in recalled:
+                    tier_counts[m.get("tier") or "extracted"] = (
+                        tier_counts.get(m.get("tier") or "extracted", 0) + 1)
+                tier_summary = ", ".join(
+                    f"{n} {t}" for t, n in sorted(tier_counts.items()))
                 await self._broadcast("MEMORY",
-                    f"🧠 Recalled {len(recalled)} relevant fact(s) for this turn")
+                    f"🧠 Recalled {len(recalled)} relevant fact(s) ({tier_summary})")
         except Exception as e:
             print(f"⚠️ memory recall failed (non-fatal): {e}")
 

@@ -298,10 +298,19 @@ def close_workstream(workstream_id: str, note: str = "completed") -> str:
 # task when a workstream closes. These tools expose read access so the
 # user can ask the agent "what do you remember about X?" explicitly.
 
+_TIER_EMOJI = {"core": "⭐", "extracted": "💎", "decayed": "🍂"}
+
+
 def _fmt_memory(m: dict, score: float | None = None) -> str:
+    tier = m.get("tier") or "extracted"
+    tier_badge = f"{_TIER_EMOJI.get(tier, '•')} {tier.upper()}"
     bits = [f"`{m.get('_id','?')}`",
+            tier_badge,
             f"_{m.get('category','fact')}_",
             f"[{m.get('domain','—')}]"]
+    n = int(m.get("recall_count") or 0)
+    if n:
+        bits.append(f"recalled {n}×")
     if score is not None:
         bits.append(f"similarity {score:.3f}")
     elif m.get("confidence") is not None:
@@ -356,7 +365,8 @@ def recall_facts(text: str = "", domain: str = None, limit: int = 5) -> str:
                 {"$project": {
                     "_id": 1, "text": 1, "category": 1, "domain": 1,
                     "entities": 1, "confidence": 1, "workstream_id": 1,
-                    "extracted_at": 1,
+                    "extracted_at": 1, "tier": 1, "recall_count": 1,
+                    "last_recalled_at": 1,
                     "score": {"$meta": "vectorSearchScore"},
                 }},
             ])
@@ -403,15 +413,26 @@ def list_memories(limit: int = 20) -> str:
     if not rows:
         return ("No memories yet. Memories are extracted automatically when "
                 "workstreams transition to state=completed.")
-    by_domain: dict = {}
+    # Tier-first grouping: core knowledge surfaces at the top, decayed
+    # facts at the bottom so the structure of the memory plane is visible.
+    tier_order = ["core", "extracted", "decayed"]
+    by_tier: dict = {t: [] for t in tier_order}
     for m in rows:
-        by_domain.setdefault(m.get("domain") or "—", []).append(m)
-    lines = [f"**{len(rows)} memor{'ies' if len(rows) != 1 else 'y'}, "
-             f"newest first.** Grouped by domain:"]
-    for d in sorted(by_domain.keys()):
+        by_tier.setdefault(m.get("tier") or "extracted", []).append(m)
+    n_core    = len(by_tier.get("core")      or [])
+    n_extr    = len(by_tier.get("extracted") or [])
+    n_decayed = len(by_tier.get("decayed")   or [])
+    lines = [
+        f"**{len(rows)} memor{'ies' if len(rows) != 1 else 'y'}** — "
+        f"⭐ {n_core} core · 💎 {n_extr} extracted · 🍂 {n_decayed} decayed",
+    ]
+    for t in tier_order:
+        bucket = by_tier.get(t) or []
+        if not bucket:
+            continue
         lines.append("")
-        lines.append(f"### {d} ({len(by_domain[d])})")
-        for m in by_domain[d]:
+        lines.append(f"### {_TIER_EMOJI.get(t, '•')} {t.upper()} ({len(bucket)})")
+        for m in bucket:
             lines.append("")
             lines.append(_fmt_memory(m))
     return "\n".join(lines)
