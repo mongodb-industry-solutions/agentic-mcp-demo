@@ -102,6 +102,22 @@
   }
   #queryInput::placeholder { color: var(--dim); }
   .input-hint { color: var(--dim); font-size: 11px; white-space: nowrap; }
+  #rSearchBar {
+    display: none;
+    padding: 5px 14px;
+    border-top: 1px solid var(--border);
+    background: rgba(0,212,255,0.06);
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 0;
+  }
+  #rSearchBar .rsq  { color: var(--cyan); }
+  #rSearchBar .rsm  { color: var(--text); }
+  #rSearchBar .rshi { background: rgba(0,212,255,0.25); border-radius: 2px; }
 
   /* ── Right: log + servers ── */
   .col-log {
@@ -329,10 +345,11 @@
   <!-- ── Left: chat ── -->
   <div class="col-chat">
     <div id="history"></div>
+    <div id="rSearchBar"></div>
     <div class="input-bar">
       <span class="input-prompt">You:</span>
       <input id="queryInput" type="text" placeholder="Ask anything…" autocomplete="off" />
-      <span class="input-hint">↵ send</span>
+      <span class="input-hint" id="inputHint">↵ send</span>
     </div>
   </div>
 
@@ -516,8 +533,121 @@ function connect() {
   };
 }
 
+// ── Reverse history search (Ctrl+R) ───────────────────────────────────────
+const rSearchBar = document.getElementById('rSearchBar');
+const inputHint  = document.getElementById('inputHint');
+let rsActive  = false;   // currently in search mode
+let rsQuery   = '';      // current search string
+let rsMatchIdx = -1;     // index into inputHistory of current match (-1 = no match)
+
+function rsEnter() {
+  rsActive   = true;
+  rsQuery    = '';
+  rsMatchIdx = -1;
+  rSearchBar.style.display = '';
+  inputHint.textContent    = 'esc cancel';
+  rsRender();
+}
+
+function rsExit(accept) {
+  rsActive             = false;
+  rSearchBar.style.display = 'none';
+  inputHint.textContent    = '↵ send';
+  if (!accept) {
+    // restore whatever was typed before Ctrl+R
+    input.value = savedDraft;
+  }
+  rsQuery    = '';
+  rsMatchIdx = -1;
+}
+
+function rsSearch(fromIdx) {
+  // Walk inputHistory from fromIdx downward (older) looking for rsQuery.
+  if (!rsQuery) { rsMatchIdx = -1; return; }
+  const q = rsQuery.toLowerCase();
+  for (let i = fromIdx; i < inputHistory.length; i++) {
+    if (inputHistory[i].toLowerCase().includes(q)) {
+      rsMatchIdx = i;
+      input.value = inputHistory[i];
+      input.setSelectionRange(input.value.length, input.value.length);
+      return;
+    }
+  }
+  rsMatchIdx = -1; // no match found
+}
+
+function rsRender() {
+  if (!rsActive) return;
+  const matchText = rsMatchIdx >= 0 ? inputHistory[rsMatchIdx] : '';
+  const q = esc(rsQuery);
+  let highlighted = '';
+  if (matchText) {
+    const idx = matchText.toLowerCase().indexOf(rsQuery.toLowerCase());
+    if (idx >= 0) {
+      highlighted =
+        esc(matchText.slice(0, idx))
+        + `<span class="rshi">${esc(matchText.slice(idx, idx + rsQuery.length))}</span>`
+        + esc(matchText.slice(idx + rsQuery.length));
+    } else {
+      highlighted = esc(matchText);
+    }
+  }
+  rSearchBar.innerHTML =
+    `(reverse-i-search)'<span class="rsq">${q}</span>': `
+    + (matchText
+        ? `<span class="rsm">${highlighted}</span>`
+        : `<span style="color:var(--dim);">(no match)</span>`);
+}
+
 // ── Submit ─────────────────────────────────────────────────────────────────
 input.addEventListener('keydown', (e) => {
+  // ── Ctrl+R: enter / cycle reverse search ──
+  if (e.ctrlKey && e.key === 'r') {
+    e.preventDefault();
+    if (!rsActive) {
+      savedDraft = input.value;
+      rsEnter();
+    } else {
+      // cycle to next older match
+      const start = rsMatchIdx >= 0 ? rsMatchIdx + 1 : 0;
+      rsSearch(start);
+      rsRender();
+    }
+    return;
+  }
+
+  // ── Keys while in reverse-search mode ──
+  if (rsActive) {
+    if (e.key === 'Escape' || (e.ctrlKey && (e.key === 'g' || e.key === 'c'))) {
+      e.preventDefault();
+      rsExit(false);
+      return;
+    }
+    if (e.key === 'Enter') {
+      // accept current match and fall through to normal submit
+      rsExit(true);
+      // let Enter propagate to the submit block below
+    } else if (e.key === 'Backspace') {
+      e.preventDefault();
+      rsQuery = rsQuery.slice(0, -1);
+      rsSearch(0);
+      rsRender();
+      return;
+    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      rsQuery += e.key;
+      rsSearch(0);
+      rsRender();
+      return;
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      // place cursor in input and exit search without clearing value
+      rsExit(true);
+      return;
+    } else if (e.key !== 'Enter') {
+      return; // ignore other special keys in search mode
+    }
+  }
+
   if (e.key === 'ArrowUp') {
     e.preventDefault();
     if (!inputHistory.length) return;

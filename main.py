@@ -125,6 +125,13 @@ async def interactive_loop():
         console.print("[red]❌ Missing MONGODB_URI[/]")
         return
 
+    # Ensure Ctrl+R reverse-search is bound — libedit (macOS default) does
+    # not always register it automatically the way GNU readline does.
+    try:
+        readline.parse_and_bind(r'"\C-r": reverse-search-history')
+    except Exception:
+        pass
+
     # Seed readline's in-memory history from the shared MongoDB collection
     # so cursor-up works from the first prompt — including across machines.
     try:
