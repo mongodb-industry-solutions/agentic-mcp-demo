@@ -4,9 +4,15 @@
 #
 
 """
-Memory Service - User Preferences and Personal Information Storage
+Memory Service — User Preferences and Personal Information Storage.
 
-Store, recall, list, and delete user preferences, personal facts, and context:
+Store, recall, list, and delete user preferences, personal facts, and
+context the user EXPLICITLY shares about themselves. Not to be confused
+with the orchestrator's internal `agent_memories` (auto-extracted from
+closed workstreams) — this service is the surface where users say
+"remember that I…" and read it back later.
+
+What lives here:
 - Personal information (name, location, profession, dietary restrictions)
 - Preferences (likes, dislikes, interests, habits)
 - Hobbies and activities (sports, series, movies, reading)
@@ -17,15 +23,42 @@ Store, recall, list, and delete user preferences, personal facts, and context:
 - Shopping preferences (brands, budgets, past purchases)
 - Travel preferences (destinations, airline preferences)
 
-Use this service when users say:
-- Store: "remember", "merke dir", "speichere", "ich bin", "ich habe", "ich investiere"
-- Store preferences: "ich mag", "ich schaue gerne", "ich liebe", "ich bevorzuge"
-- Recall: "erinnere dich", "was weißt du", "meine präferenzen"
-- List all: "sage mir was du weißt", "zeig alles", "liste alle memories"
-- Delete specific: "vergiss", "forget", "lösche", "entferne", "ich bin nicht mehr"
-- Delete ALL: "vergiss alles", "forget everything", "lösche alles", "delete all"
+Use this service when users say (English):
+- Identity / facts:  "I am X", "I'm a X", "I have X", "my name is X",
+                     "I live in X", "I work as X", "I invest in X"
+- Preferences:       "I like X", "I love X", "I enjoy X", "I prefer X",
+                     "I'm into X", "I'm a fan of X", "I'm interested in X",
+                     "my favorite X is Y"
+- Negative prefs:    "I don't like X", "I hate X", "I avoid X",
+                     "I'm allergic to X"
+- Explicit remember: "remember that …", "note that …", "keep in mind …",
+                     "for the record …", "for future reference …"
+- Recall:            "what do you know about me", "what are my preferences",
+                     "what did I tell you about X", "do you remember X"
+- List all:          "list memories", "list all memories", "show all memories",
+                     "show what you remember", "memories"
+- Delete one:        "forget X", "I'm not X anymore", "stop remembering X"
+- Delete all:        "forget everything", "delete all memories",
+                     "clear memories", "wipe memories"
 
-Supports both permanent facts and temporary context with automatic expiration.
+Use this service when users say (German / Deutsch):
+- Speichern:         "ich bin X", "ich habe X", "ich heiße X", "ich mag X",
+                     "ich liebe X", "ich bevorzuge X", "ich investiere X"
+- Erinnern:          "merke dir", "speichere", "erinnere dich an",
+                     "behalte im Gedächtnis"
+- Abrufen:           "erinnere dich", "was weißt du", "meine Präferenzen",
+                     "sage mir was du weißt"
+- Löschen:           "vergiss", "lösche", "entferne", "ich bin nicht mehr X"
+- Alle löschen:      "vergiss alles", "lösche alles"
+
+Supports both permanent facts and temporary context (auto-expires
+after 10 minutes via a TTL index on createdAt).
+
+NOT for: tasks/todos the user wants to do (that's todo_service), nor
+for the orchestrator's auto-extracted workstream knowledge (that's
+agent_memories, surfaced via workstream_service.list_memories /
+recall_facts). This service is the user's deliberate self-disclosure
+channel.
 """
 
 import logging, os, datetime
