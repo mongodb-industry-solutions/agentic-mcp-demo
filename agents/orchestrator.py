@@ -1063,6 +1063,33 @@ class OrchestratorAgent:
         """
         open_ws = await self._open_workstreams_for_classifier()
 
+        # ── Fast-path: pure-closure heuristic ─────────────────────────────
+        # When the query is an unambiguous goodbye ("done with TODOs",
+        # "we're finished", "wrap up"), skip the classifier LLM call
+        # entirely. Saves an LLM round-trip AND avoids the classic
+        # action='continue'-with-hallucinated-id fallthrough that used
+        # to fabricate a new workstream out of a closure cue.
+        if self._is_pure_closure_cue(query):
+            target = next((w for w in open_ws
+                           if w.get("state") == "open"), None) \
+                     or (open_ws[0] if open_ws else None)
+            if target:
+                target_id = target["_id"]
+                if target.get("state") != "completed":
+                    await self._close_workstream(target_id,
+                        reason="closure cue inferred from query")
+                await self._broadcast("WORKSTREAM",
+                    f"⏸ Closure-only query — no new workstream; "
+                    f"using {target_id} for context (LLM skipped)")
+                return (target_id, False, target.get("domain"), None, True)
+            # No open or recent workstream to close — still a closure,
+            # just nothing for it to act on. Signal pure-closure so
+            # process_query short-circuits with a 'nothing to close'
+            # reply rather than creating a fresh workstream.
+            await self._broadcast("WORKSTREAM",
+                "⏸ Closure-only query — nothing to close (LLM skipped)")
+            return (None, False, None, None, True)
+
         # No open workstreams → trivially a new one (no replay candidate)
         if not open_ws:
             title, domain_hint = await self._propose_new_workstream(query)
@@ -1179,54 +1206,41 @@ class OrchestratorAgent:
 
         action = (decision.get("action") or "").lower()
 
-        # Pure-closure guard: when the user just says 'done with TODOs',
-        # 'we're finished', 'wrap up' etc., the classifier sometimes still
-        # picks action='new' with a generic recap title ('Manage Personal
-        # TODOs') — fabricating a workstream out of a goodbye. Refuse:
-        # short queries containing closure verbs do not get a fresh
-        # workstream. Reuse the most-recent open/closed workstream's id
-        # as context for the agent's acknowledgement reply.
-        if action == "new":
-            q_low = query.lower().strip()
-            closure_verbs = ("done", "finished", "wrap up", "wrap-up",
-                             "that's it", "thats it", "we're done", "we are done",
-                             "all done", "complete", "completed", "no more")
-            looks_pure_closure = (
-                len(query.split()) <= 8
-                and any(v in q_low for v in closure_verbs)
-            )
-            if looks_pure_closure:
-                # Prefer the workstream the classifier already named for
-                # closure; else fall back to the most-recently-active one
-                # (open_ws is sorted recency-first and includes both open
-                # and recently-closed workstreams from the classifier's
-                # input set).
-                target_id = close_id or (open_ws[0]["_id"] if open_ws else None)
-                target = next((w for w in open_ws if w["_id"] == target_id),
-                              None) if target_id else None
-                if target_id:
-                    # CLOSE the target if it's still open. close_id was
-                    # already closed by the block above; only the fallback
-                    # path (open_ws[0]) needs the explicit close here.
-                    if target_id != close_id and target \
-                            and target.get("state") != "completed":
-                        await self._close_workstream(target_id,
-                            reason="closure cue inferred from query")
-                    await self._broadcast("WORKSTREAM",
-                        f"⏸ Closure-only query — using {target_id} for "
-                        f"context, not opening a new workstream")
-                    return (target_id, False,
-                            (target or {}).get("domain"), replay_id, True)
-                # No prior workstream at all — extremely rare on a populated
-                # session. Fall through to the normal new-workstream path
-                # rather than returning None (process_query expects an id).
+        # Post-LLM closure safety net. The upfront _is_pure_closure_cue
+        # heuristic catches short, unambiguous goodbyes; this catches
+        # the longer closures the LLM identified via its own prompt
+        # rules (e.g. "I'm done with the setup of Marienplatz network"
+        # — 10 words, over the heuristic's 8-word cap). If the LLM set
+        # closes_workstream AND chose action='new', treat as pure
+        # closure rather than fabricating a workstream out of a goodbye.
+        if action == "new" and close_id and \
+                any(w["_id"] == close_id for w in open_ws):
+            target = next((w for w in open_ws if w["_id"] == close_id), None)
+            await self._broadcast("WORKSTREAM",
+                f"⏸ Closure intent recognized — using {close_id} for "
+                f"context, not opening a new workstream")
+            return (close_id, False,
+                    (target or {}).get("domain"), replay_id, True)
 
         if action == "continue":
             ws_id = decision.get("workstream_id")
             ws = next((w for w in open_ws if w["_id"] == ws_id), None)
             if ws and ws_id != close_id:  # don't continue what we just closed
                 return ws["_id"], False, ws.get("domain"), replay_id, False
-            # Hallucinated id or we just closed it — fall through to "new"
+            # Hallucinated id or we just closed it. Two cases:
+            #   (a) close_id is set — LLM intended a closure but gave a
+            #       bad continuation id. Treat as pure closure with
+            #       close_id as the context target.
+            #   (b) no close_id — pure hallucination. Fall through to
+            #       new-workstream creation as before.
+            if close_id and any(w["_id"] == close_id for w in open_ws):
+                target = next((w for w in open_ws
+                               if w["_id"] == close_id), None)
+                await self._broadcast("WORKSTREAM",
+                    f"⏸ Closure intent recognized (continue→bad id) — "
+                    f"using {close_id} for context")
+                return (close_id, False,
+                        (target or {}).get("domain"), replay_id, True)
             if not ws:
                 await self._broadcast("ROUTING",
                     f"⚠ Workstream classify returned unknown id {ws_id!r}; opening new WS")
@@ -1324,6 +1338,48 @@ class OrchestratorAgent:
     def _is_replayable_tool(cls, tool_name: str) -> bool:
         t = (tool_name or "").lower()
         return not any(t.startswith(p) for p in cls._REPLAY_SKIP_PREFIXES)
+
+    # Multi-word closure phrases. The standalone word "done" is deliberately
+    # NOT in this list — it matches benign queries like "delete done todos"
+    # or "show me what's done". The phrases here are unambiguous closure
+    # cues that cannot be misread as anything else.
+    _CLOSURE_PATTERNS = (
+        "done with",
+        "all done",
+        "i'm done", "im done", "i am done",
+        "we're done", "were done", "we are done",
+        "i'm finished", "im finished", "i am finished",
+        "we're finished", "we are finished",
+        "let's wrap up", "lets wrap up",
+        "wrap up", "wrap-up", "wrapping up",
+        "that's it", "thats it",
+        "that's all", "thats all",
+    )
+    _QUESTION_STARTERS = (
+        "are ", "is ", "do ", "did ", "does ", "have ", "has ",
+        "can ", "could ", "should ", "will ", "would ", "may ", "might ",
+        "why ", "when ", "where ", "what ", "what's ", "whats ",
+        "who ", "how ",
+    )
+
+    @classmethod
+    def _is_pure_closure_cue(cls, query: str) -> bool:
+        """
+        Detect short, unambiguous closure cues. Used as an upfront
+        fast-path in _classify_workstream to skip the classifier LLM
+        call entirely on goodbye turns like "done with TODOs".
+
+        Anti-patterns: questions (ends with '?', starts with 'are/is/do/...'),
+        long queries (>8 words — likely mixed intent).
+        """
+        q = (query or "").strip().lower()
+        if not q or len(q.split()) > 8:
+            return False
+        if q.endswith("?"):
+            return False
+        if any(q.startswith(s) for s in cls._QUESTION_STARTERS):
+            return False
+        return any(p in q for p in cls._CLOSURE_PATTERNS)
 
     async def _build_replay_recipe(self, source_ws_id: str,
                                     target_workstream_id: str) -> str:
@@ -2126,12 +2182,18 @@ class OrchestratorAgent:
         # confirm'). Short-circuit with a canned acknowledgement instead.
         if was_pure_closure:
             await self._broadcast("AGENT", "Closure acknowledged — no tool call needed")
-            ws_doc = await self.workstreams.find_one(
-                {"_id": ws_id}, {"title": 1})
-            title = (ws_doc or {}).get("title") or ws_id
-            answer = (f"Got it — closed the **{title}** workstream "
-                      f"(`{ws_id}`). Long-term memory extraction will run "
-                      f"in the background.")
+            if ws_id:
+                ws_doc = await self.workstreams.find_one(
+                    {"_id": ws_id}, {"title": 1})
+                title = (ws_doc or {}).get("title") or ws_id
+                answer = (f"Got it — closed the **{title}** workstream "
+                          f"(`{ws_id}`). Long-term memory extraction will "
+                          f"run in the background.")
+            else:
+                # Closure cue but nothing open to close — first-turn or
+                # already-empty session. Don't fabricate a workstream.
+                answer = ("Nothing to close — there are no active "
+                          "workstreams to wrap up.")
             # Still record the conversation turn so the next classifier
             # has continuity, but skip ReAct entirely.
             self.conversation_history.append({"role": "user", "content": user_input})

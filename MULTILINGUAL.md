@@ -22,13 +22,21 @@ Three friction layers in `agents/orchestrator.py`:
 
 ### 2.1 Keyword heuristics (the brittle ones)
 
-**Pure-closure guard.** `_classify_workstream` runs a Python regex on a literal list:
+**Pure-closure guard.** `_classify_workstream` runs a substring-match on an English pattern list (the actual constants live near `_REPLAY_SKIP_PREFIXES`):
 ```python
-closure_verbs = ("done", "finished", "wrap up", "wrap-up",
-                 "that's it", "thats it", "we're done", "we are done",
-                 "all done", "complete", "completed", "no more")
+_CLOSURE_PATTERNS = (
+    "done with", "all done",
+    "i'm done", "im done", "i am done",
+    "we're done", "were done", "we are done",
+    "i'm finished", "im finished", "i am finished",
+    "we're finished", "we are finished",
+    "let's wrap up", "lets wrap up",
+    "wrap up", "wrap-up", "wrapping up",
+    "that's it", "thats it", "that's all", "thats all",
+)
+_QUESTION_STARTERS = ("are ", "is ", "do ", "did ", "what ", "how ", …)
 ```
-A German user typing *"fertig mit den TODOs"* or *"erledigt"* matches none of these → the closure-short-circuit fast path doesn't fire → the orchestrator runs Stage 1 / Stage 2 / ReAct and the LLM speculates a tool call ("let me list_todos to confirm").
+A German user typing *"fertig mit den TODOs"* or *"erledigt"* matches none of these → the closure-short-circuit fast path doesn't fire → the orchestrator pays a classifier LLM call (and risks the LLM mis-routing the goodbye into a tool invocation).
 
 **Self-contained verb gate.** `process_query` decides whether to run the context-enrichment branch based on the first word of the query:
 ```python
