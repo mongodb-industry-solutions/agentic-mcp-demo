@@ -1233,6 +1233,8 @@ class OrchestratorAgent:
         # No open workstreams → trivially a new one (no replay candidate)
         if not open_ws:
             title, domain_hint = await self._propose_new_workstream(query)
+            if domain_filter and len(domain_filter) == 1:
+                domain_hint = domain_filter[0]
             ws_id = await self._create_workstream(title, domain_hint, query)
             return ws_id, True, domain_hint, None, False, []
 
