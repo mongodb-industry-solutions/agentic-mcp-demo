@@ -1555,6 +1555,84 @@ class OrchestratorAgent:
                     return topic
         return ""
 
+    # ─── Meta / introspection queries ────────────────────────────────────
+    # A workstream represents a thread of goal-directed work. Queries that
+    # only inspect orchestrator state ("list my workstreams", "what's in
+    # memory", "routing analytics") are NOT workstream-worthy: they
+    # shouldn't open a new workstream and they shouldn't pollute an
+    # existing workstream's tool_calls audit with read-only meta-tool
+    # calls. _is_meta_query is the upfront heuristic; _META_TOOL_PREFIXES
+    # backs a retro-detach guard for cases the heuristic missed.
+    _META_QUERY_PATTERNS = (
+        # Workstream introspection
+        "what are my workstream", "list my workstream", "list workstream",
+        "list open workstream", "list the workstream",
+        "show me my workstream", "show my workstream", "show workstream",
+        "which workstream", "open workstream", "active workstream",
+        "any workstream", "current workstream",
+        # Memory introspection
+        "what do you remember", "what's in memor", "whats in memor",
+        "list memorie", "list memor", "list my memor",
+        "show memorie", "show me memor", "show memor", "show my memor",
+        "my memorie", "my memories",
+        "recall fact", "recall everything", "recall all",
+        "forget memor",
+        # Routing analytics
+        "routing analytic", "routing summary", "routing stat",
+        "routing performance", "routing metric", "routing miss",
+        "any routing miss", "service usage", "slow routing",
+        "any slow routing", "how is the routing", "how is routing",
+        "show me routing", "show routing",
+        # Service introspection
+        "list service", "show service", "which service",
+        "available service", "what service",
+    )
+
+    # Read-only meta tools — if EVERY tool a turn called matches one of
+    # these prefixes, retro-detach (don't append to a workstream).
+    _META_TOOL_PREFIXES = (
+        "list_workstream", "close_workstream", "list_memor",
+        "recall_fact", "forget_memor",
+        "routing_summary", "routing_misses", "slow_routing",
+        "service_usage",
+    )
+
+    @classmethod
+    def _is_meta_query(cls, query: str) -> bool:
+        """
+        Detect introspection / observability queries that should NOT
+        open or attach to any workstream. Pattern-based, substring
+        match on lowercased query. Cheap, deterministic, low false-
+        positive rate.
+
+        False-positive guard: queries that LOOK observability but are
+        about domain entities (e.g. 'show me my TODOs' — TODOs are a
+        domain noun, not workstream nouns) are NOT matched — the
+        patterns target workstream/memory/routing nouns specifically.
+        """
+        q = (query or "").strip().lower()
+        if not q:
+            return False
+        return any(p in q for p in cls._META_QUERY_PATTERNS)
+
+    @classmethod
+    def _is_meta_tool(cls, tool_name: str) -> bool:
+        """True iff this tool name is a read-only meta tool."""
+        t = (tool_name or "").lower()
+        return any(t.startswith(p) or p in t for p in cls._META_TOOL_PREFIXES)
+
+    @classmethod
+    def _all_tools_are_meta(cls, tool_names: List[str]) -> bool:
+        """
+        True iff every tool in `tool_names` matches a meta prefix.
+        Used by the retro-detach guard at the end of process_query
+        to suppress workstream tool_calls appends for turns the
+        upfront heuristic missed.
+        """
+        if not tool_names:
+            return False
+        return all(cls._is_meta_tool(t) for t in tool_names)
+
     @classmethod
     def _workstream_matches_topic(cls, ws: dict, topic: str) -> bool:
         """
@@ -2356,28 +2434,53 @@ class OrchestratorAgent:
         context_window = self.conversation_history[-4:] if self.conversation_history else []
         last_user_queries = [msg["content"] for msg in context_window if msg["role"] == "user"]
 
-        # ── Workstream classification ─────────────────────────────────────
-        # Before routing, decide which workstream this query continues (or
-        # whether it opens a new one). The chosen workstream's domain
-        # becomes the sticky bias for Stage 1 below, which means routing
-        # respects multi-turn intent rather than just the last turn.
-        # The classifier also detects (a) implicit closure cues and (b)
-        # 'do the same thing for X' replay requests.
-        ws_id, ws_is_new, ws_domain, replay_source_id, was_pure_closure, closed_ids = \
-            await self._classify_workstream(user_input, last_user_queries)
-        self.current_workstream_id = ws_id
-        if not ws_is_new and not was_pure_closure:
-            await self._broadcast("WORKSTREAM", f"↪ {ws_id} continued")
-        self._decision_set(
-            workstream_id=ws_id,
-            workstream_is_new=ws_is_new,
-            workstream_domain=ws_domain,
-            replay_source_id=replay_source_id,
-            was_pure_closure=was_pure_closure,
-            closed_workstreams=closed_ids)
-        # Workstream domain takes precedence over last_domain for stickiness
-        if ws_domain:
-            self.last_domain = ws_domain
+        # ── Meta-query short-circuit ──────────────────────────────────────
+        # Introspection queries ('list my workstreams', 'what's in memory',
+        # 'routing analytics') are NOT goal-directed work — they should
+        # never open a workstream nor pollute an existing workstream's
+        # tool_calls audit. Skip _classify_workstream entirely and route
+        # with current_workstream_id=None. Routing + ReAct still run so
+        # the right observability MCP tool gets called; the attach-to-
+        # workstream block downstream is a no-op when ws_id is None.
+        is_meta_query = self._is_meta_query(user_input)
+        if is_meta_query:
+            await self._broadcast("WORKSTREAM",
+                "⚙ Meta / introspection query — skipping workstream "
+                "classification; not attaching tool calls to any workstream")
+            self.current_workstream_id = None
+            self._decision_set(meta_query=True)
+            ws_id = None
+            ws_is_new = False
+            ws_domain = None
+            replay_source_id = None
+            was_pure_closure = False
+            closed_ids: List[str] = []
+        else:
+            # ── Workstream classification ─────────────────────────────────
+            # Before routing, decide which workstream this query continues
+            # (or whether it opens a new one). The chosen workstream's
+            # domain becomes the sticky bias for Stage 1 below, which
+            # means routing respects multi-turn intent rather than just
+            # the last turn. The classifier also detects (a) implicit
+            # closure cues and (b) 'do the same thing for X' replay
+            # requests.
+            ws_id, ws_is_new, ws_domain, replay_source_id, \
+                was_pure_closure, closed_ids = \
+                await self._classify_workstream(user_input, last_user_queries)
+            self.current_workstream_id = ws_id
+            if not ws_is_new and not was_pure_closure:
+                await self._broadcast("WORKSTREAM", f"↪ {ws_id} continued")
+            self._decision_set(
+                workstream_id=ws_id,
+                workstream_is_new=ws_is_new,
+                workstream_domain=ws_domain,
+                replay_source_id=replay_source_id,
+                was_pure_closure=was_pure_closure,
+                closed_workstreams=closed_ids,
+                meta_query=False)
+            # Workstream domain takes precedence over last_domain
+            if ws_domain:
+                self.last_domain = ws_domain
 
         # ── Closure-only short-circuit ────────────────────────────────────
         # The user just said goodbye to one or more workstreams ('done with
@@ -2654,14 +2757,26 @@ class OrchestratorAgent:
                     tool_calls_count += 1
                     await self._broadcast("RESULT", self._format_result_preview(res_txt))
                     # Append every successful tool call to the workstream's
-                    # audit trail. This is what survives across process
-                    # restarts and powers the dashboard's history panel.
+                    # audit trail — UNLESS the call is a read-only meta
+                    # tool (list_workstreams, recall_facts, routing_summary
+                    # etc.) inside a non-meta turn. The upfront meta-query
+                    # heuristic catches most introspection queries; this
+                    # is a belt-and-braces guard for cases where the
+                    # heuristic missed but the agent ended up calling
+                    # only meta tools anyway.
                     if self.current_workstream_id:
-                        try:
-                            await self._attach_to_workstream(
-                                self.current_workstream_id, user_input, srv, tool, res_txt)
-                        except Exception as e:
-                            print(f"⚠️ workstream attach failed: {e}")
+                        if self._is_meta_tool(tool):
+                            self._current_decision["meta_tool_calls_filtered"] = (
+                                self._current_decision.get(
+                                    "meta_tool_calls_filtered", 0) + 1
+                            )
+                        else:
+                            try:
+                                await self._attach_to_workstream(
+                                    self.current_workstream_id,
+                                    user_input, srv, tool, res_txt)
+                            except Exception as e:
+                                print(f"⚠️ workstream attach failed: {e}")
                     if res_txt.startswith("VERBATIM:"):
                         await self._persist_decision(
                             tool_calls_count=tool_calls_count,
