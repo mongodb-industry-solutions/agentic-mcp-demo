@@ -4,10 +4,13 @@
 #
 
 """
-Preferences Service — User Preferences and Personal Information Storage.
+Preferences Service — User self-disclosure: 'I love X', 'I'm a X',
+'I prefer Y', 'I hate Z', 'remember that I…', 'my favorite is X',
+'I'm allergic to Y'. Stores personal facts, preferences, hobbies,
+restrictions, routines.
 
-Store, recall, list, and delete user preferences, personal facts, and
-context the user EXPLICITLY shares about themselves. Distinct from the
+Store, recall, list, and delete user preferences and personal facts
+the user EXPLICITLY shares about themselves. Distinct from the
 orchestrator's internal `agent_memories` collection (auto-extracted
 from closed workstreams) — this service backs the user-facing
 "preferences plane": the surface where users say "remember that I…"
