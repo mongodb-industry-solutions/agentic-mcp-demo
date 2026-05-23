@@ -40,11 +40,9 @@ This service does NOT submit scenarios, look up plans/QoS/traffic models
 directly, or walk the graph standalone — those are the scenario, plan,
 traffic, and topology DTW services respectively.
 
-This service operates exclusively on a previously-submitted DTW scenario id
-of the form `DTW-SCN-###`. Its only entry points are the analytical
-`simulate_qos_change(scenario_id)` and `simulate_roaming_change(scenario_id)`
-tools. If the user's request does not name a `DTW-SCN-###` scenario id,
-this service is the wrong tool.
+Both simulation tools accept either a pre-existing `scenario_id` or a
+free-text `text` description — when only text is given, the scenario is
+created inline and the simulation runs immediately in one step.
 """
 
 import datetime
@@ -52,7 +50,8 @@ import json
 import logging
 import os
 
-from pymongo import MongoClient
+from openai import OpenAI
+from pymongo import MongoClient, DESCENDING
 from mcp.server.fastmcp import FastMCP
 
 logging.disable(logging.WARNING)
@@ -70,6 +69,72 @@ topology_edges     = db["dtw_topology_edges"]
 traffic_models     = db["dtw_traffic_models"]
 subscribers        = db["dtw_subscribers"]
 knowledge_chunks   = db["dtw_knowledge_chunks"]
+markets_coll       = db["dtw_markets"]
+
+openai_client      = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+PARSE_MODEL        = os.environ.get("OPENAI_MODEL", "gpt-4o")
+
+
+def _next_scenario_id() -> str:
+    last = scenarios.find_one(
+        {"_id": {"$regex": r"^DTW-SCN-\d+$"}},
+        sort=[("_id", DESCENDING)],
+    )
+    return "DTW-SCN-001" if not last else f"DTW-SCN-{int(last['_id'].split('-')[-1]) + 1:03d}"
+
+
+def _create_scenario_inline(text: str) -> str:
+    """Parse a natural-language what-if request and persist it as a scenario.
+    Returns the new scenario_id."""
+    known_plans   = [p["_id"] for p in plans.find({}, {"_id": 1})]
+    known_qos     = [q["_id"] for q in qos_profiles.find({}, {"_id": 1})]
+    known_markets = [m["_id"] for m in markets_coll.find({}, {"_id": 1})]
+
+    prompt = (
+        f"You are a parser for telecom what-if scenarios on a digital twin. "
+        f"Today is {datetime.date.today().isoformat()}.\n\n"
+        f"Extract structured fields from this request:\n\n{text!r}\n\n"
+        f"Known plans: {', '.join(known_plans)}\n"
+        f"Known QoS profiles: {', '.join(known_qos)}\n"
+        f"Known markets: {', '.join(known_markets)}\n\n"
+        "Return ONLY valid JSON with this schema:\n"
+        '{\n  "scenario_type": "qos_change"|"policy_change"|"other",\n'
+        '  "change_set": {\n'
+        '    "plan_id": string|null, "old_qos_profile_id": string|null,\n'
+        '    "new_qos_profile_id": string|null,\n'
+        '    "apn_change": {"from":string,"to":string}|null,\n'
+        '    "pcrf_template_change": {"from":string,"to":string}|null,\n'
+        '    "roaming_enable": string[]|null\n  },\n'
+        '  "scope": {"markets": string[], "time_windows": string[]},\n'
+        '  "summary": string\n}'
+    )
+    resp = openai_client.chat.completions.create(
+        model=PARSE_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+    )
+    raw = resp.choices[0].message.content.strip()
+    raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    parsed = json.loads(raw)
+
+    sid = _next_scenario_id()
+    cs  = parsed.get("change_set") or {}
+    sc  = parsed.get("scope") or {}
+    scenarios.insert_one({
+        "_id":           sid,
+        "description":   parsed.get("summary") or text[:120],
+        "scenario_type": parsed.get("scenario_type") or "other",
+        "raw_text":      text,
+        "change_set":    cs,
+        "scope":         sc,
+        "status":        "submitted",
+        "submitted_at":  datetime.datetime.now(),
+        "history":       [{"ts": datetime.datetime.now(), "event": "submitted",
+                           "note": "inline-created by simulation service"}],
+        "results":       None,
+    })
+    logger.info(f"Inline-created scenario {sid}")
+    return sid
 
 
 # ─── Thresholds (per DTW-POL-002 in seed data) ─────────────────────────────
@@ -379,28 +444,28 @@ def _hybrid_knowledge_search(fingerprint: str, scenario: dict) -> tuple[list, li
 # ─── Public tools ─────────────────────────────────────────────────────────
 
 @mcp.tool()
-def simulate_qos_change(scenario_id: str) -> str:
+def simulate_qos_change(scenario_id: str = None, text: str = None) -> str:
     """
-    Run a QoS-uplift simulation for a previously submitted scenario.
+    Run a QoS-uplift simulation (Flow A). Accepts either a pre-created
+    scenario id OR a natural-language description — when text is given,
+    the scenario is created inline before the simulation runs.
 
     Performs four steps in one tool call:
-
       1) Resolve plan + old/new QoS profiles from the scenario change_set.
-      2) Run $graphLookup downstream from the plan node to enumerate the
-         affected dependency tree (cells → eNBs → SGW → PGW).
-      3) Project per-cell utilization using dtw_traffic_models combined
-         with the QoS ratio; roll-up to eNB and PGW.
-      4) Run a hybrid $vectorSearch + structured-filter query on
-         dtw_knowledge_chunks to surface analogous past scenarios and
-         their mitigation playbooks.
-
-    The full results document is persisted on the scenario (so the
-    dashboard can render it via change streams) and a human-readable
-    summary is returned for the LLM to narrate.
+      2) $graphLookup downstream from the plan node (cells → eNBs → SGW → PGW).
+      3) Per-cell utilization projection from dtw_traffic_models + QoS ratio.
+      4) Hybrid $vectorSearch + structured filter on dtw_knowledge_chunks for
+         analogous past scenarios and their mitigation playbooks.
 
     Args:
-        scenario_id: Scenario id, e.g. 'DTW-SCN-003'.
+        scenario_id: Existing scenario id, e.g. 'DTW-SCN-003'. Optional when text is given.
+        text:        Natural-language what-if request (e.g. 'Raise ACME M downlink to 20 Mbps
+                     in NYC Saturday evening'). Used to create the scenario inline.
     """
+    if not scenario_id and text:
+        scenario_id = _create_scenario_inline(text)
+    if not scenario_id:
+        return "❌ Provide either scenario_id or text describing the QoS change."
     s = scenarios.find_one({"_id": scenario_id})
     if not s:
         return f"❌ Scenario {scenario_id} not found."
@@ -574,15 +639,28 @@ def simulate_qos_change(scenario_id: str) -> str:
 
 
 @mcp.tool()
-def simulate_roaming_change(scenario_id: str) -> str:
+def simulate_roaming_change(scenario_id: str = None, text: str = None) -> str:
     """
     Run a control-plane simulation for an APN / PCRF / roaming-enable
     scenario (Flow B). Projects HSS query-rate and attach-rate impact and
     surfaces analogous past scenarios via the hybrid vector search.
 
+    Pass either scenario_id (pre-created) or text (free-form description of
+    the change — the scenario is created inline). You do not need to call
+    dtw_scenario_service first.
+
     Args:
-        scenario_id: Scenario id.
+        scenario_id: Pre-existing scenario id (DTW-SCN-###), if available.
+        text:        Natural-language description of the APN/PCRF/roaming
+                     change (e.g. "Migrate ACME M to new APN, update PCRF
+                     template, enable Canada roaming"). Used when no
+                     scenario_id is provided.
     """
+    if not scenario_id and text:
+        scenario_id = _create_scenario_inline(text)
+    if not scenario_id:
+        return "❌ Provide either scenario_id or text describing the roaming/policy change."
+
     s = scenarios.find_one({"_id": scenario_id})
     if not s:
         return f"❌ Scenario {scenario_id} not found."

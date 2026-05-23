@@ -2120,7 +2120,9 @@ class OrchestratorAgent:
                    "SLA, latency & availability targets, feasibility & assurance, "
                    "compliance monitoring, violation diagnosis, runbook application, "
                    "telemetry injection, scenario injection, morning rush, traffic spike, "
-                   "inject event, inject telemetry, simulate violation",
+                   "inject event, inject telemetry, simulate violation, "
+                   "current metrics, site status, site performance, live telemetry, "
+                   "check status at site, how is site performing",
             "dtw": "Digital Twin (ACME Mobile) — what-if simulations, QoS "
                    "uplift, policy migration, RAN/core topology, traffic load",
             "acc": "MongoDB ACC — sales proof points, one-pagers, PowerPoint export",

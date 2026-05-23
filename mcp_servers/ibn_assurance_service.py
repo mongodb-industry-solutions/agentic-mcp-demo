@@ -14,7 +14,10 @@ similar past incidents and their proven runbooks.
 
 Use this service when users say:
 - Compliance: "how are we doing", "compliance status", "is it green",
-             "show compliance for IBN-...", "fleet status"
+             "show compliance for IBN-...", "fleet status",
+             "current metrics at <site>", "what are the metrics",
+             "check status at <site>", "how is <site> performing",
+             "live status", "site performance", "current telemetry"
 - Diagnose:  "what happened", "diagnose", "diagnose <intent>",
              "why is it red", "explain the violation", "find similar incident"
 - Apply:     "apply the runbook", "apply <runbook_id>", "apply the fix",
@@ -138,15 +141,25 @@ def _build_fingerprint(intent: dict, observed_pos_latency: float | None) -> str:
 # ─── Tools ─────────────────────────────────────────────────────────────────
 
 @mcp.tool()
-def get_compliance(intent_id: str = None) -> str:
+def get_compliance(intent_id: str = None, site: str = None) -> str:
     """
-    Report compliance status. With an intent_id, returns the live SLO state
-    for that single intent (latest metric vs target, current status). Without
-    an argument, returns a fleet summary across all active intents.
+    Report compliance status and current metrics. With an intent_id or site
+    name, returns the live SLO state for that intent (latest metric vs target,
+    current status). Without arguments, returns a fleet summary across all
+    active intents.
 
     Args:
-        intent_id: Optional intent ID. If omitted, the whole fleet is summarised.
+        intent_id: Optional intent ID. Takes precedence over site.
+        site:      Site name fragment (e.g. "Stuttgart", "Alpenmarkt Stuttgart").
+                   Used to look up the active intent at that site.
     """
+    if not intent_id and site:
+        resolved = _resolve_intent(site=site)
+        if resolved:
+            intent_id = resolved["_id"]
+        else:
+            return f"❌ No active intent found for site '{site}'."
+
     if intent_id:
         intent = intents.find_one({"_id": intent_id})
         if not intent:
