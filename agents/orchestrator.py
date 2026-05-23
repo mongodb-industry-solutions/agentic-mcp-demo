@@ -2102,58 +2102,59 @@ class OrchestratorAgent:
         # broadcast — the BOOTSTRAP line already enumerates the taxonomy once
         # for the audience).
         #
-        # Each domain's blurb concatenates the tagline of EVERY member
-        # service so the classifier sees what the whole domain covers, not
-        # just the alphabetically-first service. Critical for multi-service
-        # domains (ibn, dtw) where a query may match the tagline of service
-        # #3, not service #1 — e.g. 'propose and activate the plan' maps to
-        # ibn_feasibility_service's tagline ('Match Intent to Inventory and
-        # Plan Activation'), but the old blurb only showed
-        # ibn_intent_service's tagline and the LLM missed the connection.
-        # Domain-level orientation labels for multi-service domains whose
-        # short taglines don't carry enough vocabulary to disambiguate from
-        # semantically adjacent singletons.  These are prepended to the blurb
-        # so the LLM has a plain-language anchor before reading the taglines.
-        _DOMAIN_LABELS: dict[str, str] = {
-            "ibn": "Intent-Based Networking — enterprise site commissioning, "
-                   "new-store network deployment, POS/WiFi/camera connectivity, "
-                   "SLA, latency & availability targets, feasibility & assurance, "
-                   "compliance monitoring, violation diagnosis, runbook application, "
-                   "telemetry injection, scenario injection, morning rush, traffic spike, "
-                   "inject event, inject telemetry, simulate violation, "
-                   "current metrics, site status, site performance, live telemetry, "
-                   "check status at site, how is site performing, "
-                   "lowest latency store, highest latency, best performing site, "
-                   "rank stores by latency, compare POS latency across sites",
-            "dtw": "Digital Twin (ACME Mobile) — what-if simulations, QoS "
-                   "uplift, policy migration, RAN/core topology, traffic load",
-            "acc": "MongoDB ACC — sales proof points, one-pagers, PowerPoint export",
-        }
+        # Each domain's blurb is derived entirely from the service docstrings
+        # stored in MongoDB — no hardcoded per-domain knowledge here.
+        # Structure per domain:
+        #   taglines  — first-line tagline of every member service
+        #   triggers  — quoted example phrases extracted from each service's
+        #               "Use this service when" section (up to MAX_TRIGGERS
+        #               per service, MAX_TRIGGERS*5 per domain)
+        # The trigger phrases are the single source of truth for routing
+        # vocabulary; keep them maintained in the service docstrings.
+
+        def _extract_triggers(desc: str, max_per_service: int = 6) -> list[str]:
+            """Return quoted trigger phrases from 'Use this service when' section."""
+            import re
+            in_section = False
+            found: list[str] = []
+            for line in desc.splitlines():
+                s = line.strip()
+                if re.search(r"use this service when", s, re.I):
+                    in_section = True
+                    continue
+                if in_section:
+                    if re.match(r"this service (does not|is not|operates)", s, re.I):
+                        break
+                    for phrase in re.findall(r'"([^"]{3,50})"', s):
+                        kw = phrase.split(",")[0].strip()
+                        if kw and kw not in found:
+                            found.append(kw)
+                            if len(found) >= max_per_service:
+                                return found
+            return found
 
         lines = []
         for d, members in sorted(by_domain.items()):
             members_str = ", ".join(m["server_name"] for m in members[:5])
-            taglines = []
+            taglines: list[str] = []
+            all_triggers: list[str] = []
             for m in members[:5]:
                 desc = (m.get("description") or "").strip()
                 if not desc:
                     continue
                 first_line = next((ln for ln in desc.splitlines() if ln.strip()), "")
-                # Strip the "Service Title —" prefix to keep just the unique
-                # tagline. Handles both "X Service — Y" and "SERVER: Y" forms.
                 if " — " in first_line:
                     first_line = first_line.split(" — ", 1)[1].strip()
                 elif first_line.startswith("SERVER:"):
                     first_line = first_line[len("SERVER:"):].strip()
                 if first_line:
                     taglines.append(first_line[:80])
+                for t in _extract_triggers(desc):
+                    if t not in all_triggers:
+                        all_triggers.append(t)
             blurb = " · ".join(taglines) if taglines else "(no description)"
-            # Prepend the orientation label when available so the LLM isn't
-            # misled by abstract per-service taglines into picking a
-            # semantically adjacent singleton (e.g. network_monitor wins over
-            # ibn on "latency / availability" vocabulary without the label).
-            if d in _DOMAIN_LABELS:
-                blurb = f"{_DOMAIN_LABELS[d]}  |  {blurb}"
+            if all_triggers:
+                blurb += "  |  e.g. " + ", ".join(f'"{t}"' for t in all_triggers[:20])
             lines.append(f"- {d}: {blurb}  [services: {members_str}]")
         taxonomy = "\n".join(lines)
 
