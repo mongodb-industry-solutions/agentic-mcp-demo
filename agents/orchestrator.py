@@ -1032,18 +1032,30 @@ class OrchestratorAgent:
         # Use a count of today's workstreams + 1
         return None  # placeholder; the real id is allocated via _create_workstream
 
-    async def _open_workstreams_for_classifier(self, limit: int = 12) -> List[Dict]:
+    async def _open_workstreams_for_classifier(
+            self, limit: int = 12,
+            domain_filter: List[str] | None = None,
+    ) -> List[Dict]:
         """Compact list of workstreams for the classifier prompt — open ones
         first (so 'continue' candidates are obvious) plus a few recently-
         completed ones (so 'replay from X' candidates are reachable). Most-
-        recent-first; capped because the prompt has to stay small."""
+        recent-first; capped because the prompt has to stay small.
+
+        domain_filter, when provided, scopes the OPEN candidates to that
+        domain set. The CLOSED candidates are intentionally NOT filtered,
+        because cross-domain replay is legitimate (e.g. replay an IBN
+        setup as the recipe for a DTW scenario)."""
         proj = {"_id": 1, "title": 1, "domain": 1, "entities": 1,
                 "summary": 1, "last_activity": 1, "state": 1}
-        open_cur = self.workstreams.find({"state": "open"}, proj) \
+        open_query: Dict = {"state": "open"}
+        if domain_filter:
+            open_query["domain"] = {"$in": list(domain_filter)}
+        open_cur = self.workstreams.find(open_query, proj) \
                                     .sort("last_activity", -1).limit(limit)
         open_ws = [d async for d in open_cur]
         # Pad with recently-completed workstreams so the classifier can
         # nominate them as replay sources without scanning the whole archive.
+        # NOTE: closed pool is NOT domain-filtered — replay can cross domains.
         remaining = max(0, limit - len(open_ws))
         if remaining > 0:
             closed_cur = self.workstreams.find(
@@ -1052,16 +1064,27 @@ class OrchestratorAgent:
             open_ws.extend([d async for d in closed_cur])
         return open_ws
 
-    async def _classify_workstream(self, query: str, recent_user_msgs: List[str]) \
-            -> tuple[str | None, bool, str | None, str | None, bool, List[str]]:
+    async def _classify_workstream(
+            self, query: str, recent_user_msgs: List[str],
+            domain_filter: List[str] | None = None,
+    ) -> tuple[str | None, bool, str | None, str | None, bool, List[str]]:
         """
         Classify the query into an open workstream or signal that a new
-        one should be created. Returns (workstream_id, is_new, domain_hint).
+        one should be created. Returns
+            (workstream_id, is_new, domain_hint,
+             replay_source_id, was_pure_closure, closed_ids).
 
         For 'new', the orchestrator allocates the id; the classifier only
         suggests a title + domain.
+
+        domain_filter, when provided (typically the Stage 1 domain
+        classification result), scopes the OPEN-workstream candidate
+        set to those domains. This prevents the classifier from
+        picking, say, an open IBN workstream as the continuation
+        target for a TODO query, even if titles overlap.
         """
-        open_ws = await self._open_workstreams_for_classifier()
+        open_ws = await self._open_workstreams_for_classifier(
+            domain_filter=domain_filter)
 
         # ── Fast-path: pure-closure heuristic ─────────────────────────────
         # When the query is an unambiguous goodbye ("done with TODOs",
@@ -2091,7 +2114,8 @@ class OrchestratorAgent:
             return True  # safe fallback: stay in session
 
     async def _route_query(self, query: str, use_stickiness: bool = False,
-                           _disable_sticky: bool = False) -> List[str]:
+                           _disable_sticky: bool = False,
+                           precomputed_domains: List[str] | None = None) -> List[str]:
         """
         Two-stage hybrid routing:
           Stage 1 (breadth) — classify the query into one or more domain tags.
@@ -2104,6 +2128,10 @@ class OrchestratorAgent:
         _disable_sticky   — set on recursive retry calls (internal). When
                             Stage 2's LLM tie-break returns NONE while Stage 1
                             was sticky-biased, retry the routing fresh.
+        precomputed_domains — Stage 1 result computed by the caller (used
+                            by process_query when it runs Stage 1 BEFORE
+                            workstream classification to scope candidates).
+                            When provided, Stage 1 is skipped here.
 
         Note on sticky_hint: it is ALWAYS passed to Stage 1 when
         last_domain exists (regardless of use_stickiness), unless we're
@@ -2115,9 +2143,12 @@ class OrchestratorAgent:
         an ongoing workflow. Multi-domain output is fine; Stage 2 vector
         search picks the right service from the union.
         """
-        # ── Stage 1 — domain classification ───────────────────────────────
-        sticky = None if _disable_sticky else self.last_domain
-        domains = await self._classify_domain(query, sticky_hint=sticky)
+        # ── Stage 1 — domain classification (skip if precomputed) ─────────
+        if precomputed_domains is not None:
+            domains = precomputed_domains
+        else:
+            sticky = None if _disable_sticky else self.last_domain
+            domains = await self._classify_domain(query, sticky_hint=sticky)
 
         # ── Stage 2 — vector search within selected domain(s) ─────────────
         candidates = await self._semantic_search(query, limit=5, domains=domains)
@@ -2521,15 +2552,44 @@ class OrchestratorAgent:
         context_window = self.conversation_history[-4:] if self.conversation_history else []
         last_user_queries = [msg["content"] for msg in context_window if msg["role"] == "user"]
 
-        # ── Meta-query short-circuit ──────────────────────────────────────
-        # Introspection queries ('list my workstreams', 'what's in memory',
-        # 'routing analytics') are NOT goal-directed work — they should
-        # never open a workstream nor pollute an existing workstream's
-        # tool_calls audit. Skip _classify_workstream entirely and route
-        # with current_workstream_id=None. Routing + ReAct still run so
-        # the right observability MCP tool gets called; the attach-to-
-        # workstream block downstream is a no-op when ws_id is None.
+        # ── Pipeline order (Option B refactor) ───────────────────────────
+        # Run Stage 1 (domain classification) BEFORE workstream
+        # classification, then pass the Stage 1 domain set into the
+        # workstream classifier so its OPEN-workstream candidate pool
+        # is pre-filtered. This prevents the classic failure mode where
+        # the classifier picks WS-IBN-Munich as the continuation target
+        # for 'add play golf to my TODOs' just because titles overlap —
+        # Stage 1 has already established the query is in the 'todo'
+        # domain, so the classifier only sees TODO workstreams.
+        #
+        # Two shortcuts skip the upfront Stage 1 because they don't
+        # need it:
+        #   - Meta queries: routing happens later; _route_query runs
+        #     its own Stage 1 then.
+        #   - Closure cues: handled by the classifier's pure-Python
+        #     fast-path which uses topic substring matching against
+        #     each workstream's domain/title/entities — domain
+        #     scoping is irrelevant.
         is_meta_query = self._is_meta_query(user_input)
+
+        # Compute enrichment posture upfront — used by both Stage 1 and
+        # _route_query downstream.
+        _SELF_CONTAINED = {
+            "list", "show", "add", "update", "delete", "remove", "change",
+            "set", "refresh", "display", "what", "how", "get", "find",
+            "create", "book", "confirm", "cancel", "check", "search", "buy",
+        }
+        first_word = user_input.split()[0].lower() if user_input.split() else ""
+        is_self_contained = first_word in _SELF_CONTAINED
+        needs_enrichment_check = (
+            last_user_queries
+            and len(user_input.split()) < 5
+            and not is_self_contained
+        )
+
+        stage1_domains: List[str] | None = None
+        query_for_routing: str = user_input
+
         if is_meta_query:
             await self._broadcast("WORKSTREAM",
                 "⚙ Meta / introspection query — skipping workstream "
@@ -2543,17 +2603,46 @@ class OrchestratorAgent:
             was_pure_closure = False
             closed_ids: List[str] = []
         else:
-            # ── Workstream classification ─────────────────────────────────
-            # Before routing, decide which workstream this query continues
-            # (or whether it opens a new one). The chosen workstream's
-            # domain becomes the sticky bias for Stage 1 below, which
-            # means routing respects multi-turn intent rather than just
-            # the last turn. The classifier also detects (a) implicit
-            # closure cues and (b) 'do the same thing for X' replay
-            # requests.
-            ws_id, ws_is_new, ws_domain, replay_source_id, \
-                was_pure_closure, closed_ids = \
-                await self._classify_workstream(user_input, last_user_queries)
+            # Closure cue → classifier's fast-path handles everything
+            # without needing Stage 1's domain set. Saves an LLM call
+            # on goodbye turns.
+            if self._is_pure_closure_cue(user_input):
+                ws_id, ws_is_new, ws_domain, replay_source_id, \
+                    was_pure_closure, closed_ids = \
+                    await self._classify_workstream(user_input, last_user_queries)
+            else:
+                # Stage 1 FIRST — possibly in parallel with follow-up
+                # detection on short queries.
+                if needs_enrichment_check:
+                    is_followup, stage1_domains = await asyncio.gather(
+                        self._needs_context_enrichment(
+                            user_input, last_user_queries[-1]),
+                        self._classify_domain(
+                            user_input, sticky_hint=self.last_domain),
+                    )
+                    if is_followup:
+                        enriched_query = f"{last_user_queries[-1]}. {user_input}"
+                        await self._broadcast("AGENT",
+                            f"Follow-up detected, enriched: '{enriched_query}'")
+                        # Re-run Stage 1 on the enriched text — it may
+                        # surface a domain the bare short query missed.
+                        stage1_domains = await self._classify_domain(
+                            enriched_query, sticky_hint=self.last_domain)
+                        query_for_routing = enriched_query
+                    else:
+                        await self._broadcast("AGENT",
+                            "Topic change detected, no enrichment")
+                else:
+                    stage1_domains = await self._classify_domain(
+                        user_input, sticky_hint=self.last_domain)
+
+                # Workstream classifier — scoped to Stage 1's domains.
+                ws_id, ws_is_new, ws_domain, replay_source_id, \
+                    was_pure_closure, closed_ids = \
+                    await self._classify_workstream(
+                        user_input, last_user_queries,
+                        domain_filter=stage1_domains)
+
             self.current_workstream_id = ws_id
             if not ws_is_new and not was_pure_closure:
                 await self._broadcast("WORKSTREAM", f"↪ {ws_id} continued")
@@ -2565,7 +2654,6 @@ class OrchestratorAgent:
                 was_pure_closure=was_pure_closure,
                 closed_workstreams=closed_ids,
                 meta_query=False)
-            # Workstream domain takes precedence over last_domain
             if ws_domain:
                 self.last_domain = ws_domain
 
@@ -2632,49 +2720,15 @@ class OrchestratorAgent:
             replay_recipe = await self._build_replay_recipe(
                 replay_source_id, target_workstream_id=ws_id)
 
-        # Smart context enrichment — run in parallel with routing when possible
-        _SELF_CONTAINED = {
-            "list", "show", "add", "update", "delete", "remove", "change",
-            "set", "refresh", "display", "what", "how", "get", "find",
-            "create", "book", "confirm", "cancel", "check", "search", "buy",
-        }
-        first_word = user_input.split()[0].lower() if user_input.split() else ""
-        is_self_contained = first_word in _SELF_CONTAINED
-        needs_enrichment_check = (
-            last_user_queries
-            and len(user_input.split()) < 5
-            and not is_self_contained
+        # ── Stage 2 — vector search within precomputed Stage 1 domains ────
+        # Follow-up detection and Stage 1 already ran upfront (in
+        # parallel where applicable). For meta queries stage1_domains
+        # is None, so _route_query runs its own Stage 1.
+        service_names = await self._route_query(
+            query_for_routing,
+            use_stickiness=needs_enrichment_check and not is_meta_query,
+            precomputed_domains=stage1_domains,
         )
-
-        if needs_enrichment_check:
-            # Run follow-up detection and optimistic routing concurrently.
-            # The optimistic pass passes use_stickiness=True because reaching
-            # this branch already means the query is short enough to be a
-            # follow-up candidate — session context is the right tiebreaker
-            # for the routing decision.
-            enrichment_task, routing_task = await asyncio.gather(
-                self._needs_context_enrichment(user_input, last_user_queries[-1]),
-                self._route_query(user_input, use_stickiness=True),
-            )
-            is_followup       = enrichment_task
-            optimistic_result = routing_task
-
-            # If the optimistic pass already produced a single confident
-            # service, trust it — re-routing the enriched query would just
-            # introduce contradictions when the enriched text is dominated
-            # by the prior turn's vocabulary.
-            if len(optimistic_result) == 1:
-                service_names = optimistic_result
-            elif is_followup:
-                enriched_query = f"{last_user_queries[-1]}. {user_input}"
-                await self._broadcast("AGENT",
-                    f"Follow-up detected, enriched: '{enriched_query}'")
-                service_names = await self._route_query(enriched_query, use_stickiness=True)
-            else:
-                await self._broadcast("AGENT", "Topic change detected, no enrichment")
-                service_names = optimistic_result
-        else:
-            service_names = await self._route_query(user_input, use_stickiness=False)
 
         if not service_names:
             await self._persist_decision(
