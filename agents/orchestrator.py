@@ -1492,6 +1492,12 @@ class OrchestratorAgent:
             known_domains = set((await self._list_domains()).keys())
             if domain_hint not in known_domains:
                 domain_hint = None
+        # When Stage 1 was definitive (single domain), trust it over the
+        # classifier LLM's domain_hint — the LLM can be misled by content
+        # vocabulary (e.g. "add Hamburg metrics to todos" → 'analytics'
+        # instead of 'todo') and cause spurious merges into the wrong WS.
+        if domain_filter and len(domain_filter) == 1:
+            domain_hint = domain_filter[0]
         ws_id = await self._create_workstream(title, domain_hint, query)
         # If the LLM also asked to close a workstream this turn, report it.
         closed = [close_id] if close_was_open else []
