@@ -167,6 +167,11 @@ class OrchestratorAgent:
         # ReAct loop pulls top-K relevant memories into the agent's context
         # at the start of each turn so past lessons inform current work.
         self.memories = self.db["agent_memories"]
+        # User-stated preferences plane — populated by
+        # preferences_service.remember_fact. Auto-recalled into every
+        # turn's system prompt alongside agent_memories, so a fact the
+        # user told the agent once persists across sessions.
+        self.preferences = self.db["user_preferences"]
         self._memory_extract_tasks: set[asyncio.Task] = set()
         self._ws_closure_watcher: asyncio.Task | None = None
         self._memory_decay_task:   asyncio.Task | None = None
@@ -638,6 +643,67 @@ class OrchestratorAgent:
         # bulk update so recall is still ~one network round-trip.
         if hits:
             await self._mark_memories_recalled(hits)
+        return hits
+
+    async def _recall_preferences(self, query: str,
+                                   limit: int = 5) -> list[dict]:
+        """
+        Recall user-stated preferences from user_preferences that are
+        relevant to the current query. Mirror of _recall_memories but
+        for the USER plane:
+
+          • agent_memories  → orchestrator's auto-extracted observations.
+          • user_preferences → user's explicit self-disclosure
+                               ('I love X', 'remember that I…').
+
+        Both contribute to the system-prompt's 'you previously learned'
+        block on every turn — that's what makes the demo's cross-session
+        preference resolution real: the agent's LLM sees 'User loves to
+        play basketball' on EVERY future turn until the user forgets it,
+        regardless of how long ago they stated it.
+
+        Atlas Vector Search path first (requires
+        `user_preferences_index` on `text`, auto-embed via voyage-4).
+        Falls back to recency on permanent preferences when the index
+        isn't ready.
+
+        Filters out temporary preferences (TTL-bounded context) by
+        default — only stable preferences ride into long-running
+        context.
+        """
+        hits: list[dict] = []
+
+        # Vector path first.
+        try:
+            vs_spec = {
+                "index":         "user_preferences_index",
+                "path":          "text",
+                "query":         query,
+                "numCandidates": 50,
+                "limit":         max(1, min(20, limit)),
+                "filter":        {"is_temporary": {"$ne": True}},
+            }
+            cursor = await self.preferences.aggregate([
+                {"$vectorSearch": vs_spec},
+                {"$project": {
+                    "_id":      1, "text": 1, "category": 1,
+                    "is_temporary": 1, "createdAt": 1,
+                    "score":    {"$meta": "vectorSearchScore"},
+                }},
+            ])
+            hits = await cursor.to_list()
+        except Exception:
+            hits = []
+
+        # Fallback: most-recent permanent preferences (no vector
+        # similarity, but for small collections this still surfaces
+        # the right facts — and the demo always renders something
+        # even before the vector index is configured).
+        if not hits:
+            cursor = self.preferences.find(
+                {"is_temporary": {"$ne": True}},
+            ).sort("createdAt", -1).limit(limit)
+            hits = [d async for d in cursor]
         return hits
 
     async def _mark_memories_recalled(self, hits: list[dict]):
@@ -2863,15 +2929,21 @@ class OrchestratorAgent:
         # the system prompt as a "you previously learned" block so the
         # agent's tool decisions reflect lessons from prior workstreams.
         memory_block = ""
+        preferences_block = ""
         try:
             ws_doc = await self.workstreams.find_one(
                 {"_id": self.current_workstream_id},
                 {"domain": 1, "entities": 1}) if self.current_workstream_id else None
-            recalled = await self._recall_memories(
-                user_input,
-                domain   = (ws_doc or {}).get("domain") or self.last_domain,
-                entities = (ws_doc or {}).get("entities"),
-                limit    = 5,
+            # Both planes recalled in parallel — different collections,
+            # different shapes, independent failure modes.
+            recalled, prefs_recalled = await asyncio.gather(
+                self._recall_memories(
+                    user_input,
+                    domain   = (ws_doc or {}).get("domain") or self.last_domain,
+                    entities = (ws_doc or {}).get("entities"),
+                    limit    = 5),
+                self._recall_preferences(user_input, limit=5),
+                return_exceptions=False,
             )
             if recalled:
                 # Sort core facts first so the LLM weights them more — vector
@@ -2905,16 +2977,47 @@ class OrchestratorAgent:
                 self._decision_under("memory",
                     recalled_count=len(recalled),
                     tier_breakdown=tier_counts)
+
+            if prefs_recalled:
+                # User-stated preferences — separate block, labelled
+                # distinctly so the LLM treats them as authoritative
+                # self-disclosure rather than 'something the agent
+                # learned about its own work'.
+                pref_lines = [
+                    f"  • [{(p.get('category') or 'preference').upper()}] "
+                    f"{p.get('text','')}"
+                    for p in prefs_recalled
+                ]
+                preferences_block = (
+                    "\n\nThe user has explicitly told you the following "
+                    "about themselves (preferences, identity, restrictions). "
+                    "Treat these as authoritative when resolving "
+                    "first-person references ('the sport I love', "
+                    "'my favourite X', 'my usual') in the query:\n"
+                    + "\n".join(pref_lines)
+                )
+                await self._broadcast("PREFERENCES",
+                    f"🧠 Recalled {len(prefs_recalled)} user "
+                    f"preference(s)")
+                self._decision_under("preferences",
+                    recalled_count=len(prefs_recalled))
         except Exception as e:
-            print(f"⚠️ memory recall failed (non-fatal): {e}")
+            print(f"⚠️ recall failed (non-fatal): {e}")
 
         # Build messages with conversation history. The system prompt is
-        # augmented with two optional sections:
-        #   • memory_block  — top-K reusable facts from past workstreams
-        #   • replay_recipe — the constructive tool-call sequence from a
-        #                     source workstream the user asked to repeat
+        # augmented with three optional sections:
+        #   • memory_block       — top-K facts from past workstreams
+        #                          (agent_memories plane, auto-extracted)
+        #   • preferences_block  — top-K user-stated preferences
+        #                          (user_preferences plane, explicit)
+        #   • replay_recipe      — the constructive tool-call sequence
+        #                          from a source workstream the user
+        #                          asked to repeat
         messages = [{"role": "system",
-                     "content": _SYSTEM_PROMPT + memory_block + replay_recipe}]
+                     "content": _SYSTEM_PROMPT
+                                + memory_block
+                                + preferences_block
+                                + replay_recipe}]
         messages.extend(self.conversation_history)
         messages.append({"role": "user", "content": user_input})
 
