@@ -240,6 +240,14 @@
     white-space: pre-wrap;
     word-break: break-word;
   }
+  /* markdown rendered inside log entries and workstream cards */
+  .log-entry p, .log-entry ul, .log-entry ol { margin: 0; }
+  .log-entry strong { font-weight: 700; }
+  .log-entry em { font-style: italic; }
+  .log-entry code { background: rgba(255,255,255,0.08); border-radius: 2px; padding: 0 3px; }
+  .ws-summary-md p, .ws-summary-md ul, .ws-summary-md ol { margin: 0 0 2px; }
+  .ws-summary-md strong { font-weight: 700; }
+  .ws-summary-md code { background: rgba(255,255,255,0.08); border-radius: 2px; padding: 0 3px; }
   /* full-line coloring by tag */
   .log-entry.tag-BOOTSTRAP { color: var(--c-bootstrap); }
   .log-entry.tag-QUERY     { color: var(--c-query);     }
@@ -716,13 +724,23 @@ input.addEventListener('keydown', (e) => {
 function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+// Render markdown and strip the outer <p>…</p> wrap for inline contexts.
+function md(s) {
+  if (!s) return '';
+  const html = marked.parse(String(s));
+  return html.replace(/^<p>([\s\S]*)<\/p>\n?$/, '$1');
+}
 function scrollChat() { historyEl.scrollTop = historyEl.scrollHeight; }
 function scrollLog()  { logPanel.scrollTop  = logPanel.scrollHeight;  }
+
+// Tags whose content is LLM-generated text and should be markdown-rendered.
+const _MD_TAGS = new Set(['RESULT', 'MEMORY', 'PREFERENCES', 'WORKSTREAM']);
 
 function appendLog(tag, text) {
   const el = document.createElement('div');
   el.className = `log-entry tag-${tag}`;
-  el.innerHTML = `<span class="log-tag"></span>${esc(text)}`;
+  const body = _MD_TAGS.has(tag) ? md(text) : esc(text);
+  el.innerHTML = `<span class="log-tag"></span>${body}`;
   logPanel.appendChild(el);
   scrollLog();
 }
@@ -826,9 +844,9 @@ function renderWorkstreamCard(w) {
                   + `entities: ${entities}</div>` : '')
     + (numCalls ? `<div style="font-size:11px;color:var(--dim);margin-bottom:6px;">`
                   + `${numCalls} tool call${numCalls === 1 ? '' : 's'}</div>` : '')
-    + (w.summary ? `<div style="font-size:11px;color:var(--fg);opacity:0.85;`
+    + (w.summary ? `<div class="ws-summary-md" style="font-size:11px;color:var(--fg);opacity:0.85;`
                    + `line-height:1.4;border-left:2px solid var(--cyan);padding-left:8px;">`
-                   + `${esc(w.summary)}</div>` : '')
+                   + `${md(w.summary)}</div>` : '')
     + (memCount > 0
         ? `<div class="mem-subpanel" id="mem-${esc(w._id)}" style="display:none;`
           + `margin-top:8px;border-top:1px solid var(--border);padding-top:8px;"></div>`
@@ -884,7 +902,7 @@ function renderWsMemories(wsId, mems) {
         return `<div style="margin-bottom:8px;padding:6px 8px;`
              + `background:rgba(255,215,0,0.06);border-radius:3px;`
              + `border-left:2px solid ${tc};">`
-             + `<div style="font-size:11px;color:var(--fg);line-height:1.4;">${esc(m.text)}</div>`
+             + `<div style="font-size:11px;color:var(--fg);line-height:1.4;">${md(m.text)}</div>`
              + `<div style="font-size:10px;color:var(--dim);margin-top:3px;">`
              + `<span style="color:${tc};">${esc(m.tier)}</span>`
              + ` · ${esc(m.category)} · ${conf}% confidence ${rcl}`
