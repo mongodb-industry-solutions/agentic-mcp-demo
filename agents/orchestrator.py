@@ -1125,7 +1125,19 @@ class OrchestratorAgent:
             f"  • 'close the Munich workstream'\n"
             f"- The query can BOTH close one workstream AND continue/start "
             f"  another in the same turn: set both fields accordingly.\n"
-            f"- Leave null if the user is still in the middle of work.\n\n"
+            f"- Leave null if the user is still in the middle of work.\n"
+            f"\n"
+            f"⚠️ CRITICAL: when the query is PURELY a closure / "
+            f"acknowledgement with no new task to start ('done with X', "
+            f"'I'm finished', 'we're wrapping up', 'that's it'), prefer:\n"
+            f"    action      = 'continue'\n"
+            f"    workstream_id = <the workstream being closed>\n"
+            f"    closes_workstream = <same id>\n"
+            f"Do NOT set action='new' with a generic recap title like "
+            f"'Manage X' or 'Working on X' — that fabricates a workstream "
+            f"out of a goodbye. Only set action='new' when the user "
+            f"introduces a substantive new task to do (a new entity, a "
+            f"new verb that implies new work).\n\n"
             f"Rules for replay_from_workstream:\n"
             f"- Set to a source workstream id when the user wants to apply "
             f"  the SAME ACTION SEQUENCE to a new entity. Examples:\n"
@@ -1166,6 +1178,40 @@ class OrchestratorAgent:
             replay_id = None
 
         action = (decision.get("action") or "").lower()
+
+        # Pure-closure guard: when the user just says 'done with TODOs',
+        # 'we're finished', 'wrap up' etc., the classifier sometimes still
+        # picks action='new' with a generic recap title ('Manage Personal
+        # TODOs') — fabricating a workstream out of a goodbye. Refuse:
+        # short queries containing closure verbs do not get a fresh
+        # workstream. Reuse the most-recent open/closed workstream's id
+        # as context for the agent's acknowledgement reply.
+        if action == "new":
+            q_low = query.lower().strip()
+            closure_verbs = ("done", "finished", "wrap up", "wrap-up",
+                             "that's it", "thats it", "we're done", "we are done",
+                             "all done", "complete", "completed", "no more")
+            looks_pure_closure = (
+                len(query.split()) <= 8
+                and any(v in q_low for v in closure_verbs)
+            )
+            if looks_pure_closure:
+                # Prefer the workstream we just closed (if any), else the
+                # most-recently-active one. open_ws includes recently-
+                # closed ones from the classifier's input set.
+                target_id = close_id or (open_ws[0]["_id"] if open_ws else None)
+                target = next((w for w in open_ws if w["_id"] == target_id),
+                              None) if target_id else None
+                if target_id:
+                    await self._broadcast("WORKSTREAM",
+                        f"⏸ Closure-only query — suppressing new workstream; "
+                        f"continuing {target_id}")
+                    return (target_id, False,
+                            (target or {}).get("domain"), replay_id)
+                # No prior workstream at all — extremely rare on a populated
+                # session. Fall through to the normal new-workstream path
+                # rather than returning None (process_query expects an id).
+
         if action == "continue":
             ws_id = decision.get("workstream_id")
             ws = next((w for w in open_ws if w["_id"] == ws_id), None)
