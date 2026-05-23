@@ -1053,7 +1053,7 @@ class OrchestratorAgent:
         return open_ws
 
     async def _classify_workstream(self, query: str, recent_user_msgs: List[str]) \
-            -> tuple[str, bool, str | None, str | None]:
+            -> tuple[str, bool, str | None, str | None, bool]:
         """
         Classify the query into an open workstream or signal that a new
         one should be created. Returns (workstream_id, is_new, domain_hint).
@@ -1067,7 +1067,7 @@ class OrchestratorAgent:
         if not open_ws:
             title, domain_hint = await self._propose_new_workstream(query)
             ws_id = await self._create_workstream(title, domain_hint, query)
-            return ws_id, True, domain_hint, None
+            return ws_id, True, domain_hint, None, False
 
         # Build compact context for the LLM
         ws_lines = []
@@ -1161,7 +1161,7 @@ class OrchestratorAgent:
             await self._broadcast("ROUTING",
                 f"⚠ Workstream classify failed ({e}); using most-recent open WS")
             ws = open_ws[0]
-            return ws["_id"], False, ws.get("domain"), None
+            return ws["_id"], False, ws.get("domain"), None, False
 
         # Honour an implicit close cue BEFORE deciding routing. Closing
         # a workstream triggers the change-stream watcher → memory
@@ -1216,7 +1216,7 @@ class OrchestratorAgent:
                         f"⏸ Closure-only query — using {target_id} for "
                         f"context, not opening a new workstream")
                     return (target_id, False,
-                            (target or {}).get("domain"), replay_id)
+                            (target or {}).get("domain"), replay_id, True)
                 # No prior workstream at all — extremely rare on a populated
                 # session. Fall through to the normal new-workstream path
                 # rather than returning None (process_query expects an id).
@@ -1225,7 +1225,7 @@ class OrchestratorAgent:
             ws_id = decision.get("workstream_id")
             ws = next((w for w in open_ws if w["_id"] == ws_id), None)
             if ws and ws_id != close_id:  # don't continue what we just closed
-                return ws["_id"], False, ws.get("domain"), replay_id
+                return ws["_id"], False, ws.get("domain"), replay_id, False
             # Hallucinated id or we just closed it — fall through to "new"
             if not ws:
                 await self._broadcast("ROUTING",
@@ -1240,7 +1240,7 @@ class OrchestratorAgent:
             if domain_hint not in known_domains:
                 domain_hint = None
         ws_id = await self._create_workstream(title, domain_hint, query)
-        return ws_id, True, domain_hint, replay_id
+        return ws_id, True, domain_hint, replay_id, False
 
     async def _propose_new_workstream(self, query: str) -> tuple[str, str | None]:
         """LLM call to derive a title + domain hint when there are no open
@@ -2102,19 +2102,48 @@ class OrchestratorAgent:
         # respects multi-turn intent rather than just the last turn.
         # The classifier also detects (a) implicit closure cues and (b)
         # 'do the same thing for X' replay requests.
-        ws_id, ws_is_new, ws_domain, replay_source_id = \
+        ws_id, ws_is_new, ws_domain, replay_source_id, was_pure_closure = \
             await self._classify_workstream(user_input, last_user_queries)
         self.current_workstream_id = ws_id
-        if not ws_is_new:
+        if not ws_is_new and not was_pure_closure:
             await self._broadcast("WORKSTREAM", f"↪ {ws_id} continued")
         self._decision_set(
             workstream_id=ws_id,
             workstream_is_new=ws_is_new,
             workstream_domain=ws_domain,
-            replay_source_id=replay_source_id)
+            replay_source_id=replay_source_id,
+            was_pure_closure=was_pure_closure)
         # Workstream domain takes precedence over last_domain for stickiness
         if ws_domain:
             self.last_domain = ws_domain
+
+        # ── Closure-only short-circuit ────────────────────────────────────
+        # The user just said goodbye to a workstream ('done with X', 'we're
+        # finished'). The workstream is already closed by the classifier;
+        # memory extraction kicks off via the change-stream watcher. There
+        # is nothing for the agent to *do* — running the ReAct loop would
+        # just have the LLM speculate a tool call ('let me list_todos to
+        # confirm'). Short-circuit with a canned acknowledgement instead.
+        if was_pure_closure:
+            await self._broadcast("AGENT", "Closure acknowledged — no tool call needed")
+            ws_doc = await self.workstreams.find_one(
+                {"_id": ws_id}, {"title": 1})
+            title = (ws_doc or {}).get("title") or ws_id
+            answer = (f"Got it — closed the **{title}** workstream "
+                      f"(`{ws_id}`). Long-term memory extraction will run "
+                      f"in the background.")
+            # Still record the conversation turn so the next classifier
+            # has continuity, but skip ReAct entirely.
+            self.conversation_history.append({"role": "user", "content": user_input})
+            self.conversation_history.append({"role": "assistant", "content": answer})
+            if len(self.conversation_history) > 20:
+                self.conversation_history = self.conversation_history[-20:]
+            await self._persist_decision(
+                tool_calls_count=0,
+                iterations_used=0,
+                closure_short_circuit=True,
+                duration_ms=int((time.monotonic() - turn_t0) * 1000))
+            return answer
 
         # ── Replay-recipe prep ────────────────────────────────────────────
         # If the user asked to "do the same thing for X", build a recipe
