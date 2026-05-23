@@ -104,20 +104,19 @@
   .input-hint { color: var(--dim); font-size: 11px; white-space: nowrap; }
   #rSearchBar {
     display: none;
-    padding: 5px 14px;
+    padding: 4px 14px;
     border-top: 1px solid var(--border);
     background: rgba(0,212,255,0.06);
     font-family: var(--mono);
     font-size: 12px;
     color: var(--dim);
-    white-space: nowrap;
+    white-space: pre;
     overflow: hidden;
     text-overflow: ellipsis;
     flex-shrink: 0;
   }
-  #rSearchBar .rsq  { color: var(--cyan); }
-  #rSearchBar .rsm  { color: var(--text); }
-  #rSearchBar .rshi { background: rgba(0,212,255,0.25); border-radius: 2px; }
+  #rSearchBar .rsq { color: var(--cyan); }
+  #rSearchBar .rsu { color: var(--text); text-decoration: underline; text-decoration-color: var(--cyan); }
 
   /* ── Right: log + servers ── */
   .col-log {
@@ -345,12 +344,12 @@
   <!-- ── Left: chat ── -->
   <div class="col-chat">
     <div id="history"></div>
-    <div id="rSearchBar"></div>
     <div class="input-bar">
       <span class="input-prompt">You:</span>
       <input id="queryInput" type="text" placeholder="Ask anything…" autocomplete="off" />
       <span class="input-hint" id="inputHint">↵ send</span>
     </div>
+    <div id="rSearchBar"></div>
   </div>
 
   <!-- ── Right: log + servers ── -->
@@ -533,70 +532,83 @@ function connect() {
   };
 }
 
-// ── Reverse history search (Ctrl+R) ───────────────────────────────────────
+// ── Reverse history search (Ctrl+R / bck-i-search) ───────────────────────
 const rSearchBar = document.getElementById('rSearchBar');
 const inputHint  = document.getElementById('inputHint');
-let rsActive  = false;   // currently in search mode
-let rsQuery   = '';      // current search string
-let rsMatchIdx = -1;     // index into inputHistory of current match (-1 = no match)
+let rsActive   = false;
+let rsQuery    = '';
+let rsMatchIdx = -1;
 
 function rsEnter() {
   rsActive   = true;
   rsQuery    = '';
   rsMatchIdx = -1;
+  savedDraft = input.value;
   rSearchBar.style.display = '';
   inputHint.textContent    = 'esc cancel';
+  input.value = savedDraft;
+  input.setSelectionRange(savedDraft.length, savedDraft.length);
   rsRender();
 }
 
 function rsExit(accept) {
-  rsActive             = false;
+  rsActive                 = false;
   rSearchBar.style.display = 'none';
   inputHint.textContent    = '↵ send';
   if (!accept) {
-    // restore whatever was typed before Ctrl+R
     input.value = savedDraft;
+    input.setSelectionRange(savedDraft.length, savedDraft.length);
+  } else {
+    // collapse selection to cursor at end
+    const len = input.value.length;
+    input.setSelectionRange(len, len);
   }
   rsQuery    = '';
   rsMatchIdx = -1;
 }
 
 function rsSearch(fromIdx) {
-  // Walk inputHistory from fromIdx downward (older) looking for rsQuery.
-  if (!rsQuery) { rsMatchIdx = -1; return; }
+  if (!rsQuery) {
+    rsMatchIdx = -1;
+    input.value = savedDraft;
+    input.setSelectionRange(savedDraft.length, savedDraft.length);
+    return;
+  }
   const q = rsQuery.toLowerCase();
   for (let i = fromIdx; i < inputHistory.length; i++) {
     if (inputHistory[i].toLowerCase().includes(q)) {
       rsMatchIdx = i;
-      input.value = inputHistory[i];
-      input.setSelectionRange(input.value.length, input.value.length);
+      const full = inputHistory[i];
+      input.value = full;
+      // place cursor at start of match; select through end of match
+      const idx = full.toLowerCase().indexOf(q);
+      input.setSelectionRange(idx, idx + rsQuery.length);
       return;
     }
   }
-  rsMatchIdx = -1; // no match found
+  rsMatchIdx = -1;
+  // keep current input text, don't clobber
 }
 
 function rsRender() {
   if (!rsActive) return;
-  const matchText = rsMatchIdx >= 0 ? inputHistory[rsMatchIdx] : '';
-  const q = esc(rsQuery);
-  let highlighted = '';
-  if (matchText) {
-    const idx = matchText.toLowerCase().indexOf(rsQuery.toLowerCase());
-    if (idx >= 0) {
-      highlighted =
-        esc(matchText.slice(0, idx))
-        + `<span class="rshi">${esc(matchText.slice(idx, idx + rsQuery.length))}</span>`
-        + esc(matchText.slice(idx + rsQuery.length));
-    } else {
-      highlighted = esc(matchText);
-    }
+  // bck-i-search: <query>_   [pre][UNDERLINED match][post]
+  const prefix = `bck-i-search: `;
+  let body;
+  if (!rsQuery) {
+    body = `<span class="rsq"></span>_`;
+  } else if (rsMatchIdx >= 0) {
+    const full = inputHistory[rsMatchIdx];
+    const idx  = full.toLowerCase().indexOf(rsQuery.toLowerCase());
+    body = `<span class="rsq">${esc(rsQuery)}</span>_  `
+         + esc(full.slice(0, idx))
+         + `<span class="rsu">${esc(full.slice(idx, idx + rsQuery.length))}</span>`
+         + esc(full.slice(idx + rsQuery.length));
+  } else {
+    body = `<span class="rsq">${esc(rsQuery)}</span>_  `
+         + `<span style="color:var(--dim)">(no match)</span>`;
   }
-  rSearchBar.innerHTML =
-    `(reverse-i-search)'<span class="rsq">${q}</span>': `
-    + (matchText
-        ? `<span class="rsm">${highlighted}</span>`
-        : `<span style="color:var(--dim);">(no match)</span>`);
+  rSearchBar.innerHTML = prefix + body;
 }
 
 // ── Submit ─────────────────────────────────────────────────────────────────

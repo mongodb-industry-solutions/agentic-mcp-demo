@@ -125,10 +125,14 @@ async def interactive_loop():
         console.print("[red]❌ Missing MONGODB_URI[/]")
         return
 
-    # Ensure Ctrl+R reverse-search is bound — libedit (macOS default) does
-    # not always register it automatically the way GNU readline does.
+    # Ensure Ctrl+R reverse-search is bound.
+    # macOS Python ships with libedit, not GNU readline — the binding
+    # syntax is different.  Detect by inspecting the module docstring.
     try:
-        readline.parse_and_bind(r'"\C-r": reverse-search-history')
+        if 'libedit' in (readline.__doc__ or ''):
+            readline.parse_and_bind('bind ^R em-inc-search-prev')
+        else:
+            readline.parse_and_bind(r'"\C-r": reverse-search-history')
     except Exception:
         pass
 
