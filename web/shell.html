@@ -402,6 +402,14 @@ function connect() {
       document.getElementById('bannerIndexes').textContent = msg.indexes.join(', ') || 'none';
       if (msg.servers.length)
         appendLog('INFO', `✓ Ready — ${msg.servers.length} MCP server(s) active`);
+      // Seed cursor-up history from the shared shell history file so
+      // arrow-keys recall queries typed earlier (in this session, in a
+      // prior browser session, or in the terminal shell).
+      if (Array.isArray(msg.history) && msg.history.length) {
+        inputHistory.length = 0;
+        msg.history.forEach(h => inputHistory.push(h));
+        appendLog('INFO', `↑ ${msg.history.length} historic queries loaded`);
+      }
       ws.send(JSON.stringify({type: 'server_list'}));
       return;
     }

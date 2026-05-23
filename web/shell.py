@@ -47,6 +47,60 @@ async def _ws_broadcast(tag: str, msg: str):
         clients.discard(ws)
 
 
+HISTORY_FILE = Path(os.path.expanduser("~/.agentic_demo_history"))
+
+# The terminal shell (main.py) reads/writes this file via Python's readline,
+# which uses the GNU bash V2 history format ('_HiStOrY_V2_' magic header +
+# backslash-escaped meta-characters like \040 for space). Routing the web
+# shell's reads/writes through the same readline module guarantees binary
+# compatibility — including escape decoding, dedup, and the V2 header — so
+# the two UIs stay perfectly in sync.
+import readline as _readline
+
+
+def _read_history(limit: int = 500) -> list[str]:
+    """Read the shared shell history file via readline (handles V2 format).
+    Returns the most-recent `limit` entries, newest first — the order the
+    browser's cursor-up walker wants."""
+    try:
+        _readline.clear_history()
+        _readline.read_history_file(str(HISTORY_FILE))
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        log.warning(f"history read failed: {e}")
+        return []
+    n = _readline.get_current_history_length()
+    if n == 0:
+        return []
+    start = max(1, n - limit + 1)
+    entries = [_readline.get_history_item(i) for i in range(start, n + 1)]
+    return list(reversed([e for e in entries if e]))
+
+
+def _append_history(text: str):
+    """Append one entry to the shared history file. Skips no-op duplicates
+    of the previous entry (matches readline's default behaviour). Uses
+    readline so the V2 escaping is consistent with main.py."""
+    text = text.strip()
+    if not text:
+        return
+    try:
+        try:
+            _readline.clear_history()
+            _readline.read_history_file(str(HISTORY_FILE))
+        except FileNotFoundError:
+            pass
+        n = _readline.get_current_history_length()
+        last = _readline.get_history_item(n) if n else None
+        if last == text:
+            return
+        _readline.add_history(text)
+        _readline.write_history_file(str(HISTORY_FILE))
+    except Exception as e:
+        log.warning(f"history append failed: {e}")
+
+
 def _mongo_info() -> dict:
     uri = os.environ.get("MONGODB_URI", "")
     parsed = urlparse(uri)
@@ -129,13 +183,17 @@ async def ws_endpoint(ws: WebSocket):
     clients.add(ws)
     log.info(f"client connected ({len(clients)} total)")
 
-    # Send initial info so the browser can render the banner
+    # Send initial info so the browser can render the banner. `history` is
+    # populated from ~/.agentic_demo_history, the same file the terminal
+    # shell (main.py) reads/writes via readline — so cursor-up in the
+    # browser walks back through queries typed in either UI.
     info = app.state.mongo_info
     await ws.send_text(json.dumps({
         "type":    "hello",
         "host":    info["host"],
         "indexes": info["indexes"],
         "servers": list(_agent.sessions.keys()) if _agent else [],
+        "history": _read_history(),
     }))
 
     try:
@@ -147,6 +205,10 @@ async def ws_endpoint(ws: WebSocket):
                 text = (msg.get("text") or "").strip()
                 if not text:
                     continue
+
+                # Persist to the shared history file so cursor-up works
+                # across web + terminal sessions and survives restarts.
+                _append_history(text)
 
                 async with _query_lock:
                     t0 = time.monotonic()
