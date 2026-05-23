@@ -279,7 +279,64 @@ A workstream document looks like:
 }
 ```
 
-Before Stage 1 routing, the orchestrator runs a **workstream classifier** that maps each query to an open workstream (or opens a new one). The chosen workstream's `domain` becomes Stage 1's sticky bias, and its `entities` are available to the agent's tool-call context. This is what fixes the multi-turn routing problem that no amount of per-turn `last_domain` tuning could solve: when the user types *"propose plan and execute it"* after a TODO interlude, the workstream classifier finds the IBN workstream by entity overlap and recency. Stage 1 stays in `ibn`. No misroute.
+**The classification pipeline — defence in depth.** Every turn enters a small classification cascade that decides how it relates to existing workstreams. Cheap pre-LLM heuristics short-circuit the common cases (goodbyes, observability queries); the LLM classifier handles the rest with proper context; and a data-layer invariant catches stochastic drift before it ever lands in the DB. Five layers, each catching a different failure mode:
+
+```
+Pre-LLM heuristics (zero API cost):
+  ① Meta-query check       'list workstreams', 'routing analytics',
+                            'what's in memory' → skip the classifier
+                            entirely. Routing runs (so the right
+                            observability tool gets called), but
+                            current_workstream_id stays None and
+                            tool calls do NOT attach to any workstream
+                            — observability never pollutes an
+                            audit trail.
+  ② Closure-cue check      'done with TODOs', "we're finished" →
+                            topic-aware multi-close (every OPEN
+                            workstream whose domain/title/entities
+                            match the closure topic closes in one
+                            turn). No Stage 1, no Stage 2, no ReAct —
+                            one Python regex, one canned ack.
+
+LLM-driven classification (only on genuine new turns):
+  ③ Stage 1 (domain)       sticky_hint=last_domain. Narrows the
+                            workstream candidate set BEFORE the
+                            classifier sees it. This is the order
+                            fix: previously the classifier had to
+                            guess the domain from title overlap;
+                            now Stage 1 has already established it.
+  ④ Workstream classifier  Sees only OPEN workstreams in Stage 1's
+                            domain(s). CLOSED workstreams appear in
+                            a separate REPLAY-only section (cross-
+                            domain replay is legitimate). The
+                            classifier picks 'continue' vs 'new',
+                            detects closure cues the heuristic missed,
+                            detects replay intent ('do the same for X').
+
+Data-layer invariant (after the classifier, before INSERT):
+  ⑤ _create_workstream     Refuses to insert a duplicate when a
+                            same-domain OPEN workstream already
+                            exists AND the new title+seed_query
+                            introduces no new entity. Merges into
+                            the existing workstream instead. The
+                            LLM's stochasticity cannot produce
+                            same-domain duplicates on routine CRUD.
+                            Legitimate splits (e.g. 'set up Hamburg'
+                            alongside an open Munich workstream) are
+                            preserved because Hamburg is a new
+                            entity.
+```
+
+The dashboard sees each layer act:
+
+- `[WORKSTREAM] ⚙ Meta / introspection query — skipping workstream classification` (layer ①)
+- `[WORKSTREAM] ⏸ Closure-only query — closed 2 workstreams: WS-007, WS-008 (LLM skipped)` (layer ②)
+- `[ROUTING] Stage 1 → todo (1 service)` then `[WORKSTREAM] ↪ WS-007 continued` (layers ③–④)
+- `[WORKSTREAM] ⤴ Merged into open WS-007 — same domain 'todo', no new entity introduced (classifier wanted 'new', data layer refused to duplicate)` (layer ⑤)
+
+**Why this matters to a customer.** Agent platforms that rely on prompt engineering alone for state attribution drift the moment the LLM is replaced (or its sampling temperature changes, or a new model version is rolled out). This framework's correctness rests on the **data layer**, not the prompt: `_create_workstream` enforces `(domain, entity-set)` uniqueness regardless of how the classifier decided. The prompt rules narrow the error rate; the data-layer invariant makes the worst case impossible.
+
+**Why MongoDB specifically.** Every layer above is one Atlas primitive: `find_one` + `update_one` for the safety-merge; `$vectorSearch` filtered by `domain` for Stage 2; `find` with `state: "open"` + domain filter for the classifier's candidate pool; one document per workstream — no separate state store, no Redis for in-flight tracking, no lock service for the merge invariant. The defence is at the data layer because the data layer is the same primitive as everything else in the architecture.
 
 #### 5b. Long-term memory — workstream summaries + extracted facts
 
@@ -373,6 +430,15 @@ Every call to `process_query` writes one document to `agent_registry.routing_dec
   "workstream_is_new": false,
   "workstream_domain": "ibn",
   "replay_source_id": null,
+
+  // ── Classification-pipeline flags (Layer 5a defence layers) ──
+  "meta_query":               false,    // ① introspection short-circuit
+  "closure_short_circuit":    false,    // ② closure fast-path skipped routing/ReAct
+  "closed_workstreams":       [],       // ② workstreams closed by this turn
+                                         //   (>1 entries on topic-aware multi-close)
+  "meta_tool_calls_filtered": 0,        // ④/⑤ read-only meta tool calls
+                                         //   that did NOT attach to a workstream
+
   "stage1": {
     "method": "llm",          // singleton | explicit_mention | llm | llm_failed_fallback | llm_unknown_domain | no_domains
     "domains_available": ["acc", "dtw", "ibn", "memory", "todo", ...],
@@ -403,16 +469,21 @@ Every call to `process_query` writes one document to `agent_registry.routing_dec
 }
 ```
 
-**What this unlocks immediately**, all via the new `analytics_service` MCP — no separate observability stack:
+**The classification-pipeline flags are the new analytics surface.** They turn every defence layer into a queryable signal: meta-queries, closures, multi-closes, and observability-tool filtering each become one aggregation away. Two ready-made questions a customer's SRE would ask on day one:
 
-- `routing_summary(hours=24)` — turn count, LLM-tie-break rate, memory-recall rate, routing-miss rate, latency p50/p95. *One aggregation pipeline*.
-- `routing_misses(hours=24)` — recent queries that produced zero tool calls. The most useful single signal for spotting routing regressions.
+- *"How many of yesterday's turns paid no LLM cost?"* — `count({closure_short_circuit: true OR meta_query: true})`.
+- *"Has the closure topic-matcher ever closed more than one workstream in a turn?"* — `count({"closed_workstreams.1": {$exists: true}})`. Audit trail for the safeguard.
+
+**What this unlocks immediately**, all via the `analytics_service` MCP — no separate observability stack:
+
+- `routing_summary(hours=24)` — turn count, LLM-tie-break rate, memory-recall rate, routing-miss rate, latency p50/p95, fraction of turns that short-circuited (closure + meta). *One aggregation pipeline*.
+- `routing_misses(hours=24)` — recent queries that produced zero tool calls. The most useful single signal for spotting routing regressions. Note: a high miss rate that correlates with `meta_query: true` is **not** a regression; it's the meta-query short-circuit working correctly.
 - `slow_routing(threshold_ms=5000)` — slowest decisions; tells you whether the LLM or the ReAct loop is the bottleneck.
 - `service_usage(hours=24)` — which services actually get routed to. Drives capacity planning and identifies dormant capabilities.
 
 **Why MongoDB:** observability is "just another collection". Same `$group` / `$percentile` / `$unwind` aggregations the customer already uses for their operational workloads. No Datadog, no Honeycomb, no separate retention policy — the observability data is on the same cluster as the system being observed, queryable with the same query language, governed by the same backup and BYOK policy. The agent can introspect its own routing performance, and a customer's SRE can build a dashboard against the same collection without touching a second product.
 
-**For prompt tuning and offline learning:** the `routing_decisions` documents are a labelled corpus by construction. Each one carries the query, the Stage 1 + Stage 2 method that handled it, and the outcome. Want to know which prompt phrasings end up in the LLM tie-break? Aggregate by `stage2.method == "llm_tiebreak"`. Want to know when sticky-hint over-fires? Aggregate by `stage1.method == "llm" AND sticky_hint != null AND domains_selected != [sticky_hint]`. These are one-liner aggregations against the same collection.
+**For prompt tuning and offline learning:** the `routing_decisions` documents are a labelled corpus by construction. Each one carries the query, the Stage 1 + Stage 2 method that handled it, the classification-pipeline flags, and the outcome. Want to know which prompt phrasings end up in the LLM tie-break? Aggregate by `stage2.method == "llm_tiebreak"`. Want to know when sticky-hint over-fires? Aggregate by `stage1.method == "llm" AND sticky_hint != null AND domains_selected != [sticky_hint]`. Want to know when the classifier WOULD have created a duplicate but the data-layer safety-merge caught it? Aggregate over the `⤴ Merged` broadcast pattern (or extend `routing_decisions` with a `safety_merge_redirected_to` field — one-line change). These are one-liner aggregations against the same collection.
 
 ## 2.2 Operational considerations the architecture honors
 
