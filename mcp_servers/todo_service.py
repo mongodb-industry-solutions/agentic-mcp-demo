@@ -20,7 +20,15 @@ Capabilities:
 - List active and completed tasks
 - Mark tasks as completed
 - Delete tasks permanently
+- Bulk operations: clear all completed, delete every task
 - Persistent storage (survives restarts)
+
+Important: when the user asks to remove MANY tasks at once ('delete
+all my TODOs', 'wipe my list', 'clear everything', 'remove all
+completed'), prefer the bulk tools (clear_completed_todos /
+delete_all_todos) over iterating delete_todo(id). The orchestrator's
+ReAct loop caps at 5 iterations per turn — one bulk call handles any
+N tasks in a single operation.
 
 Examples:
 - "Add 'buy milk' to my todo list"
@@ -214,7 +222,12 @@ def delete_todo(task_id: int) -> str:
 @mcp.tool()
 def clear_completed_todos() -> str:
     """
-    Delete all completed tasks at once.
+    BULK: Delete all completed tasks at once. Single-call alternative
+    to iterating delete_todo(id) over each completed task — avoids
+    the orchestrator's 5-iteration ReAct cap.
+
+    Use when the user says 'clear completed', 'delete completed tasks',
+    'remove finished todos', 'purge done items'.
 
     Returns:
         Confirmation with count of deleted tasks
@@ -235,6 +248,36 @@ def clear_completed_todos() -> str:
     _save_todos(todos)
 
     return f"🗑️ Cleared {completed_count} completed task(s)"
+
+
+@mcp.tool()
+def delete_all_todos() -> str:
+    """
+    NUCLEAR: Delete EVERY task from the TODO list — active AND completed.
+    Single-call bulk operation; one call replaces N iterations of
+    delete_todo(id) and avoids the orchestrator's 5-iteration ReAct cap.
+
+    Use when the user says 'delete all TODOs', 'wipe my list', 'clear
+    everything', 'remove all tasks', 'reset my TODO list'.
+
+    Stronger than clear_completed_todos (which keeps active tasks).
+    Use that one when the user wants to keep their active list.
+
+    Returns:
+        Confirmation with count of deleted tasks
+    """
+    logger.info("Deleting all tasks")
+
+    todos = _load_todos()
+    total = len(todos.get("tasks") or [])
+
+    if total == 0:
+        return "ℹ️ TODO list is already empty."
+
+    todos["tasks"] = []
+    _save_todos(todos)
+
+    return f"💥 Nuclear delete: removed {total} task(s). TODO list is now empty."
 
 if __name__ == "__main__":
     logger.info("🚀 Starting TODO Service...")
