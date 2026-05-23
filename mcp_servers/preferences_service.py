@@ -4,13 +4,17 @@
 #
 
 """
-Memory Service — User Preferences and Personal Information Storage.
+Preferences Service — User Preferences and Personal Information Storage.
 
 Store, recall, list, and delete user preferences, personal facts, and
-context the user EXPLICITLY shares about themselves. Not to be confused
-with the orchestrator's internal `agent_memories` (auto-extracted from
-closed workstreams) — this service is the surface where users say
-"remember that I…" and read it back later.
+context the user EXPLICITLY shares about themselves. Distinct from the
+orchestrator's internal `agent_memories` collection (auto-extracted
+from closed workstreams) — this service backs the user-facing
+"preferences plane": the surface where users say "remember that I…"
+and read it back later.
+
+Collection: agent_registry.user_preferences (renamed from the legacy
+'episodic_memories' — migrated automatically on first start).
 
 What lives here:
 - Personal information (name, location, profession, dietary restrictions)
@@ -68,15 +72,39 @@ from mcp.server.fastmcp import FastMCP
 
 logging.disable(logging.WARNING)
 
-mcp = FastMCP("memory_service")
+mcp = FastMCP("preferences_service")
 
-logger = logging.getLogger("memory_service")
+logger = logging.getLogger("preferences_service")
 
 openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 mongo_client = MongoClient(os.environ["MONGODB_URI"])
 db = mongo_client["agent_registry"]
-collection = db["episodic_memories"]
+collection = db["user_preferences"]
+
+
+def _migrate_from_legacy_collection():
+    """
+    One-shot: copy any docs from the legacy 'episodic_memories'
+    collection into 'user_preferences' if the new collection is
+    empty. Then drop the legacy collection so the migration never
+    repeats. Non-destructive on re-runs.
+    """
+    legacy = db["episodic_memories"]
+    if "episodic_memories" not in db.list_collection_names():
+        return
+    if collection.estimated_document_count() > 0:
+        return
+    docs = list(legacy.find({}))
+    if docs:
+        collection.insert_many(docs)
+        logger.info(f"Migrated {len(docs)} doc(s) from "
+                    f"episodic_memories → user_preferences")
+    legacy.drop()
+    logger.info("Dropped legacy episodic_memories collection.")
+
+
+_migrate_from_legacy_collection()
 
 def _ensure_ttl_index():
     existing_indexes = collection.index_information()
@@ -165,13 +193,14 @@ def _generate_search_perspectives(user_query: str) -> list[str]:
         return [user_query, "recent requests wants needs"]
 
 @mcp.tool()
-def recall_memories(topic: str) -> str:
+def recall_preferences(topic: str) -> str:
     """
-    Recall relevant memories using AI-powered multi-perspective search.
-    Works generically for ANY domain (food, shopping, travel, etc.)
+    Recall relevant user preferences / stated facts using AI-powered
+    multi-perspective search. Works for ANY domain (food, shopping,
+    travel, etc.). 'Memories' is accepted as a user-facing synonym.
 
     Args:
-        topic: User query or topic to search memories for
+        topic: User query or topic to search preferences for
     """
 
     logger.info(f"Recalling memories for: '{topic}'")
@@ -315,12 +344,14 @@ def remember_fact(fact: str, is_temporary: bool = False) -> str:
         return f"❌ Failed to remember: {fact}"
 
 @mcp.tool()
-def list_all_memories() -> str:
+def list_preferences() -> str:
     """
-    List ALL stored memories about the user.
+    List ALL stored user preferences / facts about the user.
+    User-facing aliases for invocation: 'list memories',
+    'show what you remember', 'memories', 'what do you know about me'.
 
     Returns:
-        Complete list of all permanent and temporary memories
+        Complete list of all permanent and temporary preferences
     """
     logger.info("📋 Listing all memories")
 
@@ -354,15 +385,17 @@ def list_all_memories() -> str:
     return response_text
 
 @mcp.tool()
-def forget_memory(topic: str) -> str:
+def forget_preference(topic: str) -> str:
     """
-    Delete memories matching a topic using AI-powered semantic search.
+    Delete a user preference / stored fact matching a topic, using
+    AI-powered semantic search.
 
     Args:
-        topic: Description of what to forget (e.g., "vegetarian", "Solana investment")
+        topic: Description of what to forget (e.g., "vegetarian",
+               "Solana investment", "tennis")
 
     Returns:
-        Confirmation of deleted memories
+        Confirmation of deleted preferences
     """
     logger.info(f"🗑️ Forgetting memories about: '{topic}'")
 
@@ -451,11 +484,11 @@ def forget_memory(topic: str) -> str:
     return response_text
 
 @mcp.tool()
-def forget_all_memories() -> str:
+def forget_all_preferences() -> str:
     """
-    Delete ALL stored memories about the user.
-    Use this when user says: 'forget everything', 'delete all',
-    'vergiss alles', 'lösche alles'
+    NUCLEAR: Delete ALL stored preferences / facts about the user.
+    Use when the user says: 'forget everything', 'delete all
+    memories', 'wipe my preferences', 'vergiss alles', 'lösche alles'.
 
     ⚠️ WARNING: This is irreversible!
     """

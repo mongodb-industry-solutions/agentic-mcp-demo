@@ -83,34 +83,34 @@ async def show_status(agent):
 
     console.print(table)
 
-async def show_memories(agent):
+async def show_preferences(agent):
     try:
         from pymongo import MongoClient
         client = MongoClient(os.environ["MONGODB_URI"])
-        memories = list(
-            client["agent_registry"]["episodic_memories"]
+        prefs = list(
+            client["agent_registry"]["user_preferences"]
             .find({}, {"_id": 0, "text": 1, "category": 1, "createdAt": 1, "is_temporary": 1})
             .limit(10)
         )
 
-        if memories:
-            table = Table(title="🧠 Stored Memories", box=box.SIMPLE)
+        if prefs:
+            table = Table(title="🧠 User Preferences", box=box.SIMPLE)
             table.add_column("Timestamp", style="dim")
-            table.add_column("Memory", style="cyan")
+            table.add_column("Preference", style="cyan")
             table.add_column("Category", style="magenta")
             table.add_column("Type", style="yellow")
 
-            for mem in memories:
-                created_at = mem.get('createdAt', None)
+            for p in prefs:
+                created_at = p.get('createdAt', None)
                 if isinstance(created_at, datetime.datetime):
                     ts = created_at.isoformat()[:19]
                 else:
                     ts = 'unknown'
-                mem_type = "Temporary" if mem.get('is_temporary') else "Permanent"
-                table.add_row(ts, mem['text'], mem.get('category', 'N/A'), mem_type)
+                p_type = "Temporary" if p.get('is_temporary') else "Permanent"
+                table.add_row(ts, p['text'], p.get('category', 'N/A'), p_type)
             console.print(table)
         else:
-            console.print("[yellow]No memories stored yet[/]")
+            console.print("[yellow]No preferences stored yet[/]")
 
         client.close()
     except Exception as e:
@@ -166,8 +166,9 @@ async def interactive_loop():
                     await show_status(agent)
                     continue
 
-                if user_input.lower() == 'memory':
-                    await show_memories(agent)
+                if user_input.lower() in ('preferences', 'memory'):
+                    # 'memory' kept as a backward-compatible alias
+                    await show_preferences(agent)
                     continue
 
                 t0 = time.monotonic()

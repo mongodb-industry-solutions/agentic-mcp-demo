@@ -243,12 +243,12 @@ async def ws_endpoint(ws: WebSocket):
                 if cmd == "status":
                     servers = list(_agent.sessions.keys()) if _agent else []
                     await ws.send_text(json.dumps({"type": "status", "servers": servers}))
-                elif cmd == "memory":
+                elif cmd in ("memory", "preferences"):
                     memories = []
                     try:
                         client = MongoClient(os.environ["MONGODB_URI"])
                         docs = list(
-                            client["agent_registry"]["episodic_memories"]
+                            client["agent_registry"]["user_preferences"]
                             .find({}, {"_id": 0, "text": 1, "category": 1,
                                        "createdAt": 1, "is_temporary": 1})
                             .limit(10)

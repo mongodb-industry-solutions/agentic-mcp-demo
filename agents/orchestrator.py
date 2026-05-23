@@ -815,7 +815,7 @@ class OrchestratorAgent:
         Derive a domain tag from a service name with a zero-friction rule:
         take the first underscore-separated token. Service files following
         a prefix convention (ibn_*, dtw_*, acc_*, portfolio_*) cluster
-        naturally; singleton services (memory_service, restaurant_guide,
+        naturally; singleton services (preferences_service, restaurant_guide,
         incident_analyzer) become their own one-member domain.
 
         This means new services join an existing domain just by being named
@@ -2817,18 +2817,22 @@ class OrchestratorAgent:
                 "Please ensure MCP servers are installed in the mcp_servers directory."
             )
 
-        # Store last non-memory service AND its domain for stickiness.
-        # last_domain is consulted by Stage 1 on the next short/ambiguous turn.
+        # Store last non-preferences service AND its domain for stickiness.
+        # last_domain is consulted by Stage 1 on the next short/ambiguous
+        # turn. Preferences statements ('I love X') are isolated events
+        # that shouldn't drag subsequent unrelated turns into the
+        # preferences domain.
         for match in matches:
             name = match["server_name"]
-            if name != "memory_service":
+            if name != "preferences_service":
                 self.last_service = name
                 self.last_domain  = self._infer_domain(name)
                 break
 
-        # Memory service is routed normally — no forced injection.
-        # It will be selected by the vector search when the query is about
-        # preferences, personal facts, or memory operations.
+        # preferences_service is routed normally — no forced injection.
+        # It will be selected by the vector search when the query is
+        # about preferences, personal facts, or 'remember that I…'
+        # operations.
 
         server_names_final = [m["server_name"] for m in matches]
         await self._broadcast("AGENT", "Selected: " + ", ".join(server_names_final))
