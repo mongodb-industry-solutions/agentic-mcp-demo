@@ -3029,7 +3029,12 @@ class OrchestratorAgent:
                     + (f"Entities: {', '.join(ents)}\n" if ents else "")
                     + (f"Summary: {summ}\n" if summ else "")
                     + "Use the entities above (IDs, names) directly as tool "
-                    "arguments — do not invent or guess IDs."
+                    "arguments when the query targets a specific item — do not "
+                    "invent or guess IDs.\n"
+                    "When the query says 'all', 'every', 'fleet', or 'across "
+                    "all stores/sites', call the tool with NO scope arguments "
+                    "to get the full result set — do not narrow to workstream "
+                    "entities."
                 )
                 bcast_parts = [ws_doc.get("title", "(untitled)")]
                 if ents:
