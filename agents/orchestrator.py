@@ -752,18 +752,28 @@ class OrchestratorAgent:
         # Use a count of today's workstreams + 1
         return None  # placeholder; the real id is allocated via _create_workstream
 
-    async def _open_workstreams_for_classifier(self, limit: int = 10) -> List[Dict]:
-        """Compact list of open workstreams for the classifier prompt.
-        Most-recent-first; capped because the prompt has to stay small."""
-        cursor = self.workstreams.find(
-            {"state": "open"},
-            {"_id": 1, "title": 1, "domain": 1, "entities": 1,
-             "summary": 1, "last_activity": 1},
-        ).sort("last_activity", -1).limit(limit)
-        return [d async for d in cursor]
+    async def _open_workstreams_for_classifier(self, limit: int = 12) -> List[Dict]:
+        """Compact list of workstreams for the classifier prompt — open ones
+        first (so 'continue' candidates are obvious) plus a few recently-
+        completed ones (so 'replay from X' candidates are reachable). Most-
+        recent-first; capped because the prompt has to stay small."""
+        proj = {"_id": 1, "title": 1, "domain": 1, "entities": 1,
+                "summary": 1, "last_activity": 1, "state": 1}
+        open_cur = self.workstreams.find({"state": "open"}, proj) \
+                                    .sort("last_activity", -1).limit(limit)
+        open_ws = [d async for d in open_cur]
+        # Pad with recently-completed workstreams so the classifier can
+        # nominate them as replay sources without scanning the whole archive.
+        remaining = max(0, limit - len(open_ws))
+        if remaining > 0:
+            closed_cur = self.workstreams.find(
+                {"state": "completed"}, proj,
+            ).sort("last_activity", -1).limit(remaining)
+            open_ws.extend([d async for d in closed_cur])
+        return open_ws
 
     async def _classify_workstream(self, query: str, recent_user_msgs: List[str]) \
-            -> tuple[str, bool, str | None]:
+            -> tuple[str, bool, str | None, str | None]:
         """
         Classify the query into an open workstream or signal that a new
         one should be created. Returns (workstream_id, is_new, domain_hint).
@@ -773,11 +783,11 @@ class OrchestratorAgent:
         """
         open_ws = await self._open_workstreams_for_classifier()
 
-        # No open workstreams → trivially a new one
+        # No open workstreams → trivially a new one (no replay candidate)
         if not open_ws:
             title, domain_hint = await self._propose_new_workstream(query)
             ws_id = await self._create_workstream(title, domain_hint, query)
-            return ws_id, True, domain_hint
+            return ws_id, True, domain_hint, None
 
         # Build compact context for the LLM
         ws_lines = []
@@ -799,21 +809,26 @@ class OrchestratorAgent:
 
         prompt = (
             f"User query: '{query}'{recent_block}\n\n"
-            f"Open workstreams:\n{ws_block}\n\n"
-            f"Decide TWO things at once:\n"
+            f"Open + recently-closed workstreams:\n{ws_block}\n\n"
+            f"Decide THREE things at once:\n"
             f"  1. Which workstream this query continues (or whether the user "
             f"     is starting a NEW one).\n"
             f"  2. Whether the user is signaling that an open workstream is "
-            f"     now DONE — implicitly or explicitly.\n\n"
+            f"     now DONE — implicitly or explicitly.\n"
+            f"  3. Whether the user wants to REPLAY the action sequence from "
+            f"     a past workstream onto the current/new one.\n\n"
             f"Reply with valid JSON only, no prose:\n"
             f"{{\n"
             f"  \"action\": \"continue\" | \"new\",\n"
-            f"  \"workstream_id\": \"WS-...\",       // when action=continue\n"
-            f"  \"title\": \"<short title>\",        // when action=new\n"
-            f"  \"domain_hint\": \"<domain>\",       // when action=new\n"
-            f"  \"closes_workstream\": \"WS-...\"     // ID of a workstream the\n"
-            f"                                       // user just signaled DONE,\n"
-            f"                                       // or null if none\n"
+            f"  \"workstream_id\": \"WS-...\",         // when action=continue\n"
+            f"  \"title\": \"<short title>\",          // when action=new\n"
+            f"  \"domain_hint\": \"<domain>\",         // when action=new\n"
+            f"  \"closes_workstream\": \"WS-...\",     // workstream the user\n"
+            f"                                          // just signaled DONE, or null\n"
+            f"  \"replay_from_workstream\": \"WS-...\"  // source workstream whose\n"
+            f"                                          // tool-call sequence should\n"
+            f"                                          // be re-run onto this turn's\n"
+            f"                                          // context, or null\n"
             f"}}\n\n"
             f"Rules for action:\n"
             f"- If the query continues an open workstream (mentions its entities, "
@@ -828,10 +843,18 @@ class OrchestratorAgent:
             f"  • 'I'm done with the setup of Marienplatz network'\n"
             f"  • 'we are done', 'wrap up', 'that's everything for X'\n"
             f"  • 'close the Munich workstream'\n"
-            f"  • 'mark this complete', 'finalize', 'finished'\n"
             f"- The query can BOTH close one workstream AND continue/start "
             f"  another in the same turn: set both fields accordingly.\n"
-            f"- Leave null if the user is still in the middle of work.\n"
+            f"- Leave null if the user is still in the middle of work.\n\n"
+            f"Rules for replay_from_workstream:\n"
+            f"- Set to a source workstream id when the user wants to apply "
+            f"  the SAME ACTION SEQUENCE to a new entity. Examples:\n"
+            f"  • 'set up Hamburg the same way as Munich' → replay from WS-…(Munich)\n"
+            f"  • 'do the same for the Berlin branch'\n"
+            f"  • 'follow the pattern from the Marienplatz workstream'\n"
+            f"  • 'repeat what we did for Alpenmarkt'\n"
+            f"- The source may be a closed OR open workstream.\n"
+            f"- Leave null when the user isn't asking to replicate anything.\n"
         )
         try:
             resp = await self.openai.chat.completions.create(
@@ -846,7 +869,7 @@ class OrchestratorAgent:
             await self._broadcast("ROUTING",
                 f"⚠ Workstream classify failed ({e}); using most-recent open WS")
             ws = open_ws[0]
-            return ws["_id"], False, ws.get("domain")
+            return ws["_id"], False, ws.get("domain"), None
 
         # Honour an implicit close cue BEFORE deciding routing. Closing
         # a workstream triggers the change-stream watcher → memory
@@ -856,12 +879,18 @@ class OrchestratorAgent:
             await self._close_workstream(close_id,
                 reason="user-signaled completion in query")
 
+        # Validate the replay source — it has to be a workstream we showed
+        # the classifier (open or recently closed) and have a tool_calls trail.
+        replay_id = decision.get("replay_from_workstream")
+        if replay_id and not any(w["_id"] == replay_id for w in open_ws):
+            replay_id = None
+
         action = (decision.get("action") or "").lower()
         if action == "continue":
             ws_id = decision.get("workstream_id")
             ws = next((w for w in open_ws if w["_id"] == ws_id), None)
             if ws and ws_id != close_id:  # don't continue what we just closed
-                return ws["_id"], False, ws.get("domain")
+                return ws["_id"], False, ws.get("domain"), replay_id
             # Hallucinated id or we just closed it — fall through to "new"
             if not ws:
                 await self._broadcast("ROUTING",
@@ -876,7 +905,7 @@ class OrchestratorAgent:
             if domain_hint not in known_domains:
                 domain_hint = None
         ws_id = await self._create_workstream(title, domain_hint, query)
-        return ws_id, True, domain_hint
+        return ws_id, True, domain_hint, replay_id
 
     async def _propose_new_workstream(self, query: str) -> tuple[str, str | None]:
         """LLM call to derive a title + domain hint when there are no open
@@ -946,6 +975,74 @@ class OrchestratorAgent:
             # focus and let the next classifier decision adopt a new one.
             if self.current_workstream_id == ws_id:
                 self.current_workstream_id = None
+
+    # Tool-name prefixes that should NEVER be replayed onto a new context.
+    # These are either read-only intel calls (whose results don't carry
+    # over) or destructive verbs (re-running them would undo work).
+    _REPLAY_SKIP_PREFIXES = (
+        "list_", "get_", "show_", "describe_", "find_", "recall_",
+        "peek_", "inspect_", "diff_", "diagnose_", "compare_", "estimate_",
+        "cancel_", "delete_", "remove_", "forget_", "drop_",
+    )
+
+    @classmethod
+    def _is_replayable_tool(cls, tool_name: str) -> bool:
+        t = (tool_name or "").lower()
+        return not any(t.startswith(p) for p in cls._REPLAY_SKIP_PREFIXES)
+
+    async def _build_replay_recipe(self, source_ws_id: str,
+                                    target_workstream_id: str) -> str:
+        """Format a successful past tool-call sequence as a 'recipe' the
+        ReAct loop can follow on a new target. Filters out read-only and
+        destructive verbs — only the *constructive* sequence is replayed.
+
+        Returns a multi-line string suitable for injection into the
+        system prompt, or '' if the source has nothing replayable."""
+        source = await self.workstreams.find_one(
+            {"_id": source_ws_id},
+            {"_id": 1, "title": 1, "domain": 1, "entities": 1,
+             "tool_calls": 1, "summary": 1, "state": 1})
+        if not source:
+            await self._broadcast("REPLAY",
+                f"⚠ replay source {source_ws_id} not found; ignoring")
+            return ""
+
+        calls = source.get("tool_calls") or []
+        replayable = [c for c in calls if self._is_replayable_tool(c.get("tool"))]
+        if not replayable:
+            await self._broadcast("REPLAY",
+                f"⚠ {source_ws_id} has no constructive tool calls to replay")
+            return ""
+
+        skipped = len(calls) - len(replayable)
+        await self._broadcast("REPLAY",
+            f"🔁 Replaying {len(replayable)} step(s) from {source_ws_id} "
+            + (f"(skipping {skipped} read-only/undo call(s))" if skipped else ""))
+
+        step_lines = []
+        for i, c in enumerate(replayable, 1):
+            res = (c.get("result") or "").replace("\n", " ")[:140]
+            step_lines.append(
+                f"  Step {i}: `{c.get('service')}.{c.get('tool')}` — {res}"
+            )
+            await self._broadcast("REPLAY",
+                f"   {i}. {c.get('service')}.{c.get('tool')}")
+
+        return (
+            f"\n\nREPLAY RECIPE: The user is asking you to repeat a "
+            f"previously-successful sequence of actions onto a new target. "
+            f"Source workstream {source_ws_id} ('{source.get('title')}') "
+            f"executed these tool calls in order:\n"
+            + "\n".join(step_lines) + "\n\n"
+            f"Now execute the SAME sequence for the user's current request, "
+            f"adapting the arguments to the new entities mentioned in the "
+            f"user's query. Follow the exact tool order. If a step's "
+            f"argument depends on the output of an earlier step (e.g. an "
+            f"intent id), use the id returned by your own previous tool "
+            f"call in THIS turn, not the source workstream's old id. "
+            f"Skip a step only if it is genuinely not applicable to the "
+            f"new context."
+        )
 
     async def _attach_to_workstream(self, ws_id: str, query: str,
                                      service: str | None, tool: str | None,
@@ -1579,14 +1676,25 @@ class OrchestratorAgent:
         # whether it opens a new one). The chosen workstream's domain
         # becomes the sticky bias for Stage 1 below, which means routing
         # respects multi-turn intent rather than just the last turn.
-        ws_id, ws_is_new, ws_domain = await self._classify_workstream(
-            user_input, last_user_queries)
+        # The classifier also detects (a) implicit closure cues and (b)
+        # 'do the same thing for X' replay requests.
+        ws_id, ws_is_new, ws_domain, replay_source_id = \
+            await self._classify_workstream(user_input, last_user_queries)
         self.current_workstream_id = ws_id
         if not ws_is_new:
             await self._broadcast("WORKSTREAM", f"↪ {ws_id} continued")
         # Workstream domain takes precedence over last_domain for stickiness
         if ws_domain:
             self.last_domain = ws_domain
+
+        # ── Replay-recipe prep ────────────────────────────────────────────
+        # If the user asked to "do the same thing for X", build a recipe
+        # from the source workstream's tool-call audit and stash it; it
+        # gets injected into the ReAct loop's system prompt below.
+        replay_recipe = ""
+        if replay_source_id:
+            replay_recipe = await self._build_replay_recipe(
+                replay_source_id, target_workstream_id=ws_id)
 
         # Smart context enrichment — run in parallel with routing when possible
         _SELF_CONTAINED = {
@@ -1717,14 +1825,21 @@ class OrchestratorAgent:
         except Exception as e:
             print(f"⚠️ memory recall failed (non-fatal): {e}")
 
-        # Build messages with conversation history
+        # Build messages with conversation history. The system prompt is
+        # augmented with two optional sections:
+        #   • memory_block  — top-K reusable facts from past workstreams
+        #   • replay_recipe — the constructive tool-call sequence from a
+        #                     source workstream the user asked to repeat
         messages = [{"role": "system",
-                     "content": _SYSTEM_PROMPT + memory_block}]
+                     "content": _SYSTEM_PROMPT + memory_block + replay_recipe}]
         messages.extend(self.conversation_history)
         messages.append({"role": "user", "content": user_input})
 
         # ReAct Loop - Multiple tool iterations
-        max_iterations = 5
+        # Replay turns can chain submit → check → propose → activate plus a
+        # final summary turn, which needs at least 5–6 tool iterations
+        # before the agent gives its narrated response. Be generous.
+        max_iterations = 8 if replay_recipe else 5
         iteration = 0
 
         while iteration < max_iterations:

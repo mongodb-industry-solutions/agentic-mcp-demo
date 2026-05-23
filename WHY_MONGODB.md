@@ -448,6 +448,24 @@ This is the most common pushback at the demo, and the honest answer is the model
 
 13b. **Show recall in action.** Open a brand-new conversation by starting a different Alpenmarkt store: *"I'm opening a second Alpenmarkt branch at Hamburg Altona. Same setup as Munich."* The live feed shows the workstream classifier opening a new WS, then a `[MEMORY] 🧠 Recalled 3 relevant fact(s) for this turn` line — the agent has loaded the Munich facts before generating its tool call. The submit_intent result includes the strict-retail-v3 template *without the user having mentioned it*. Talking point: *"That's cross-session knowledge transfer through the same Atlas cluster, no fine-tuning, no RAG pipeline. A document collection with a vector index is the memory plane."*
 
+13c. **🔁 The replay moment.** Re-do the previous step with the phrasing *"done with Munich. Let's set up the Hamburg branch the same way."* This single turn does THREE things at once:
+   ```
+   [WORKSTREAM] ✓ WS-2026-05-23-001 closed — user-signaled completion in query
+   [WORKSTREAM] 🆕 WS-2026-05-23-002 opened — Set up Hamburg branch [ibn]
+   [MEMORY]    💎 Extracted 3 fact(s) from WS-2026-05-23-001
+   [MEMORY]    🧠 Recalled 3 relevant fact(s) for this turn
+   [REPLAY]    🔁 Replaying 4 step(s) from WS-2026-05-23-001 (skipping 2 read-only call(s))
+   [REPLAY]       1. ibn_intent_service.submit_intent
+   [REPLAY]       2. ibn_feasibility_service.check_feasibility
+   [REPLAY]       3. ibn_feasibility_service.propose_plan
+   [REPLAY]       4. ibn_feasibility_service.activate_plan
+   [ACTION]    Tool: submit_intent → IBN-006
+   [ACTION]    Tool: check_feasibility → feasible
+   [ACTION]    Tool: propose_plan
+   [ACTION]    Tool: activate_plan → 🟢 active
+   ```
+   The orchestrator builds a "replay recipe" from the closed Munich workstream's `tool_calls` audit trail, filters out read-only/destructive calls (skip-list of verbs like `list_*`, `get_*`, `cancel_*`, `delete_*`), and injects it into the ReAct loop's system prompt. The LLM follows the recipe step by step, swapping IDs as new tool calls produce them. Talking point — *the line that lands the "agentic memory as a database primitive" pitch*: **"The agent didn't have to figure out what to do for Hamburg. The full sequence is on `agent_workstreams.tool_calls` as a document audit trail. Replay is `find_one()` + smart prompt construction. No workflow engine to write, no DAG to maintain — Atlas already had the procedure stored as documents."**
+
 13. **Switch to the DTW domain.** *"What if we raise prepaid M downlink to 20 Mbps in NYC Saturday night?"* New workstream, new domain. Run `simulate scenario DTW-SCN-…` — the simulation service does `$graphLookup` + hybrid `$vectorSearch` in the same tool call. Open the DTW dashboard at `http://localhost:8080`. Talking point: *"Graph for operational structure, vector for institutional memory, change streams for the live UI — three Atlas features, one tool call. And it's all on the same cluster as the workstreams, the history, and the service catalog."*
 14. **The closing slide.** Show the polyglot-equivalent stack diagram (Postgres + pgvector + Elasticsearch + PostGIS + TimescaleDB + Debezium + Kafka + Redis-for-agent-state + Pinecone-for-agent-memory). Talking point: *"Same demo on that stack: maybe six months and three more engineers. Here: one Atlas cluster. Operational data, routing brain, agent's working memory, agent's long-term recall, raw command history, live UI — same primitives, same query language, same backup."*
 
