@@ -141,6 +141,15 @@ def _latest_metric(intent_id: str, metric: str, window_seconds: int = 300) -> fl
     return doc["value"] if doc else None
 
 
+def _last_known_metric(intent_id: str, metric: str) -> tuple[float, datetime.datetime] | tuple[None, None]:
+    """Return the most recent (value, ts) ever recorded, ignoring age."""
+    doc = telemetry.find_one(
+        {"meta.intent_id": intent_id, "meta.metric": metric},
+        sort=[("ts", DESCENDING)],
+    )
+    return (doc["value"], doc["ts"]) if doc else (None, None)
+
+
 def _build_fingerprint(intent: dict, observed_pos_latency: float | None) -> str:
     """Render a natural-language symptom fingerprint for vector search."""
     site_name = "site"
@@ -224,22 +233,27 @@ def get_compliance(intent_id: str = None, site: str = None) -> str:
     if not active:
         return "No active intents."
 
+    now = datetime.datetime.now()
     rows = []
     for it in active:
         t         = it.get("parsed", {}).get("targets", {})
         threshold = t.get("pos_latency_ms")
-        latest    = _latest_metric(it["_id"], "pos_latency_ms")
+        # Compliance uses a 5-min live window; display uses last-known ever.
+        live    = _latest_metric(it["_id"], "pos_latency_ms", window_seconds=300)
+        val, ts = _last_known_metric(it["_id"], "pos_latency_ms")
         site_doc  = sites.find_one({"_id": it.get("site_id")})
         site_name = site_doc["name"] if site_doc else "—"
-        if latest is None:
-            violated = False
-        elif threshold and latest > threshold:
+        if live is None:
+            violated = False          # no live signal → not actively violated
+        elif threshold and live > threshold:
             violated = True
         else:
             violated = False
+        age_sec = int((now - ts).total_seconds()) if ts else None
         rows.append({
             "it": it, "site_name": site_name,
-            "latest": latest, "threshold": threshold, "violated": violated,
+            "live": live, "val": val, "ts": ts, "age_sec": age_sec,
+            "threshold": threshold, "violated": violated,
         })
 
     green_rows = [r for r in rows if not r["violated"]]
@@ -247,17 +261,28 @@ def get_compliance(intent_id: str = None, site: str = None) -> str:
 
     lines = [f"**Fleet compliance:** {len(green_rows)}/{len(rows)} green", ""]
 
+    def _age_str(age_sec: int | None) -> str:
+        if age_sec is None:
+            return ""
+        if age_sec < 60:
+            return f"{age_sec}s ago"
+        if age_sec < 3600:
+            return f"{age_sec // 60}m ago"
+        return f"{age_sec // 3600}h ago"
+
     def _row_line(r):
         it, name = r["it"], r["site_name"]
-        latest, thr = r["latest"], r["threshold"]
+        val, thr, age_sec = r["val"], r["threshold"], r["age_sec"]
+        live = r["live"]
         emoji = "🔴" if r["violated"] else "🟢"
-        if latest is None:
+        if val is None:
             metric_str = "no telemetry yet"
         else:
-            utilisation = f"{int(100 * latest / thr)}% of SLA" if thr else ""
-            metric_str = (
-                f"POS {latest:.1f}ms / {thr}ms SLA  ({utilisation})"
-                if thr else f"POS {latest:.1f}ms"
+            utilisation = f"{int(100 * val / thr)}% of SLA" if thr else ""
+            freshness   = "" if (live is not None) else f" · last seen {_age_str(age_sec)}"
+            metric_str  = (
+                f"POS {val:.1f}ms / {thr}ms SLA  ({utilisation}){freshness}"
+                if thr else f"POS {val:.1f}ms{freshness}"
             )
         return f"- {emoji} **{it['_id']}** · {name} · {metric_str}"
 
