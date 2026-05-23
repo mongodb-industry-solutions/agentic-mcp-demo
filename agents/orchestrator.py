@@ -2056,8 +2056,13 @@ class OrchestratorAgent:
         # to todo, where the LLM would otherwise stay in todo because the
         # add_todo tool can plausibly accept any text.
         ql = query.lower()
+        # Plural-aware: 'workstream' domain matches both 'workstream'
+        # and 'workstreams' in the query. Without this, 'delete all
+        # workstreams' fails to fire the explicit-mention shortcut
+        # because '\bworkstream\b' has a word-boundary after the
+        # 'm', not after the 's'.
         explicit = [d for d in by_domain
-                    if re.search(rf"\b{re.escape(d.lower())}\b", ql)]
+                    if re.search(rf"\b{re.escape(d.lower())}s?\b", ql)]
         if explicit:
             total = sum(len(by_domain[d]) for d in explicit)
             label = "service" if total == 1 else "services"
@@ -2399,6 +2404,34 @@ class OrchestratorAgent:
                                 f"🔓 Topic switch detected, releasing lock from {self.last_service}")
                 self.last_service = None
                 self.last_domain  = None
+
+        # Explicit-mention shortcut — BEFORE the LLM tie-break.
+        # If exactly one candidate's domain appears as a literal word
+        # in the query, that candidate wins regardless of vector
+        # score. The query 'delete all workstreams' MUST resolve to
+        # workstream_service even when vector ranking puts another
+        # candidate within 0.001 of it — otherwise we get destructive
+        # misfires like "delete all workstreams → delete_all_todos".
+        # Plural-aware (workstream/workstreams), case-insensitive.
+        ql_lc = query.lower()
+        explicit_candidates = []
+        for c in candidates:
+            domain = (c.get("domain") or "").lower()
+            if not domain:
+                continue
+            if re.search(rf"\b{re.escape(domain)}s?\b", ql_lc):
+                explicit_candidates.append(c)
+        if explicit_candidates:
+            # Multiple matches → pick highest-scored among them.
+            winner = max(explicit_candidates,
+                         key=lambda c: c.get("score", 0))
+            await self._broadcast("ROUTING",
+                f"✓ Explicit domain mention ({winner.get('domain')}): "
+                f"{winner['server_name']} (tie-break skipped)")
+            self._decision_under("stage2",
+                method="explicit_domain_mention",
+                winner_services=[winner["server_name"]])
+            return [winner["server_name"]]
 
         # Medium confidence → LLM validation (silent until the result line).
         # The LLM gets the FULL docstring (trigger phrases + scope guards),
