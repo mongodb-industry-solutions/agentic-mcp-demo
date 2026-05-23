@@ -2117,7 +2117,10 @@ class OrchestratorAgent:
         _DOMAIN_LABELS: dict[str, str] = {
             "ibn": "Intent-Based Networking — enterprise site commissioning, "
                    "new-store network deployment, POS/WiFi/camera connectivity, "
-                   "SLA, latency & availability targets, feasibility & assurance",
+                   "SLA, latency & availability targets, feasibility & assurance, "
+                   "compliance monitoring, violation diagnosis, runbook application, "
+                   "telemetry injection, scenario injection, morning rush, traffic spike, "
+                   "inject event, inject telemetry, simulate violation",
             "dtw": "Digital Twin (ACME Mobile) — what-if simulations, QoS "
                    "uplift, policy migration, RAN/core topology, traffic load",
             "acc": "MongoDB ACC — sales proof points, one-pagers, PowerPoint export",
