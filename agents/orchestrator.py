@@ -1066,28 +1066,29 @@ class OrchestratorAgent:
         # ── Fast-path: pure-closure heuristic ─────────────────────────────
         # When the query is an unambiguous goodbye ("done with TODOs",
         # "we're finished", "wrap up"), skip the classifier LLM call
-        # entirely. Saves an LLM round-trip AND avoids the classic
-        # action='continue'-with-hallucinated-id fallthrough that used
-        # to fabricate a new workstream out of a closure cue.
+        # entirely. Only acts on OPEN workstreams — a closure cue with
+        # nothing currently open is a no-op, NOT a reaffirmation of the
+        # most-recently-closed workstream. Picking a recently-closed
+        # workstream as the target would produce misleading "closed X"
+        # replies on consecutive goodbye turns.
         if self._is_pure_closure_cue(query):
-            target = next((w for w in open_ws
-                           if w.get("state") == "open"), None) \
-                     or (open_ws[0] if open_ws else None)
-            if target:
+            open_only = [w for w in open_ws if w.get("state") == "open"]
+            if open_only:
+                target = open_only[0]
                 target_id = target["_id"]
-                if target.get("state") != "completed":
-                    await self._close_workstream(target_id,
-                        reason="closure cue inferred from query")
+                await self._close_workstream(target_id,
+                    reason="closure cue inferred from query")
                 await self._broadcast("WORKSTREAM",
-                    f"⏸ Closure-only query — no new workstream; "
-                    f"using {target_id} for context (LLM skipped)")
+                    f"⏸ Closure-only query — closed {target_id} "
+                    f"(LLM skipped)")
                 return (target_id, False, target.get("domain"), None, True)
-            # No open or recent workstream to close — still a closure,
-            # just nothing for it to act on. Signal pure-closure so
-            # process_query short-circuits with a 'nothing to close'
-            # reply rather than creating a fresh workstream.
+            # No OPEN workstream to close. Signal pure-closure with
+            # ws_id=None so process_query replies "nothing to close"
+            # without fabricating a workstream or pretending to close
+            # an already-completed one.
             await self._broadcast("WORKSTREAM",
-                "⏸ Closure-only query — nothing to close (LLM skipped)")
+                "⏸ Closure-only query — no open workstreams; nothing "
+                "to close (LLM skipped)")
             return (None, False, None, None, True)
 
         # No open workstreams → trivially a new one (no replay candidate)
@@ -1206,21 +1207,27 @@ class OrchestratorAgent:
 
         action = (decision.get("action") or "").lower()
 
+        # Helper: was close_id pointing at a genuinely-open workstream?
+        # (The block above may have just closed it; check pre-close state.)
+        close_target = next((w for w in open_ws if w["_id"] == close_id), None) \
+            if close_id else None
+        close_was_open = bool(close_target
+                              and close_target.get("state") == "open")
+
         # Post-LLM closure safety net. The upfront _is_pure_closure_cue
         # heuristic catches short, unambiguous goodbyes; this catches
         # the longer closures the LLM identified via its own prompt
         # rules (e.g. "I'm done with the setup of Marienplatz network"
         # — 10 words, over the heuristic's 8-word cap). If the LLM set
-        # closes_workstream AND chose action='new', treat as pure
-        # closure rather than fabricating a workstream out of a goodbye.
-        if action == "new" and close_id and \
-                any(w["_id"] == close_id for w in open_ws):
-            target = next((w for w in open_ws if w["_id"] == close_id), None)
+        # closes_workstream on an OPEN workstream AND chose action='new',
+        # treat as pure closure rather than fabricating a workstream
+        # out of a goodbye.
+        if action == "new" and close_was_open:
             await self._broadcast("WORKSTREAM",
                 f"⏸ Closure intent recognized — using {close_id} for "
                 f"context, not opening a new workstream")
-            return (close_id, False,
-                    (target or {}).get("domain"), replay_id, True)
+            return (close_id, False, close_target.get("domain"),
+                    replay_id, True)
 
         if action == "continue":
             ws_id = decision.get("workstream_id")
@@ -1228,19 +1235,17 @@ class OrchestratorAgent:
             if ws and ws_id != close_id:  # don't continue what we just closed
                 return ws["_id"], False, ws.get("domain"), replay_id, False
             # Hallucinated id or we just closed it. Two cases:
-            #   (a) close_id is set — LLM intended a closure but gave a
-            #       bad continuation id. Treat as pure closure with
-            #       close_id as the context target.
-            #   (b) no close_id — pure hallucination. Fall through to
-            #       new-workstream creation as before.
-            if close_id and any(w["_id"] == close_id for w in open_ws):
-                target = next((w for w in open_ws
-                               if w["_id"] == close_id), None)
+            #   (a) close_id pointed at an OPEN workstream — LLM intended
+            #       a closure but gave a bad continuation id. Treat as
+            #       pure closure with close_id as the context target.
+            #   (b) no close_id (or close_id was already closed) — pure
+            #       hallucination. Fall through to new-workstream creation.
+            if close_was_open:
                 await self._broadcast("WORKSTREAM",
                     f"⏸ Closure intent recognized (continue→bad id) — "
                     f"using {close_id} for context")
-                return (close_id, False,
-                        (target or {}).get("domain"), replay_id, True)
+                return (close_id, False, close_target.get("domain"),
+                        replay_id, True)
             if not ws:
                 await self._broadcast("ROUTING",
                     f"⚠ Workstream classify returned unknown id {ws_id!r}; opening new WS")
@@ -2190,10 +2195,12 @@ class OrchestratorAgent:
                           f"(`{ws_id}`). Long-term memory extraction will "
                           f"run in the background.")
             else:
-                # Closure cue but nothing open to close — first-turn or
-                # already-empty session. Don't fabricate a workstream.
-                answer = ("Nothing to close — there are no active "
-                          "workstreams to wrap up.")
+                # Closure cue but nothing open to close. Be explicit so
+                # the user can see we deliberately did nothing rather
+                # than fabricating a workstream just to "close" it.
+                answer = ("You have no active workstream — nothing to "
+                          "close. (No tool call, no LLM call, no new "
+                          "workstream created.)")
             # Still record the conversation turn so the next classifier
             # has continuity, but skip ReAct entirely.
             self.conversation_history.append({"role": "user", "content": user_input})
