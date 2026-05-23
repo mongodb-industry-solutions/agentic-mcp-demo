@@ -321,7 +321,7 @@
   <div class="banner-meta">
     🍃 MongoDB: <span id="bannerHost">connecting…</span> &nbsp;|&nbsp;
     🔍 Indexes: <span id="bannerIndexes">—</span> &nbsp;|&nbsp;
-    Commands: <span style="color:var(--text)">status · memory</span>
+    Commands: <span style="color:var(--text)">status · preferences</span>
   </div>
 </div>
 
@@ -450,6 +450,11 @@ function connect() {
       return;
     }
 
+    if (msg.type === 'ws_memories') {
+      renderWsMemories(msg.workstream_id, msg.memories || []);
+      return;
+    }
+
     if (msg.type === 'thinking') {
       const el = document.getElementById('thinkingLine');
       if (el) el.classList.toggle('active', msg.active);
@@ -500,7 +505,7 @@ function connect() {
     if (msg.type === 'memory') {
       if (!msg.rows.length) { appendInfoLine('No memories stored yet.'); return; }
       const rows = msg.rows.map(r => [r.ts, r.text, r.category, r.type]);
-      appendTable('🧠 Stored Memories', ['Timestamp', 'Memory', 'Category', 'Type'], rows);
+      appendTable('🧠 User Preferences', ['Timestamp', 'Preference', 'Category', 'Type'], rows);
       return;
     }
   };
@@ -556,8 +561,8 @@ input.addEventListener('keydown', (e) => {
   if (lower === 'status') {
     ws.send(JSON.stringify({type: 'command', cmd: 'status'}));
     thinkEl.classList.remove('active');
-  } else if (lower === 'memory') {
-    ws.send(JSON.stringify({type: 'command', cmd: 'memory'}));
+  } else if (lower === 'preferences' || lower === 'memory') {
+    ws.send(JSON.stringify({type: 'command', cmd: 'preferences'}));
     thinkEl.classList.remove('active');
   } else {
     thinking = true;
@@ -609,6 +614,9 @@ function switchTab(tab) {
   document.getElementById('tabWorkstreams').classList.toggle('active', tab === 'workstreams');
   if (tab === 'workstreams' && !workstreamsLoaded) {
     requestWorkstreams();
+  }
+  if (tab === 'log') {
+    scrollLog();
   }
 }
 
@@ -663,9 +671,10 @@ function renderWorkstreamCard(w) {
     + `  <span style="background:rgba(0,212,255,0.12);color:var(--cyan);`
     + `         padding:1px 6px;border-radius:3px;font-size:10px;">${esc(w.domain || '—')}</span>`
     + (memCount > 0
-        ? `  <span title="Memories extracted from this workstream" `
+        ? `  <span class="mem-badge" data-wsid="${esc(w._id)}" `
+          + `title="Click to view extracted memories" `
           + `style="background:rgba(255,215,0,0.15);color:#FFD700;`
-          + `padding:1px 6px;border-radius:3px;font-size:10px;">`
+          + `padding:1px 6px;border-radius:3px;font-size:10px;cursor:pointer;">`
           + `💎 ${memCount} memor${memCount === 1 ? 'y' : 'ies'}</span>`
         : '')
     + `  <span style="margin-left:auto;color:var(--dim);font-size:11px;">${lastTs}</span>`
@@ -677,8 +686,69 @@ function renderWorkstreamCard(w) {
                   + `${numCalls} tool call${numCalls === 1 ? '' : 's'}</div>` : '')
     + (w.summary ? `<div style="font-size:11px;color:var(--fg);opacity:0.85;`
                    + `line-height:1.4;border-left:2px solid var(--cyan);padding-left:8px;">`
-                   + `${esc(w.summary)}</div>` : '');
+                   + `${esc(w.summary)}</div>` : '')
+    + (memCount > 0
+        ? `<div class="mem-subpanel" id="mem-${esc(w._id)}" style="display:none;`
+          + `margin-top:8px;border-top:1px solid var(--border);padding-top:8px;"></div>`
+        : '');
+
+  // wire up badge click
+  const badge = card.querySelector('.mem-badge');
+  if (badge) {
+    badge.addEventListener('click', () => toggleMemoryPanel(w._id));
+  }
   return card;
+}
+
+// ── Workstream memory sub-panel ───────────────────────────────────────────
+const _memPanelOpen = new Set();   // ws_ids currently expanded
+const _memCache     = {};          // ws_id → memories array
+
+function toggleMemoryPanel(wsId) {
+  const panel = document.getElementById('mem-' + wsId);
+  if (!panel) return;
+  if (_memPanelOpen.has(wsId)) {
+    _memPanelOpen.delete(wsId);
+    panel.style.display = 'none';
+    return;
+  }
+  _memPanelOpen.add(wsId);
+  panel.style.display = '';
+  if (_memCache[wsId]) {
+    renderWsMemories(wsId, _memCache[wsId]);
+  } else {
+    panel.innerHTML = '<div style="color:var(--dim);font-size:11px;">Loading…</div>';
+    ws.send(JSON.stringify({type: 'ws_memories_request', workstream_id: wsId}));
+  }
+}
+
+function renderWsMemories(wsId, mems) {
+  _memCache[wsId] = mems;
+  const panel = document.getElementById('mem-' + wsId);
+  if (!panel || !_memPanelOpen.has(wsId)) return;
+  if (!mems.length) {
+    panel.innerHTML = '<div style="color:var(--dim);font-size:11px;">No memories extracted.</div>';
+    return;
+  }
+  const tierColor = {core: '#00d4ff', extracted: '#FFD700', decayed: '#666'};
+  panel.innerHTML =
+    '<div style="font-size:10px;letter-spacing:1px;color:var(--cyan);'
+    + 'text-transform:uppercase;margin-bottom:6px;">💎 Extracted memories</div>'
+    + mems.map(m => {
+        const conf  = Math.round((m.confidence || 0) * 100);
+        const tc    = tierColor[m.tier] || '#aaa';
+        const ents  = (m.entities || []).slice(0, 4).map(esc).join(', ');
+        const rcl   = m.recall_count ? `· recalled ${m.recall_count}×` : '';
+        return `<div style="margin-bottom:8px;padding:6px 8px;`
+             + `background:rgba(255,215,0,0.06);border-radius:3px;`
+             + `border-left:2px solid ${tc};">`
+             + `<div style="font-size:11px;color:var(--fg);line-height:1.4;">${esc(m.text)}</div>`
+             + `<div style="font-size:10px;color:var(--dim);margin-top:3px;">`
+             + `<span style="color:${tc};">${esc(m.tier)}</span>`
+             + ` · ${esc(m.category)} · ${conf}% confidence ${rcl}`
+             + (ents ? ` · entities: ${ents}` : '')
+             + `</div></div>`;
+      }).join('');
 }
 
 // ── Server management ──────────────────────────────────────────────────────

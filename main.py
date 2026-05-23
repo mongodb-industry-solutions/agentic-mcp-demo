@@ -32,7 +32,7 @@ def show_banner():
 ## Commands
 - Type queries naturally
 - `status` - System health
-- `memory` - View stored memories
+- `preferences` - View stored user preferences
 - `exit` - Quit
 """
     console.print(Panel(Markdown(banner), border_style="green", box=box.DOUBLE))

@@ -90,7 +90,7 @@ async def _watch_workstreams():
             stream = await coll.watch(full_document="updateLookup")
             async with stream:
                 async for change in stream:
-                    if change["operationType"] in ("insert", "update", "replace"):
+                    if change["operationType"] in ("insert", "update", "replace", "delete", "invalidate"):
                         doc = change.get("fullDocument") or {}
                         msg = json.dumps({
                             "type": "workstream_update",
@@ -237,6 +237,39 @@ async def ws_endpoint(ws: WebSocket):
                 except Exception as e:
                     log.warning(f"workstreams_request failed: {e}")
                 await ws.send_text(json.dumps({"type": "workstreams", "list": rows}))
+
+            elif msg.get("type") == "ws_memories_request":
+                ws_id = (msg.get("workstream_id") or "").strip()
+                mems = []
+                if ws_id:
+                    try:
+                        client = MongoClient(os.environ["MONGODB_URI"])
+                        cur = (client["agent_registry"]["agent_memories"]
+                               .find({"workstream_id": ws_id},
+                                     {"_id": 1, "text": 1, "category": 1,
+                                      "confidence": 1, "tier": 1, "recall_count": 1,
+                                      "entities": 1, "extracted_at": 1})
+                               .sort("_id", 1))
+                        for d in cur:
+                            ts = d.get("extracted_at")
+                            mems.append({
+                                "id":          str(d["_id"]),
+                                "text":        d.get("text", ""),
+                                "category":    d.get("category", ""),
+                                "confidence":  d.get("confidence", 0),
+                                "tier":        d.get("tier", "extracted"),
+                                "recall_count": d.get("recall_count", 0),
+                                "entities":    d.get("entities") or [],
+                                "extracted_at": ts.isoformat()[:19] if hasattr(ts, "isoformat") else "—",
+                            })
+                        client.close()
+                    except Exception as e:
+                        log.warning(f"ws_memories_request failed: {e}")
+                await ws.send_text(json.dumps({
+                    "type": "ws_memories",
+                    "workstream_id": ws_id,
+                    "memories": mems,
+                }))
 
             elif msg.get("type") == "command":
                 cmd = msg.get("cmd", "")
