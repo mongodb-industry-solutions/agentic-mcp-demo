@@ -239,6 +239,18 @@ async with await coll.watch(full_document="updateLookup") as stream:
 
 This is the layer that elevates the demo from *"clever multi-agent router"* to *"the agent has a mind, and that mind lives in Atlas"*. Three resolutions of memory, all persisted in the same cluster.
 
+> ## 🎯 The punchline
+>
+> **One collection — `agent_workstreams` — drives three distinct agentic capabilities, each lighting up a different moment in the demo.**
+>
+> | Use | Triggered by | Atlas primitive it leans on | Demo moment |
+> |---|---|---|---|
+> | **Routing context** | Every turn | `find_one` + sticky `domain`/`entities` fields | *"propose plan and execute it"* stays in IBN after a TODO interruption |
+> | **Memory extraction** | `state → completed` change | Change stream + LLM over the audit-trail subdoc | *"I'm done with Marienplatz"* → `💎` line appears in the live feed |
+> | **Procedural replay** | Classifier detects "same way as X" | `tool_calls` audit array used as a recipe | *"Hamburg the same way"* → 4-step replay scrolls through the feed |
+>
+> Three uses, three time scales (the active turn / a session boundary / cross-session reuse), **one document collection with the right indexes**. No workflow engine, no separate memory product, no audit-log sidecar. Same primitive every time — that's the *agentic-memory-as-a-database-primitive* story compressed into one sentence.
+
 #### 5a. Working memory — `agent_workstreams`
 
 Every conversation is decomposed into one or more **workstreams** — coherent threads of activity. Opening the Marienplatz store is one workstream. The TODO inquiry is another. A what-if simulation on `plan_ACME_M` is a third. All can be active in parallel; the user interleaves them naturally and the orchestrator tracks which is which.
@@ -356,7 +368,7 @@ None of these require a new engine. All are collections + indexes on the same At
 
 ## 3.1 The 30-second elevator
 
-> *"We replace the data plumbing of an agentic AI platform — including the agent's own memory. Every team building an LLM agent today needs a service catalog, a routing brain, a working-memory store for active workstreams, a long-term memory store for semantic recall, an operational state DB, a graph for entity dependencies, a search engine, sometimes a time-series store. Most of them are wiring seven engines together and discovering the integration tax eats their roadmap. We deliver all of that — including the agent's mind — as features of one document database with native vector, graph, geospatial, time-series, and change streams. Kill the process anywhere; restart; the agent resumes. Because the state isn't in process memory, it's in Atlas."*
+> *"We replace the data plumbing of an agentic AI platform — including the agent's own memory. Every team building an LLM agent today needs a service catalog, a routing brain, a working-memory store for active workstreams, a long-term memory store for semantic recall, an operational state DB, a graph for entity dependencies, a search engine, sometimes a time-series store. Most of them are wiring seven engines together and discovering the integration tax eats their roadmap. We deliver all of that — including the agent's mind — as features of one document database with native vector, graph, geospatial, time-series, and change streams. **One Atlas collection (`agent_workstreams`) drives routing context, long-term memory extraction, AND procedural replay** — same primitive, three uses, three demo moments. Kill the process anywhere; restart; the agent resumes. Because the state isn't in process memory, it's in Atlas."*
 
 ## 3.2 Talking points by stakeholder
 
@@ -471,7 +483,7 @@ This is the most common pushback at the demo, and the honest answer is the model
 
 ## 3.6 The single sentence to leave behind
 
-> *"Atlas isn't just where your agentic AI platform stores its data — it's the data plane of the platform and the memory plane of the agent. Vector search is routing. Graph traversal is impact analysis. Time-series is telemetry. Change streams are the live UI. **Workstreams are the agent's working memory; their summaries are its long-term recall; the command history is its audit trail — all on the same cluster.** One database, every primitive an agent needs. Kill the process. Restart. Resume. The agent remembers because Atlas remembers."*
+> *"Atlas isn't just where your agentic AI platform stores its data — it's the data plane of the platform and the memory plane of the agent. Vector search is routing. Graph traversal is impact analysis. Time-series is telemetry. Change streams are the live UI. **One workstream collection drives three agentic capabilities at once — routing context, long-term memory extraction, and procedural replay.** Same primitive, three uses. Kill the process. Restart. Resume. The agent remembers because Atlas remembers."*
 
 ---
 
