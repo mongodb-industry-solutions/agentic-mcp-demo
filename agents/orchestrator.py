@@ -2099,6 +2099,19 @@ class OrchestratorAgent:
         # ibn_feasibility_service's tagline ('Match Intent to Inventory and
         # Plan Activation'), but the old blurb only showed
         # ibn_intent_service's tagline and the LLM missed the connection.
+        # Domain-level orientation labels for multi-service domains whose
+        # short taglines don't carry enough vocabulary to disambiguate from
+        # semantically adjacent singletons.  These are prepended to the blurb
+        # so the LLM has a plain-language anchor before reading the taglines.
+        _DOMAIN_LABELS: dict[str, str] = {
+            "ibn": "Intent-Based Networking — enterprise site commissioning, "
+                   "new-store network deployment, POS/WiFi/camera connectivity, "
+                   "SLA, latency & availability targets, feasibility & assurance",
+            "dtw": "Digital Twin (ACME Mobile) — what-if simulations, QoS "
+                   "uplift, policy migration, RAN/core topology, traffic load",
+            "acc": "MongoDB ACC — sales proof points, one-pagers, PowerPoint export",
+        }
+
         lines = []
         for d, members in sorted(by_domain.items()):
             members_str = ", ".join(m["server_name"] for m in members[:5])
@@ -2117,6 +2130,12 @@ class OrchestratorAgent:
                 if first_line:
                     taglines.append(first_line[:80])
             blurb = " · ".join(taglines) if taglines else "(no description)"
+            # Prepend the orientation label when available so the LLM isn't
+            # misled by abstract per-service taglines into picking a
+            # semantically adjacent singleton (e.g. network_monitor wins over
+            # ibn on "latency / availability" vocabulary without the label).
+            if d in _DOMAIN_LABELS:
+                blurb = f"{_DOMAIN_LABELS[d]}  |  {blurb}"
             lines.append(f"- {d}: {blurb}  [services: {members_str}]")
         taxonomy = "\n".join(lines)
 
