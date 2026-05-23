@@ -1124,7 +1124,15 @@ class OrchestratorAgent:
                 "summary": 1, "last_activity": 1, "state": 1}
         open_query: Dict = {"state": "open"}
         if domain_filter:
-            open_query["domain"] = {"$in": list(domain_filter)}
+            # Include workstreams matching the domain filter AND workstreams
+            # with no domain assigned (created before routing was stable) —
+            # we can't rule them out without knowing their domain.
+            open_query["$or"] = [
+                {"domain": {"$in": list(domain_filter)}},
+                {"domain": None},
+                {"domain": ""},
+                {"domain": "—"},
+            ]
         open_cur = self.workstreams.find(open_query, proj) \
                                     .sort("last_activity", -1).limit(limit)
         open_ws = [d async for d in open_cur]
@@ -3009,6 +3017,14 @@ class OrchestratorAgent:
                     + "Use the entities above (IDs, names) directly as tool "
                     "arguments — do not invent or guess IDs."
                 )
+                bcast_parts = [ws_doc.get("title", "(untitled)")]
+                if ents:
+                    bcast_parts.append(f"entities: {', '.join(ents)}")
+                if summ:
+                    bcast_parts.append(f"summary: {summ[:120]}{'…' if len(summ) > 120 else ''}")
+                await self._broadcast("WORKSTREAM",
+                    f"🗂 Context injected: {self.current_workstream_id} — "
+                    + "  |  ".join(bcast_parts))
             # Both planes recalled in parallel — different collections,
             # different shapes, independent failure modes.
             recalled, prefs_recalled = await asyncio.gather(
