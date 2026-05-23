@@ -1408,7 +1408,58 @@ class OrchestratorAgent:
 
     async def _create_workstream(self, title: str, domain: str | None,
                                   seed_query: str) -> str:
-        """Insert a new workstream document and return its id."""
+        """
+        Allocate or merge a workstream and return its id.
+
+        Safety-merge invariant: at most ONE open workstream per
+        (domain, entity-set) without explicit override. If the
+        classifier returned action='new' but a same-domain open
+        workstream already exists, this method:
+
+        - Extracts candidate entities from the new title + seed_query
+        - Compares against the existing workstream's entities
+        - If the new work introduces no NEW entity → MERGE into the
+          existing workstream (broadcast ⤴), return its id.
+        - If a fully-new entity is present → allow split (broadcast
+          🌿), create the new workstream as usual.
+
+        This is the structural fix for the "two workstreams for two
+        TODO tasks" failure mode: the LLM classifier is stochastic and
+        sometimes returns action='new' on routine CRUD; the data layer
+        now refuses to fabricate a duplicate workstream when there's
+        nothing materially new to track.
+        """
+        # ─── Safety-merge ─────────────────────────────────────────────────
+        if domain:
+            existing = await self.workstreams.find_one(
+                {"domain": domain, "state": "open"},
+                sort=[("last_activity", -1)],
+            )
+            if existing:
+                existing_entities = set(existing.get("entities") or [])
+                candidate_entities = self._extract_potential_entities(
+                    f"{title} {seed_query or ''}")
+                new_entities = candidate_entities - existing_entities
+                if not new_entities:
+                    # Routine continuation — merge.
+                    await self.workstreams.update_one(
+                        {"_id": existing["_id"]},
+                        {"$set": {"last_activity": datetime.datetime.now()}},
+                    )
+                    await self._broadcast("WORKSTREAM",
+                        f"⤴ Merged into open {existing['_id']} — "
+                        f"same domain '{domain}', no new entity introduced "
+                        f"(classifier wanted 'new', data layer refused "
+                        f"to duplicate)")
+                    return existing["_id"]
+                # New entity present — legitimate split. Carry on and
+                # create a new workstream, but mark the relationship.
+                await self._broadcast("WORKSTREAM",
+                    f"🌿 New workstream in domain '{domain}' alongside "
+                    f"{existing['_id']} (new entity: "
+                    f"{', '.join(sorted(new_entities))})")
+
+        # ─── Allocate id and insert ──────────────────────────────────────
         today = datetime.date.today().isoformat()
         # Count today's workstreams to allocate a per-day sequence number
         count_today = await self.workstreams.count_documents(
@@ -1416,11 +1467,16 @@ class OrchestratorAgent:
         )
         ws_id = f"WS-{today}-{count_today + 1:03d}"
         now = datetime.datetime.now()
+        # Seed with entities extracted from the seed query so the
+        # safety-merge on the NEXT same-domain attempt has something
+        # to compare against.
+        seed_entities = sorted(self._extract_potential_entities(
+            f"{title} {seed_query or ''}"))
         doc = {
             "_id":            ws_id,
             "title":          title[:120],
             "domain":         domain,
-            "entities":       [],
+            "entities":       seed_entities,
             "state":          "open",
             "opened_at":      now,
             "last_activity":  now,
@@ -1615,6 +1671,42 @@ class OrchestratorAgent:
             return False
         return any(p in q for p in cls._META_QUERY_PATTERNS)
 
+    # Known proper-noun entity names that the demo data uses. Used by
+    # _extract_potential_entities for the safety-merge check at
+    # workstream creation time AND by _attach_to_workstream's per-call
+    # entity capture. Extending this list improves the merge decision —
+    # a new entity in the query is a signal that the user genuinely
+    # wants a separate workstream (e.g. 'set up Hamburg' vs the open
+    # Munich workstream).
+    _KNOWN_ENTITY_NAMES = (
+        # IBN demo sites / customers
+        "Marienplatz", "Schwabing", "Altona", "Mitte", "Königstraße",
+        "Alpenmarkt", "ACME",
+        # Cities (German)
+        "Munich", "München", "Hamburg", "Berlin", "Frankfurt",
+        "Stuttgart", "Cologne", "Köln", "Düsseldorf", "Leipzig",
+        "Bremen", "Dresden", "Hannover", "Nuremberg", "Nürnberg",
+        # Cities (other)
+        "London", "Paris", "Madrid", "Rome", "Vienna", "Amsterdam",
+        "Brussels", "Warsaw", "Zurich", "Geneva",
+    )
+
+    @classmethod
+    def _extract_potential_entities(cls, text: str) -> set:
+        """
+        Cheap entity extractor: ID-shaped tokens (IBN-005, DTW-SCN-003,
+        WS-2026-…) plus a hardcoded list of known site/place names.
+        Conservative on purpose — false positives here would split
+        workstreams that should merge.
+        """
+        if not text:
+            return set()
+        cands = set(re.findall(r"\b([A-Z][A-Z0-9]+-[A-Z0-9-]+)\b", text))
+        for name in cls._KNOWN_ENTITY_NAMES:
+            if name in text:
+                cands.add(name)
+        return cands
+
     @classmethod
     def _is_meta_tool(cls, tool_name: str) -> bool:
         """True iff this tool name is a read-only meta tool."""
@@ -1737,16 +1829,11 @@ class OrchestratorAgent:
                 "result":  (result_excerpt or "")[:300],
             }
             update["$push"] = {"tool_calls": {"$each": [call_doc], "$slice": -50}}
-        # Cheap entity extraction: any ALL-CAPS-or-dash id-shape token
-        # (IBN-005, DTW-SCN-003, WS-2026-…) that appears in query+result
-        text = f"{query} {result_excerpt or ''}"
-        entity_candidates = set(re.findall(
-            r"\b([A-Z][A-Z0-9]+-[A-Z0-9-]+)\b", text))
-        # Plus the well-known site names (cheap dictionary; could be extended)
-        for name in ("Marienplatz", "Schwabing", "Altona", "Mitte",
-                     "Königstraße", "Alpenmarkt", "ACME"):
-            if name in text:
-                entity_candidates.add(name)
+        # Cheap entity extraction — see _extract_potential_entities for
+        # the regex + allowlist. Centralised so the safety-merge check
+        # in _create_workstream sees the same entity set we attach here.
+        entity_candidates = self._extract_potential_entities(
+            f"{query} {result_excerpt or ''}")
         if entity_candidates:
             update.setdefault("$addToSet", {})["entities"] = {
                 "$each": sorted(entity_candidates)
