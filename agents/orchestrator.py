@@ -3033,8 +3033,9 @@ class OrchestratorAgent:
                         tier_counts.get(m.get("tier") or "extracted", 0) + 1)
                 tier_summary = ", ".join(
                     f"{n} {t}" for t, n in sorted(tier_counts.items()))
+                n_mem = len(recalled)
                 await self._broadcast("MEMORY",
-                    f"🧠 Recalled {len(recalled)} relevant fact(s) ({tier_summary})")
+                    f"🧠 Recalled {n_mem} relevant {'fact' if n_mem == 1 else 'facts'} ({tier_summary})")
                 self._decision_under("memory",
                     recalled_count=len(recalled),
                     tier_breakdown=tier_counts)
@@ -3057,9 +3058,9 @@ class OrchestratorAgent:
                     "'my favourite X', 'my usual') in the query:\n"
                     + "\n".join(pref_lines)
                 )
+                n_pref = len(prefs_recalled)
                 await self._broadcast("PREFERENCES",
-                    f"🧠 Recalled {len(prefs_recalled)} user "
-                    f"preference(s)")
+                    f"🧠 Recalled {n_pref} user {'preference' if n_pref == 1 else 'preferences'}")
                 self._decision_under("preferences",
                     recalled_count=len(prefs_recalled))
         except Exception as e:
