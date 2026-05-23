@@ -136,6 +136,15 @@ class OrchestratorAgent:
         self.mongo_client = AsyncMongoClient(os.environ["MONGODB_URI"])
         self.db = self.mongo_client["agent_registry"]
         self.collection = self.db["mcp_services"]
+        # Workstream layer — the agent's short-term working memory. Each
+        # workstream is a coherent thread of activity (one or more turns,
+        # one or more services involved). Routing is workstream-anchored:
+        # which workstream a query belongs to determines its sticky domain
+        # and the entities the agent has in context. State is persisted so
+        # killing main.py mid-workstream and restarting resumes correctly.
+        self.workstreams = self.db["agent_workstreams"]
+        self.current_workstream_id: str | None = None
+        self._ws_summary_tasks: set[asyncio.Task] = set()
 
         if not os.environ.get("OPENAI_API_KEY"):
             raise ValueError("OPENAI_API_KEY missing")
@@ -167,6 +176,8 @@ class OrchestratorAgent:
 
     async def __aenter__(self):
         await self._sync_registry()
+        await self._ensure_workstream_indexes()
+        await self._resume_open_workstreams()
         self._watcher_task = asyncio.create_task(self._watch_servers())
         return self
 
@@ -174,9 +185,46 @@ class OrchestratorAgent:
         if self._watcher_task:
             self._watcher_task.cancel()
             await asyncio.gather(self._watcher_task, return_exceptions=True)
+        # Wait for any pending summary updates so we don't lose them.
+        if self._ws_summary_tasks:
+            await asyncio.gather(*self._ws_summary_tasks, return_exceptions=True)
         await self.exit_stack.aclose()
         await self.http_client.aclose()
         await self.mongo_client.close()
+
+    async def _ensure_workstream_indexes(self):
+        """Workstream collection is queried by state, last_activity, and
+        (via Atlas Vector Search) by summary. Plain indexes are created
+        here; the vector index needs the Atlas UI (see WHY_MONGODB.md)."""
+        try:
+            await self.workstreams.create_index(
+                [("state", 1), ("last_activity", -1)],
+                name="ws_state_recency",
+            )
+            await self.workstreams.create_index([("entities", 1)], name="ws_entities")
+        except Exception as e:
+            print(f"⚠️ workstream index ensure failed (non-fatal): {e}")
+
+    async def _resume_open_workstreams(self):
+        """Survives process restarts: load workstreams in state='open' and
+        adopt the most-recent one as the current focus. The next user
+        query's classifier will refine — but having last_domain populated
+        from a real workstream means we resume context for free."""
+        cursor = self.workstreams.find(
+            {"state": "open"},
+            {"_id": 1, "title": 1, "domain": 1, "last_activity": 1},
+        ).sort("last_activity", -1).limit(10)
+        open_ws = [d async for d in cursor]
+        if not open_ws:
+            return
+        await self._broadcast("BOOTSTRAP",
+            f"Resumed: {len(open_ws)} open workstream(s) — "
+            + ", ".join(f"{w['_id']} ({w.get('domain', '?')})" for w in open_ws[:5]))
+        # Adopt the most-recent one as the current focus
+        focus = open_ws[0]
+        self.current_workstream_id = focus["_id"]
+        self.last_domain  = focus.get("domain")
+        self.last_service = None  # service stickiness doesn't survive a restart
 
     async def _watch_servers(self):
         """Re-sync registry whenever a .py file in mcp_servers/ is added,
@@ -449,6 +497,241 @@ class OrchestratorAgent:
             d = doc.get("domain") or self._infer_domain(doc["server_name"])
             by_domain.setdefault(d, []).append(doc)
         return by_domain
+
+    # ─── Workstream layer ─────────────────────────────────────────────────
+    #
+    # A workstream is a coherent thread of activity — the user opening a
+    # store, the user running a what-if simulation, the user shopping.
+    # Routing is workstream-anchored: classification picks (or creates) a
+    # workstream first; that workstream supplies the sticky domain hint
+    # and the in-context entities for the rest of the routing pipeline.
+    # Workstreams persist in MongoDB, so killing main.py mid-session and
+    # restarting picks up the work exactly where it left off.
+
+    def _next_workstream_id(self) -> str:
+        """Allocate WS-YYYY-MM-DD-NNN, monotonic per day."""
+        today = datetime.date.today().isoformat()
+        # Use a count of today's workstreams + 1
+        return None  # placeholder; the real id is allocated via _create_workstream
+
+    async def _open_workstreams_for_classifier(self, limit: int = 10) -> List[Dict]:
+        """Compact list of open workstreams for the classifier prompt.
+        Most-recent-first; capped because the prompt has to stay small."""
+        cursor = self.workstreams.find(
+            {"state": "open"},
+            {"_id": 1, "title": 1, "domain": 1, "entities": 1,
+             "summary": 1, "last_activity": 1},
+        ).sort("last_activity", -1).limit(limit)
+        return [d async for d in cursor]
+
+    async def _classify_workstream(self, query: str, recent_user_msgs: List[str]) \
+            -> tuple[str, bool, str | None]:
+        """
+        Classify the query into an open workstream or signal that a new
+        one should be created. Returns (workstream_id, is_new, domain_hint).
+
+        For 'new', the orchestrator allocates the id; the classifier only
+        suggests a title + domain.
+        """
+        open_ws = await self._open_workstreams_for_classifier()
+
+        # No open workstreams → trivially a new one
+        if not open_ws:
+            title, domain_hint = await self._propose_new_workstream(query)
+            ws_id = await self._create_workstream(title, domain_hint, query)
+            return ws_id, True, domain_hint
+
+        # Build compact context for the LLM
+        ws_lines = []
+        for w in open_ws:
+            ents = ", ".join((w.get("entities") or [])[:5])
+            summary = (w.get("summary") or "").strip().replace("\n", " ")
+            summary = summary[:200] + "…" if len(summary) > 200 else summary
+            ws_lines.append(
+                f"- {w['_id']} [{w.get('domain', '?')}] {w.get('title', '(untitled)')}\n"
+                f"    entities: {ents or '(none)'}\n"
+                f"    summary: {summary or '(empty)'}"
+            )
+        ws_block = "\n".join(ws_lines)
+
+        recent_block = ""
+        if recent_user_msgs:
+            recent = " | ".join(m[:80] for m in recent_user_msgs[-3:])
+            recent_block = f"\n\nRecent user turns: {recent}"
+
+        prompt = (
+            f"User query: '{query}'{recent_block}\n\n"
+            f"Open workstreams:\n{ws_block}\n\n"
+            f"Decide which workstream this query continues, or whether "
+            f"the user is starting a new one.\n\n"
+            f"Reply with valid JSON, no prose:\n"
+            f"{{\"action\": \"continue\", \"workstream_id\": \"WS-...\"}}\n"
+            f"  OR\n"
+            f"{{\"action\": \"new\", \"title\": \"<short descriptive title, max 60 chars>\", "
+            f"\"domain_hint\": \"<one of the known domains or empty>\"}}\n\n"
+            f"Rules:\n"
+            f"- If the query continues an open workstream (mentions its entities, "
+            f"  uses its vocabulary, or is a natural follow-up to that thread), "
+            f"  prefer 'continue'.\n"
+            f"- Brief acknowledgements + follow-ups ('ok thanks', 'now do X') after "
+            f"  a recent turn in a workstream are continuations.\n"
+            f"- Brand-new entities or a clear topic switch → 'new'.\n"
+        )
+        try:
+            resp = await self.openai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=120,
+                response_format={"type": "json_object"},
+            )
+            decision = json.loads(resp.choices[0].message.content)
+        except Exception as e:
+            await self._broadcast("ROUTING",
+                f"⚠ Workstream classify failed ({e}); using most-recent open WS")
+            ws = open_ws[0]
+            return ws["_id"], False, ws.get("domain")
+
+        action = (decision.get("action") or "").lower()
+        if action == "continue":
+            ws_id = decision.get("workstream_id")
+            ws = next((w for w in open_ws if w["_id"] == ws_id), None)
+            if ws:
+                return ws["_id"], False, ws.get("domain")
+            # Hallucinated id — fall through to "new"
+            await self._broadcast("ROUTING",
+                f"⚠ Workstream classify returned unknown id {ws_id!r}; opening new WS")
+
+        # "new" (or fell through)
+        title = decision.get("title") or query[:60]
+        domain_hint = decision.get("domain_hint") or None
+        if domain_hint and domain_hint not in [w.get("domain") for w in open_ws]:
+            # Validate against the actual domain set
+            known_domains = set((await self._list_domains()).keys())
+            if domain_hint not in known_domains:
+                domain_hint = None
+        ws_id = await self._create_workstream(title, domain_hint, query)
+        return ws_id, True, domain_hint
+
+    async def _propose_new_workstream(self, query: str) -> tuple[str, str | None]:
+        """LLM call to derive a title + domain hint when there are no open
+        workstreams to compare against. Cheap, called rarely."""
+        domains_block = ", ".join((await self._list_domains()).keys())
+        try:
+            resp = await self.openai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": (
+                    f"User query: '{query}'\n\n"
+                    f"Known domains: {domains_block}\n\n"
+                    f"Propose a short descriptive title for this new workstream "
+                    f"(max 60 chars) and the best-fit domain.\n"
+                    f"Reply with JSON: {{\"title\": \"...\", \"domain\": \"...\"}}"
+                )}],
+                temperature=0,
+                max_tokens=80,
+                response_format={"type": "json_object"},
+            )
+            d = json.loads(resp.choices[0].message.content)
+            return d.get("title") or query[:60], d.get("domain")
+        except Exception:
+            return query[:60], None
+
+    async def _create_workstream(self, title: str, domain: str | None,
+                                  seed_query: str) -> str:
+        """Insert a new workstream document and return its id."""
+        today = datetime.date.today().isoformat()
+        # Count today's workstreams to allocate a per-day sequence number
+        count_today = await self.workstreams.count_documents(
+            {"_id": {"$regex": f"^WS-{today}-"}}
+        )
+        ws_id = f"WS-{today}-{count_today + 1:03d}"
+        now = datetime.datetime.now()
+        doc = {
+            "_id":            ws_id,
+            "title":          title[:120],
+            "domain":         domain,
+            "entities":       [],
+            "state":          "open",
+            "opened_at":      now,
+            "last_activity":  now,
+            "summary":        f"Started: {seed_query[:200]}",
+            "tool_calls":     [],
+            "turn_count":     0,
+        }
+        await self.workstreams.insert_one(doc)
+        await self._broadcast("WORKSTREAM",
+            f"🆕 {ws_id} opened — {title}" + (f" [{domain}]" if domain else ""))
+        return ws_id
+
+    async def _attach_to_workstream(self, ws_id: str, query: str,
+                                     service: str | None, tool: str | None,
+                                     result_excerpt: str | None):
+        """Append the just-executed tool call to the workstream's audit
+        trail and bump last_activity. Also extracts simple entity hints
+        from the result for future routing context."""
+        update: Dict = {
+            "$set":  {"last_activity": datetime.datetime.now()},
+            "$inc":  {"turn_count": 1},
+        }
+        if service and tool:
+            call_doc = {
+                "ts":      datetime.datetime.now(),
+                "service": service,
+                "tool":    tool,
+                "query":   query[:200],
+                "result":  (result_excerpt or "")[:300],
+            }
+            update["$push"] = {"tool_calls": {"$each": [call_doc], "$slice": -50}}
+        # Cheap entity extraction: any ALL-CAPS-or-dash id-shape token
+        # (IBN-005, DTW-SCN-003, WS-2026-…) that appears in query+result
+        text = f"{query} {result_excerpt or ''}"
+        entity_candidates = set(re.findall(
+            r"\b([A-Z][A-Z0-9]+-[A-Z0-9-]+)\b", text))
+        # Plus the well-known site names (cheap dictionary; could be extended)
+        for name in ("Marienplatz", "Schwabing", "Altona", "Mitte",
+                     "Königstraße", "Alpenmarkt", "ACME"):
+            if name in text:
+                entity_candidates.add(name)
+        if entity_candidates:
+            update.setdefault("$addToSet", {})["entities"] = {
+                "$each": sorted(entity_candidates)
+            }
+        await self.workstreams.update_one({"_id": ws_id}, update)
+
+    async def _update_workstream_summary(self, ws_id: str, query: str,
+                                          response: str):
+        """Lazily rewrite the workstream summary after each turn. Runs in
+        the background so it doesn't block the user's response. Caps the
+        running summary at a sensible length so the classifier prompt stays
+        small. Persisted so killing the process mid-stream keeps it intact."""
+        ws = await self.workstreams.find_one(
+            {"_id": ws_id}, {"summary": 1, "title": 1, "domain": 1})
+        if not ws:
+            return
+        prev = ws.get("summary") or ""
+        prompt = (
+            f"Workstream title: {ws.get('title')}\n"
+            f"Previous summary: {prev}\n\n"
+            f"Latest turn:\n"
+            f"  User: {query[:400]}\n"
+            f"  Assistant: {response[:400]}\n\n"
+            f"Rewrite a concise running summary (max 300 chars) that captures "
+            f"what's been done, what entities are involved, and what's left. "
+            f"No prose preamble — just the summary text."
+        )
+        try:
+            resp = await self.openai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=200,
+            )
+            new_summary = resp.choices[0].message.content.strip()[:600]
+            await self.workstreams.update_one(
+                {"_id": ws_id}, {"$set": {"summary": new_summary}})
+        except Exception as e:
+            # Summary update is non-critical — don't break the chat
+            print(f"⚠️ workstream summary update failed for {ws_id}: {e}")
 
     async def _classify_domain(self, query: str,
                                sticky_hint: str | None = None) -> List[str]:
@@ -1004,6 +1287,20 @@ class OrchestratorAgent:
         context_window = self.conversation_history[-4:] if self.conversation_history else []
         last_user_queries = [msg["content"] for msg in context_window if msg["role"] == "user"]
 
+        # ── Workstream classification ─────────────────────────────────────
+        # Before routing, decide which workstream this query continues (or
+        # whether it opens a new one). The chosen workstream's domain
+        # becomes the sticky bias for Stage 1 below, which means routing
+        # respects multi-turn intent rather than just the last turn.
+        ws_id, ws_is_new, ws_domain = await self._classify_workstream(
+            user_input, last_user_queries)
+        self.current_workstream_id = ws_id
+        if not ws_is_new:
+            await self._broadcast("WORKSTREAM", f"↪ {ws_id} continued")
+        # Workstream domain takes precedence over last_domain for stickiness
+        if ws_domain:
+            self.last_domain = ws_domain
+
         # Smart context enrichment — run in parallel with routing when possible
         _SELF_CONTAINED = {
             "list", "show", "add", "update", "delete", "remove", "change",
@@ -1149,6 +1446,15 @@ class OrchestratorAgent:
                     r = await self.sessions[srv].call_tool(tool, args)
                     res_txt = r.content[0].text
                     await self._broadcast("RESULT", self._format_result_preview(res_txt))
+                    # Append every successful tool call to the workstream's
+                    # audit trail. This is what survives across process
+                    # restarts and powers the dashboard's history panel.
+                    if self.current_workstream_id:
+                        try:
+                            await self._attach_to_workstream(
+                                self.current_workstream_id, user_input, srv, tool, res_txt)
+                        except Exception as e:
+                            print(f"⚠️ workstream attach failed: {e}")
                     if res_txt.startswith("VERBATIM:"):
                         return res_txt[len("VERBATIM:\n"):]
                 else:
@@ -1179,5 +1485,14 @@ class OrchestratorAgent:
         # Limit history to last 20 messages (10 turns)
         if len(self.conversation_history) > 20:
             self.conversation_history = self.conversation_history[-20:]
+
+        # Update the workstream summary in the background — it shouldn't
+        # block the user response. We track the task so __aexit__ can wait
+        # on pending ones at shutdown (no lost summaries on Ctrl-C).
+        if self.current_workstream_id:
+            t = asyncio.create_task(self._update_workstream_summary(
+                self.current_workstream_id, user_input, final_answer))
+            self._ws_summary_tasks.add(t)
+            t.add_done_callback(self._ws_summary_tasks.discard)
 
         return final_answer

@@ -339,13 +339,17 @@
   <!-- ── Right: log + servers ── -->
   <div class="col-log">
     <div class="right-tabs">
-      <div class="right-tab active" id="tabLog"      onclick="switchTab('log')">Agent Log</div>
-      <div class="right-tab"        id="tabServers"  onclick="switchTab('servers')">MCP Servers</div>
+      <div class="right-tab active" id="tabLog"          onclick="switchTab('log')">Agent Log</div>
+      <div class="right-tab"        id="tabServers"      onclick="switchTab('servers')">MCP Servers</div>
+      <div class="right-tab"        id="tabWorkstreams"  onclick="switchTab('workstreams')">Workstreams</div>
     </div>
     <div id="logPanel"></div>
     <div id="serversPanel">
       <!-- populated by renderServers() -->
       <button class="add-server-btn" onclick="openAddModal()">+ Add MCP Server</button>
+    </div>
+    <div id="workstreamsPanel" style="display:none; padding: 10px 14px; overflow-y: auto;">
+      <!-- populated by renderWorkstreams() -->
     </div>
   </div>
 </div>
@@ -418,6 +422,23 @@ function connect() {
     if (msg.type === 'server_remove_result') {
       appendLog('INFO', msg.message);
       renderServers(msg.servers);
+      return;
+    }
+
+    if (msg.type === 'workstreams') {
+      renderWorkstreams(msg.list);
+      return;
+    }
+
+    if (msg.type === 'workstream_update') {
+      // Single workstream changed via change-stream — refresh the whole
+      // list lazily (cheap; the list is bounded). Only re-fetch when the
+      // tab is visible, otherwise just invalidate the cache flag.
+      if (document.getElementById('workstreamsPanel').style.display !== 'none') {
+        requestWorkstreams();
+      } else {
+        workstreamsLoaded = false;
+      }
       return;
     }
 
@@ -572,10 +593,77 @@ function appendTable(caption, headers, rows) {
 
 // ── Tab switching ──────────────────────────────────────────────────────────
 function switchTab(tab) {
-  document.getElementById('logPanel').style.display     = tab === 'log'     ? '' : 'none';
+  document.getElementById('logPanel').style.display         = tab === 'log'         ? '' : 'none';
   document.getElementById('serversPanel').classList.toggle('visible', tab === 'servers');
-  document.getElementById('tabLog').classList.toggle('active',     tab === 'log');
-  document.getElementById('tabServers').classList.toggle('active', tab === 'servers');
+  document.getElementById('workstreamsPanel').style.display = tab === 'workstreams' ? '' : 'none';
+  document.getElementById('tabLog').classList.toggle('active',         tab === 'log');
+  document.getElementById('tabServers').classList.toggle('active',     tab === 'servers');
+  document.getElementById('tabWorkstreams').classList.toggle('active', tab === 'workstreams');
+  if (tab === 'workstreams' && !workstreamsLoaded) {
+    requestWorkstreams();
+  }
+}
+
+// ── Workstream rendering ───────────────────────────────────────────────────
+let workstreamsLoaded = false;
+function requestWorkstreams() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({type: "workstreams_request"}));
+  }
+}
+function renderWorkstreams(list) {
+  workstreamsLoaded = true;
+  const panel = document.getElementById('workstreamsPanel');
+  panel.innerHTML = '';
+  if (!list || !list.length) {
+    panel.innerHTML = '<div style="color:var(--dim);font-size:12px;padding:8px 0;">'
+                      + 'No workstreams yet. Start a query to open one.</div>';
+    return;
+  }
+  // Group by state, open first
+  const groups = {open: [], paused: [], completed: [], cancelled: []};
+  list.forEach(w => {
+    (groups[w.state] || (groups[w.state] = [])).push(w);
+  });
+  ['open', 'paused', 'completed', 'cancelled'].forEach(state => {
+    const items = groups[state] || [];
+    if (!items.length) return;
+    const heading = document.createElement('div');
+    heading.style.cssText =
+      'font-size: 10px; letter-spacing: 1.2px; color: var(--cyan); '
+      + 'text-transform: uppercase; margin: 14px 0 6px;';
+    heading.textContent = state + '  (' + items.length + ')';
+    panel.appendChild(heading);
+    items.forEach(w => panel.appendChild(renderWorkstreamCard(w)));
+  });
+}
+function renderWorkstreamCard(w) {
+  const card = document.createElement('div');
+  card.style.cssText =
+    'border: 1px solid var(--border); border-radius: 4px; '
+    + 'padding: 10px 12px; margin: 6px 0; background: rgba(255,255,255,0.02); '
+    + 'font-size: 12px;';
+  const entities = (w.entities || []).slice(0, 8).map(esc).join(', ');
+  const lastTs = w.last_activity ? new Date(w.last_activity).toLocaleString() : '—';
+  const stateEmoji = ({open:'🟢', paused:'⏸', completed:'✓', cancelled:'⊗'})[w.state] || '•';
+  const numCalls = (w.tool_calls || []).length;
+  card.innerHTML =
+    `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">`
+    + `  <span style="font-family:'JetBrains Mono',monospace;color:var(--cyan);">${esc(w._id)}</span>`
+    + `  <span style="color:var(--dim);">${stateEmoji} ${esc(w.state || '?')}</span>`
+    + `  <span style="background:rgba(0,212,255,0.12);color:var(--cyan);`
+    + `         padding:1px 6px;border-radius:3px;font-size:10px;">${esc(w.domain || '—')}</span>`
+    + `  <span style="margin-left:auto;color:var(--dim);font-size:11px;">${lastTs}</span>`
+    + `</div>`
+    + (w.title ? `<div style="margin-bottom:6px;">${esc(w.title)}</div>` : '')
+    + (entities ? `<div style="font-size:11px;color:var(--dim);margin-bottom:6px;">`
+                  + `entities: ${entities}</div>` : '')
+    + (numCalls ? `<div style="font-size:11px;color:var(--dim);margin-bottom:6px;">`
+                  + `${numCalls} tool call${numCalls === 1 ? '' : 's'}</div>` : '')
+    + (w.summary ? `<div style="font-size:11px;color:var(--fg);opacity:0.85;`
+                   + `line-height:1.4;border-left:2px solid var(--cyan);padding-left:8px;">`
+                   + `${esc(w.summary)}</div>` : '');
+  return card;
 }
 
 // ── Server management ──────────────────────────────────────────────────────

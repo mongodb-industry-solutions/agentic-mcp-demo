@@ -1,0 +1,293 @@
+#
+# Copyright (c) 2026 MongoDB Inc.
+# Author: Benjamin Lorenz <benjamin.lorenz@mongodb.com>
+#
+
+"""
+Workstream Service — the agent's own activity log.
+
+Read-only surface over agent_workstreams, the orchestrator's short-term
+working memory. Each workstream represents a coherent thread of activity
+(opening a store, running a what-if simulation, managing a TODO list) with
+its domain, entities, running summary, and tool-call audit trail. The
+orchestrator writes; this service exposes read tools so the user can ask
+the agent itself questions like:
+
+- "What workstreams are currently open?"
+- "What did we work on yesterday?"
+- "Show me the history of WS-2026-05-23-001."
+- "What workstreams involved Marienplatz?"
+
+Use this service when users say:
+- Activity:     "what have we done", "what did you do yesterday",
+                "what have we been working on", "recent activity"
+- List:         "what workstreams are open", "list active sessions",
+                "what threads are running", "show all workstreams"
+- Detail:       "show workstream WS-...", "details on the Marienplatz one",
+                "history of <workstream>"
+- Search:       "any workstreams about Munich", "find threads involving X",
+                "what workstreams concern the QoS uplift"
+
+This service does NOT submit intents, run simulations, manage TODOs, or do
+anything domain-specific — those are the actual demo services. It only
+reads the orchestrator's own audit log.
+"""
+
+import datetime
+import logging
+import os
+from pymongo import MongoClient, DESCENDING
+from mcp.server.fastmcp import FastMCP
+
+logging.disable(logging.WARNING)
+
+mcp           = FastMCP("workstream_service")
+logger        = logging.getLogger("workstream_service")
+
+mongo_client  = MongoClient(os.environ["MONGODB_URI"])
+db            = mongo_client["agent_registry"]
+workstreams   = db["agent_workstreams"]
+
+
+def _fmt_ts(ts) -> str:
+    if isinstance(ts, datetime.datetime):
+        return ts.strftime("%Y-%m-%d %H:%M")
+    return str(ts) if ts else "—"
+
+
+def _fmt_card(ws: dict, *, full: bool = False) -> str:
+    state_emoji = {"open": "🟢", "paused": "⏸", "completed": "✓",
+                   "cancelled": "⊗"}.get(ws.get("state", ""), "•")
+    lines = [
+        f"**{ws['_id']}** · {state_emoji} {ws.get('state', '?')} · "
+        f"{ws.get('domain', '—')}"
+    ]
+    if ws.get("title"):
+        lines.append(f"  {ws['title']}")
+    last = ws.get("last_activity")
+    opened = ws.get("opened_at")
+    if last:
+        lines.append(f"  last activity: {_fmt_ts(last)}")
+    if opened and opened != last:
+        lines.append(f"  opened: {_fmt_ts(opened)}")
+    n_calls = len(ws.get("tool_calls") or [])
+    if n_calls:
+        lines.append(f"  tool calls: {n_calls}")
+    entities = ws.get("entities") or []
+    if entities:
+        lines.append(f"  entities: {', '.join(entities[:8])}"
+                     + (" …" if len(entities) > 8 else ""))
+    summary = (ws.get("summary") or "").strip()
+    if summary:
+        snippet = summary if full else (summary[:300] + ("…" if len(summary) > 300 else ""))
+        lines.append("")
+        lines.append(f"  📝 {snippet}")
+    return "\n".join(lines)
+
+
+# ─── Tools ─────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+def list_workstreams(state: str = None, limit: int = 10) -> str:
+    """
+    List workstreams, optionally filtered by state. Returns a recency-sorted
+    summary of each.
+
+    Args:
+        state:  Optional state filter ('open', 'paused', 'completed', 'cancelled').
+                If omitted, returns all states with 'open' first.
+        limit:  Max workstreams to return (default 10, max 50).
+    """
+    limit = max(1, min(50, int(limit or 10)))
+    q = {"state": state} if state else {}
+    docs = list(workstreams.find(q).sort("last_activity", DESCENDING).limit(limit))
+    if not docs:
+        scope = f" with state '{state}'" if state else ""
+        return f"No workstreams found{scope}."
+
+    by_state: dict = {}
+    for d in docs:
+        by_state.setdefault(d.get("state", "?"), []).append(d)
+
+    header = f"**{len(docs)} workstream(s)" + \
+             (f" with state '{state}'" if state else "") + ":**"
+    blocks = [header]
+    for st in ("open", "paused", "completed", "cancelled"):
+        group = by_state.get(st)
+        if not group:
+            continue
+        blocks.append("")
+        blocks.append(f"### {st.upper()} ({len(group)})")
+        for ws in group:
+            blocks.append("")
+            blocks.append(_fmt_card(ws))
+    # Any unexpected states fall through here
+    for st, group in by_state.items():
+        if st in ("open", "paused", "completed", "cancelled"):
+            continue
+        blocks.append("")
+        blocks.append(f"### {st.upper()} ({len(group)})")
+        for ws in group:
+            blocks.append("")
+            blocks.append(_fmt_card(ws))
+    return "\n".join(blocks)
+
+
+@mcp.tool()
+def get_workstream(workstream_id: str) -> str:
+    """
+    Show the full record for a workstream: title, domain, entities,
+    summary, and the full tool-call history.
+
+    Args:
+        workstream_id: Workstream id, e.g. 'WS-2026-05-23-001'.
+    """
+    ws = workstreams.find_one({"_id": workstream_id})
+    if not ws:
+        return f"❌ Workstream {workstream_id} not found."
+    lines = [_fmt_card(ws, full=True)]
+    calls = ws.get("tool_calls") or []
+    if calls:
+        lines.append("")
+        lines.append(f"**Tool-call history ({len(calls)}):**")
+        for c in calls[-30:]:
+            ts = _fmt_ts(c.get("ts"))
+            result_snip = (c.get("result") or "").replace("\n", " ")[:80]
+            lines.append(f"  {ts} · `{c.get('service')}__{c.get('tool')}` · "
+                         f"{result_snip}…")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def recall_recent_activity(days: int = 1) -> str:
+    """
+    Summarize what's been done across all workstreams in the last N days.
+
+    Args:
+        days: Look-back window in days (default 1, max 30).
+    """
+    days = max(1, min(30, int(days or 1)))
+    cutoff = datetime.datetime.now() - datetime.timedelta(days=days)
+    docs = list(workstreams.find(
+        {"last_activity": {"$gte": cutoff}}
+    ).sort("last_activity", DESCENDING))
+    if not docs:
+        return f"No workstream activity in the last {days} day(s)."
+
+    # Group by date
+    by_day: dict = {}
+    for d in docs:
+        ts = d.get("last_activity")
+        key = ts.date().isoformat() if isinstance(ts, datetime.datetime) else "—"
+        by_day.setdefault(key, []).append(d)
+
+    lines = [f"**Activity in the last {days} day{'s' if days != 1 else ''}:** "
+             f"{len(docs)} workstream(s) touched."]
+    for day in sorted(by_day.keys(), reverse=True):
+        lines.append("")
+        lines.append(f"### {day}")
+        for ws in by_day[day]:
+            n_calls = len(ws.get("tool_calls") or [])
+            domain = ws.get("domain", "—")
+            title = ws.get("title", "(untitled)")
+            lines.append(f"- **{ws['_id']}** [{domain}] · {title} "
+                         f"({n_calls} tool call{'s' if n_calls != 1 else ''})")
+            summary = (ws.get("summary") or "").strip()
+            if summary:
+                lines.append(f"  · {summary[:200]}{'…' if len(summary) > 200 else ''}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def find_workstreams_about(text: str, limit: int = 5) -> str:
+    """
+    Search for workstreams whose summary, title, or entities match the
+    given text. Uses Atlas Vector Search on the summary field if the
+    `workstream_vector_index` is configured; otherwise falls back to a
+    plain regex match on title + entities.
+
+    Args:
+        text:   Free-text search query (e.g. 'Munich store', 'QoS uplift').
+        limit:  Max results (default 5, max 20).
+    """
+    limit = max(1, min(20, int(limit or 5)))
+
+    # Try vector search first (best results); fall back if index not ready.
+    matches = []
+    try:
+        cursor = workstreams.aggregate([
+            {"$vectorSearch": {
+                "index":   "workstream_vector_index",
+                "path":    "summary",
+                "query":   text,
+                "numCandidates": 50,
+                "limit":   limit,
+            }},
+            {"$project": {
+                "_id": 1, "title": 1, "domain": 1, "state": 1,
+                "entities": 1, "summary": 1, "last_activity": 1,
+                "tool_calls": 1,
+                "score": {"$meta": "vectorSearchScore"},
+            }},
+        ])
+        matches = list(cursor)
+    except Exception:
+        matches = []
+
+    if not matches:
+        # Plain text fallback
+        regex = {"$regex": text, "$options": "i"}
+        cursor = workstreams.find({
+            "$or": [
+                {"title":    regex},
+                {"summary":  regex},
+                {"entities": regex},
+            ]
+        }).sort("last_activity", DESCENDING).limit(limit)
+        matches = list(cursor)
+        mode = "regex"
+    else:
+        mode = "vector"
+
+    if not matches:
+        return f"No workstreams match {text!r}."
+
+    lines = [f"**{len(matches)} match(es) for {text!r}** _(via {mode} search)_"]
+    for ws in matches:
+        lines.append("")
+        score = ws.get("score")
+        if score is not None:
+            lines.append(_fmt_card(ws) + f"\n  similarity: {score:.3f}")
+        else:
+            lines.append(_fmt_card(ws))
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def close_workstream(workstream_id: str, note: str = "completed") -> str:
+    """
+    Mark a workstream as completed. Use when the user signals a thread is
+    done ('we're done with Marienplatz', 'close that workstream').
+
+    Args:
+        workstream_id: Workstream id to close.
+        note:          Optional closing note.
+    """
+    ws = workstreams.find_one({"_id": workstream_id})
+    if not ws:
+        return f"❌ Workstream {workstream_id} not found."
+    if ws.get("state") == "completed":
+        return f"ℹ️  Workstream {workstream_id} already completed."
+    workstreams.update_one(
+        {"_id": workstream_id},
+        {"$set": {
+            "state": "completed",
+            "closed_at": datetime.datetime.now(),
+            "close_note": note,
+        }},
+    )
+    return f"✓ Workstream {workstream_id} marked completed. Note: {note}"
+
+
+if __name__ == "__main__":
+    mcp.run()

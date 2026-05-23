@@ -69,14 +69,48 @@ def _mongo_info() -> dict:
     return {"host": f"{user}@{host}", "indexes": vector_idx}
 
 
+async def _watch_workstreams():
+    """Push a minimal 'workstream_update' message to all clients whenever
+    an agent_workstreams doc is inserted or updated. The client uses this
+    as a refresh trigger — it re-fetches the full list when the tab is
+    visible. We don't try to push the full document here; the list is
+    bounded (sort + limit on the read), so re-fetching is cheap and
+    correct."""
+    from pymongo import AsyncMongoClient
+    aclient = AsyncMongoClient(os.environ["MONGODB_URI"])
+    coll = aclient["agent_registry"]["agent_workstreams"]
+    while True:
+        try:
+            stream = await coll.watch(full_document="updateLookup")
+            async with stream:
+                async for change in stream:
+                    if change["operationType"] in ("insert", "update", "replace"):
+                        doc = change.get("fullDocument") or {}
+                        msg = json.dumps({
+                            "type": "workstream_update",
+                            "ws_id": doc.get("_id"),
+                        })
+                        for ws in list(clients):
+                            try:
+                                await ws.send_text(msg)
+                            except Exception:
+                                pass
+        except Exception as e:
+            log.warning(f"workstream stream error ({e}); retrying in 3s")
+            await asyncio.sleep(3)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _agent
     _agent = OrchestratorAgent(local_broadcast=_ws_broadcast)
     await _agent.__aenter__()
     app.state.mongo_info = _mongo_info()
+    ws_watch_task = asyncio.create_task(_watch_workstreams())
     log.info("Shell ready — http://localhost:8070")
     yield
+    ws_watch_task.cancel()
+    await asyncio.gather(ws_watch_task, return_exceptions=True)
     await _agent.__aexit__(None, None, None)
 
 
@@ -154,6 +188,38 @@ async def ws_endpoint(ws: WebSocket):
                 servers = _agent.list_servers_info() if _agent else []
                 await ws.send_text(json.dumps({"type": "server_remove_result",
                                                "message": result, "servers": servers}))
+
+            elif msg.get("type") == "workstreams_request":
+                # Read directly from agent_registry.agent_workstreams.
+                # The orchestrator writes; the dashboard only reads.
+                rows = []
+                try:
+                    client = MongoClient(os.environ["MONGODB_URI"])
+                    cur = (client["agent_registry"]["agent_workstreams"]
+                            .find({}, {"_id": 1, "title": 1, "domain": 1,
+                                       "state": 1, "entities": 1, "summary": 1,
+                                       "last_activity": 1, "opened_at": 1,
+                                       "tool_calls": 1})
+                            .sort("last_activity", -1).limit(50))
+                    for d in cur:
+                        for k in ("last_activity", "opened_at"):
+                            v = d.get(k)
+                            if hasattr(v, "isoformat"):
+                                d[k] = v.isoformat()
+                        # Strip embedded timestamps inside tool_calls for JSON
+                        d["tool_calls"] = [{
+                            "ts":      (c.get("ts").isoformat()
+                                        if hasattr(c.get("ts"), "isoformat")
+                                        else c.get("ts")),
+                            "service": c.get("service"),
+                            "tool":    c.get("tool"),
+                            "result":  c.get("result", "")[:200],
+                        } for c in (d.get("tool_calls") or [])]
+                        rows.append(d)
+                    client.close()
+                except Exception as e:
+                    log.warning(f"workstreams_request failed: {e}")
+                await ws.send_text(json.dumps({"type": "workstreams", "list": rows}))
 
             elif msg.get("type") == "command":
                 cmd = msg.get("cmd", "")
