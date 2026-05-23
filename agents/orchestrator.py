@@ -1583,6 +1583,19 @@ class OrchestratorAgent:
         "who ", "how ",
     )
 
+    # Item-reference patterns. When any of these appears in a query the
+    # closure heuristic refuses to fire — the query is about an
+    # individual item (a TODO task, an IBN intent, a DTW scenario,
+    # etc.), not a workstream as a whole.
+    _ITEM_REF_PATTERNS = (
+        # '#5', 'task #2', 'TODO #2', '#42' — numeric item ids
+        r"#\d+",
+        # 'IBN-005', 'DTW-SCN-003', 'MEM-2026-...' — typed entity ids
+        r"\b[A-Z]{2,}-\d",
+        # 'WS-2026-05-23-001' (just in case the user names a workstream id)
+        r"\bWS-\d{4}-\d{2}-\d{2}-\d{3}",
+    )
+
     @classmethod
     def _is_pure_closure_cue(cls, query: str) -> bool:
         """
@@ -1590,17 +1603,30 @@ class OrchestratorAgent:
         fast-path in _classify_workstream to skip the classifier LLM
         call entirely on goodbye turns like "done with TODOs".
 
-        Anti-patterns: questions (ends with '?', starts with 'are/is/do/...'),
-        long queries (>8 words — likely mixed intent).
+        Anti-patterns:
+          - questions ('?' suffix or 'are/is/do/...' prefix)
+          - long queries (>8 words — likely mixed intent)
+          - ITEM REFERENCES: any of '#\\d+', 'XX-NNN', 'WS-...'.
+            'done with task #2' is an item-level completion — the
+            user wants a complete_todo(2) call on todo_service, not
+            a workstream close. Letting the closure short-circuit
+            swallow those queries would silently mark the wrong
+            workstream done and never touch the item itself.
         """
-        q = (query or "").strip().lower()
-        if not q or len(q.split()) > 8:
+        q_lower = (query or "").strip().lower()
+        if not q_lower or len(q_lower.split()) > 8:
             return False
-        if q.endswith("?"):
+        if q_lower.endswith("?"):
             return False
-        if any(q.startswith(s) for s in cls._QUESTION_STARTERS):
+        if any(q_lower.startswith(s) for s in cls._QUESTION_STARTERS):
             return False
-        return any(p in q for p in cls._CLOSURE_PATTERNS)
+        # Item-reference guard: match against the ORIGINAL query (case-
+        # preserving) for typed ids like 'IBN-005', then against the
+        # lowercased query for the numeric form '#N'.
+        original = (query or "").strip()
+        if any(re.search(p, original) for p in cls._ITEM_REF_PATTERNS):
+            return False
+        return any(p in q_lower for p in cls._CLOSURE_PATTERNS)
 
     # Stopwords stripped from closure topic hints before matching.
     # Keep small — over-aggressive removal kills real topic words.

@@ -211,7 +211,20 @@ def list_todos(show_completed: bool = False) -> str:
 @mcp.tool()
 def complete_todo(task_id: int) -> str:
     """
-    Mark a task as completed.
+    Mark a single task as completed (state change only — the document
+    stays in the DB with completed=true; use delete_todo to remove it
+    entirely).
+
+    Pick this tool when the user signals an individual task is finished
+    using item-reference phrasing:
+      - 'done with task #N'   / 'done with #N'   / 'done with TODO #N'
+      - 'finished task #N'    / 'finished #N'
+      - 'I completed #N'      / 'mark #N complete'
+      - 'task #N is done'
+
+    Do NOT pick this for whole-list closures ('done with TODOs' as a
+    category) — those are workstream closures and the orchestrator
+    handles them at a different layer.
 
     Args:
         task_id: The ID of the task to complete (from list_todos)
