@@ -1196,16 +1196,25 @@ class OrchestratorAgent:
                 and any(v in q_low for v in closure_verbs)
             )
             if looks_pure_closure:
-                # Prefer the workstream we just closed (if any), else the
-                # most-recently-active one. open_ws includes recently-
-                # closed ones from the classifier's input set.
+                # Prefer the workstream the classifier already named for
+                # closure; else fall back to the most-recently-active one
+                # (open_ws is sorted recency-first and includes both open
+                # and recently-closed workstreams from the classifier's
+                # input set).
                 target_id = close_id or (open_ws[0]["_id"] if open_ws else None)
                 target = next((w for w in open_ws if w["_id"] == target_id),
                               None) if target_id else None
                 if target_id:
+                    # CLOSE the target if it's still open. close_id was
+                    # already closed by the block above; only the fallback
+                    # path (open_ws[0]) needs the explicit close here.
+                    if target_id != close_id and target \
+                            and target.get("state") != "completed":
+                        await self._close_workstream(target_id,
+                            reason="closure cue inferred from query")
                     await self._broadcast("WORKSTREAM",
-                        f"⏸ Closure-only query — suppressing new workstream; "
-                        f"continuing {target_id}")
+                        f"⏸ Closure-only query — using {target_id} for "
+                        f"context, not opening a new workstream")
                     return (target_id, False,
                             (target or {}).get("domain"), replay_id)
                 # No prior workstream at all — extremely rare on a populated
