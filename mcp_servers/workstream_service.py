@@ -47,6 +47,7 @@ logger        = logging.getLogger("workstream_service")
 mongo_client  = MongoClient(os.environ["MONGODB_URI"])
 db            = mongo_client["agent_registry"]
 workstreams   = db["agent_workstreams"]
+memories      = db["agent_memories"]
 
 
 def _fmt_ts(ts) -> str:
@@ -286,7 +287,149 @@ def close_workstream(workstream_id: str, note: str = "completed") -> str:
             "close_note": note,
         }},
     )
-    return f"✓ Workstream {workstream_id} marked completed. Note: {note}"
+    return (f"✓ Workstream {workstream_id} marked completed. Note: {note}\n"
+            f"  Long-term memory extraction will run automatically — "
+            f"watch for the [MEMORY] broadcast lines.")
+
+
+# ─── Long-term memory tools ────────────────────────────────────────────────
+#
+# agent_memories is populated by the orchestrator's background extraction
+# task when a workstream closes. These tools expose read access so the
+# user can ask the agent "what do you remember about X?" explicitly.
+
+def _fmt_memory(m: dict, score: float | None = None) -> str:
+    bits = [f"`{m.get('_id','?')}`",
+            f"_{m.get('category','fact')}_",
+            f"[{m.get('domain','—')}]"]
+    if score is not None:
+        bits.append(f"similarity {score:.3f}")
+    elif m.get("confidence") is not None:
+        bits.append(f"confidence {float(m['confidence']):.2f}")
+    line = " · ".join(bits)
+    ents = ", ".join((m.get("entities") or [])[:6])
+    src  = m.get("workstream_id", "—")
+    body = f"  {m.get('text','')}".strip()
+    extra = []
+    if ents:
+        extra.append(f"entities: {ents}")
+    extra.append(f"from {src}")
+    return f"{line}\n  {body}\n  _{' · '.join(extra)}_"
+
+
+@mcp.tool()
+def recall_facts(text: str = "", domain: str = None, limit: int = 5) -> str:
+    """
+    Recall reusable facts extracted from closed workstreams. Uses Atlas
+    Vector Search on the memory text when the `agent_memories_index` is
+    configured; otherwise falls back to entity/domain match.
+
+    Use this when the user says:
+      - "what do you remember about <X>?"
+      - "any past learnings about <topic>?"
+      - "recall facts about Marienplatz" / "things you learned about Alpenmarkt"
+
+    Args:
+        text:   Free-text query — what topic / entity to recall about.
+                Empty = list recent memories regardless of topic.
+        domain: Optional filter by domain (ibn, dtw, todo, …).
+        limit:  Max results (default 5, max 20).
+    """
+    limit = max(1, min(20, int(limit or 5)))
+    query = (text or "").strip()
+    matches = []
+    mode = "—"
+
+    if query:
+        try:
+            vs_spec = {
+                "index":   "agent_memories_index",
+                "path":    "text",
+                "query":   query,
+                "numCandidates": 50,
+                "limit":   limit,
+            }
+            if domain:
+                vs_spec["filter"] = {"domain": {"$eq": domain}}
+            cursor = memories.aggregate([
+                {"$vectorSearch": vs_spec},
+                {"$project": {
+                    "_id": 1, "text": 1, "category": 1, "domain": 1,
+                    "entities": 1, "confidence": 1, "workstream_id": 1,
+                    "extracted_at": 1,
+                    "score": {"$meta": "vectorSearchScore"},
+                }},
+            ])
+            matches = list(cursor)
+            mode = "vector"
+        except Exception:
+            matches = []
+
+    if not matches:
+        # Fallback: regex / domain match / recency
+        q: dict = {}
+        if domain:
+            q["domain"] = domain
+        if query:
+            q["$or"] = [
+                {"text":     {"$regex": query, "$options": "i"}},
+                {"entities": {"$regex": query, "$options": "i"}},
+            ]
+        matches = list(memories.find(q).sort("extracted_at", -1).limit(limit))
+        mode = "regex/recency" if query else "recency"
+
+    if not matches:
+        scope = f" matching {query!r}" if query else ""
+        return f"No facts recalled{scope}. (Memories are extracted when " \
+               "workstreams close — close some completed work first.)"
+
+    lines = [f"**{len(matches)} fact(s)** _(via {mode})_"]
+    for m in matches:
+        lines.append("")
+        lines.append(_fmt_memory(m, score=m.get("score")))
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def list_memories(limit: int = 20) -> str:
+    """
+    List the most-recently extracted memories across all workstreams.
+
+    Args:
+        limit: Max memories to show (default 20, max 100).
+    """
+    limit = max(1, min(100, int(limit or 20)))
+    rows = list(memories.find({}).sort("extracted_at", -1).limit(limit))
+    if not rows:
+        return ("No memories yet. Memories are extracted automatically when "
+                "workstreams transition to state=completed.")
+    by_domain: dict = {}
+    for m in rows:
+        by_domain.setdefault(m.get("domain") or "—", []).append(m)
+    lines = [f"**{len(rows)} memor{'ies' if len(rows) != 1 else 'y'}, "
+             f"newest first.** Grouped by domain:"]
+    for d in sorted(by_domain.keys()):
+        lines.append("")
+        lines.append(f"### {d} ({len(by_domain[d])})")
+        for m in by_domain[d]:
+            lines.append("")
+            lines.append(_fmt_memory(m))
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def forget_memory(memory_id: str) -> str:
+    """
+    Delete a memory by id. Use when the user explicitly disavows a fact
+    ('forget that, it was wrong').
+
+    Args:
+        memory_id: Memory id, e.g. 'MEM-2026-05-23-001-02'.
+    """
+    res = memories.delete_one({"_id": memory_id})
+    if res.deleted_count == 0:
+        return f"❌ Memory {memory_id} not found."
+    return f"✓ Memory {memory_id} forgotten."
 
 
 if __name__ == "__main__":

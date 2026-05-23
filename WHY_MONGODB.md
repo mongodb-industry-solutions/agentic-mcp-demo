@@ -267,9 +267,32 @@ A workstream document looks like:
 
 Before Stage 1 routing, the orchestrator runs a **workstream classifier** that maps each query to an open workstream (or opens a new one). The chosen workstream's `domain` becomes Stage 1's sticky bias, and its `entities` are available to the agent's tool-call context. This is what fixes the multi-turn routing problem that no amount of per-turn `last_domain` tuning could solve: when the user types *"propose plan and execute it"* after a TODO interlude, the workstream classifier finds the IBN workstream by entity overlap and recency. Stage 1 stays in `ibn`. No misroute.
 
-#### 5b. Long-term memory — vector recall over workstream summaries
+#### 5b. Long-term memory — workstream summaries + extracted facts
 
-Each workstream's `summary` is auto-rewritten by `gpt-4o-mini` after every turn and stored on the workstream document. A dedicated Atlas Vector Search index (`workstream_vector_index`) embeds these summaries on insert/update. Result: questions like *"what was I working on about Munich last week?"* run a single `$vectorSearch` aggregation over `agent_workstreams.summary` and surface the right past workstream — title, entities, last activity, full tool-call trail.
+Long-term memory in this framework has two complementary surfaces, both vector-indexed in Atlas.
+
+**Per-workstream summaries.** Each workstream's `summary` is auto-rewritten by `gpt-4o-mini` after every turn and stored on the workstream document. A dedicated Atlas Vector Search index (`workstream_vector_index`) embeds these summaries on insert/update. Result: questions like *"what was I working on about Munich last week?"* run a single `$vectorSearch` aggregation over `agent_workstreams.summary` and surface the right past workstream — title, entities, last activity, full tool-call trail.
+
+**Extracted reusable facts in `agent_memories`.** When a workstream transitions to `state="completed"`, a background change-stream watcher in the orchestrator calls `gpt-4o-mini` against the workstream's summary + tool-call audit trail and asks it to extract **0–5 reusable facts** — preferences, templates, targets, configs, lessons. Each fact lands in its own document:
+
+```json
+{
+  "_id": "MEM-2026-05-23-001-02",
+  "workstream_id": "WS-2026-05-23-001",
+  "text": "Alpenmarkt's standard retail SLA template is strict-retail-v3.",
+  "category": "template",
+  "entities": ["Alpenmarkt", "strict-retail-v3"],
+  "domain": "ibn",
+  "confidence": 0.92,
+  "extracted_at": "2026-05-23T14:21:00Z"
+}
+```
+
+The `text` field is vector-indexed (`agent_memories_index`, same auto-embed pattern). The orchestrator's ReAct loop pulls top-K relevant facts from `agent_memories` (filtered by the active workstream's domain) into the system prompt at the start of every turn, so past lessons are silently in the agent's context whenever it picks tools. The `workstream_service` MCP also exposes `recall_facts(text, domain)`, `list_memories()`, and `forget_memory(id)` so the user can interrogate the memory layer directly.
+
+Two safety properties worth pitching:
+- **Catch-up on restart.** If a workstream was closed while the orchestrator was down (manual DB edit, dashboard action, etc.), the boot path scans for `state=completed, memories_extracted!=true` and processes the backlog. No closure goes un-mined.
+- **Bounded LLM cost.** A fact-extraction call runs once per workstream closure and is capped at 5 facts; the workstream is marked `memories_extracted=true` so the call never repeats. Catch-up is also bounded (10 most-recent backlog entries).
 
 #### 5c. Raw command history — `agent_history`
 
@@ -322,8 +345,8 @@ The framework's evolutionary path is clean:
 - **Per-tenant vector indexes** — already supported, just needs a tenant filter on `mcp_services` and `agent_workstreams`.
 - **Routing analytics** — a `routing_decisions` collection that captures every Stage 1 + Stage 2 outcome for offline learning and prompt tuning.
 - **Workstream merge/split** — when the user explicitly relates two threads ("the Munich one and the Hamburg one are both Q3 rollouts"), merge their entities and tool-call trails.
-- **Long-term memory extraction** — when a workstream closes, distil reusable facts ("Alpenmarkt's standard SLA template is `strict-retail-v3`") into a vector-indexed `agent_memories` collection for cross-session recall.
 - **Cross-host orchestrator clustering** — workstreams already live in MongoDB, not in process memory; multi-host orchestrator setups are a one-line change away (each instance picks up workstreams from `state == "open"`).
+- **Memory promotion/decay** — track which extracted facts actually get recalled by the ReAct loop, and use the access count as a relevance signal. Stale facts can decay (lowered confidence over time); often-used facts can be promoted into a "core knowledge" tier.
 
 None of these require a new engine. All are collections + indexes on the same Atlas cluster.
 
@@ -413,6 +436,18 @@ This is the most common pushback at the demo, and the honest answer is the model
 10. **Live feed:** workstream classifier reaches across the TODO interruption to match `WS-… (Open Alpenmarkt store at Marienplatz)` by entity ("Marienplatz") and recency. Stage 1 → `ibn`. `propose_plan` + `activate_plan` run back-to-back. Talking point: *"That's multi-turn intent recognition that no single `last_domain` heuristic could give you — because the agent is reading workstream entities and summaries from Atlas, not just remembering the last service it called."*
 11. **🔥 The kill-and-resume moment.** `Ctrl-C` the orchestrator in front of the audience. Wait two seconds. Restart `python main.py`. The boot log shows `[BOOTSTRAP] Resumed: 2 open workstream(s) — WS-2026-05-23-001 (ibn), WS-2026-05-23-002 (todo)`. Type: *"how's the Munich store coming along?"* The workstream classifier recognises the entity, picks WS-2026-05-23-001, Stage 1 → `ibn`, and the agent picks up the thread. Talking point — *the line that earns the demo its reputation*: **"That's not snapshot-and-restore plumbing. The agent's state was already in Atlas the whole time. Kill it anywhere, restart, resume. The process is stateless; the agent isn't."**
 12. **Long-term memory query.** Type: *"what have we done today?"* The query routes to `workstream_service.recall_recent_activity` which aggregates over `agent_workstreams.last_activity` filtered by date. Audience sees a structured summary of every thread, organised by day, each with its entities and tool-call count. Talking point: *"Same vector primitives that route services also recall memory. `$vectorSearch` over workstream summaries — find threads by topic, not by id."*
+
+13a. **Close the Munich workstream and watch the agent learn.** Type *"close the Munich workstream — we're done"*. `workstream_service.close_workstream` sets `state=completed`. The orchestrator's change-stream watcher picks up the transition and a `[MEMORY]` block appears in the live feed:
+    ```
+    [MEMORY] 💎 Extracted 3 fact(s) from WS-2026-05-23-001
+    [MEMORY]    • [template] Alpenmarkt's standard retail SLA template is strict-retail-v3.
+    [MEMORY]    • [config]   Marienplatz site uses fiber uplink UP-MUC-MAR-F10 for retail loads.
+    [MEMORY]    • [target]   POS latency target for German retail intents is 40ms.
+    ```
+    Talking point: *"The agent just distilled its experience. These aren't transient session data — they're vector-indexed reusable facts in `agent_memories`. Filtered by domain, scoped by entity. The next time the user opens a workstream involving Alpenmarkt, the orchestrator pulls these facts into the system prompt before the agent even sees the user's question."*
+
+13b. **Show recall in action.** Open a brand-new conversation by starting a different Alpenmarkt store: *"I'm opening a second Alpenmarkt branch at Hamburg Altona. Same setup as Munich."* The live feed shows the workstream classifier opening a new WS, then a `[MEMORY] 🧠 Recalled 3 relevant fact(s) for this turn` line — the agent has loaded the Munich facts before generating its tool call. The submit_intent result includes the strict-retail-v3 template *without the user having mentioned it*. Talking point: *"That's cross-session knowledge transfer through the same Atlas cluster, no fine-tuning, no RAG pipeline. A document collection with a vector index is the memory plane."*
+
 13. **Switch to the DTW domain.** *"What if we raise prepaid M downlink to 20 Mbps in NYC Saturday night?"* New workstream, new domain. Run `simulate scenario DTW-SCN-…` — the simulation service does `$graphLookup` + hybrid `$vectorSearch` in the same tool call. Open the DTW dashboard at `http://localhost:8080`. Talking point: *"Graph for operational structure, vector for institutional memory, change streams for the live UI — three Atlas features, one tool call. And it's all on the same cluster as the workstreams, the history, and the service catalog."*
 14. **The closing slide.** Show the polyglot-equivalent stack diagram (Postgres + pgvector + Elasticsearch + PostGIS + TimescaleDB + Debezium + Kafka + Redis-for-agent-state + Pinecone-for-agent-memory). Talking point: *"Same demo on that stack: maybe six months and three more engineers. Here: one Atlas cluster. Operational data, routing brain, agent's working memory, agent's long-term recall, raw command history, live UI — same primitives, same query language, same backup."*
 

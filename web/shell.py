@@ -214,7 +214,9 @@ async def ws_endpoint(ws: WebSocket):
                             .find({}, {"_id": 1, "title": 1, "domain": 1,
                                        "state": 1, "entities": 1, "summary": 1,
                                        "last_activity": 1, "opened_at": 1,
-                                       "tool_calls": 1})
+                                       "tool_calls": 1,
+                                       "memories_extracted": 1,
+                                       "memories_extracted_count": 1})
                             .sort("last_activity", -1).limit(50))
                     for d in cur:
                         for k in ("last_activity", "opened_at"):

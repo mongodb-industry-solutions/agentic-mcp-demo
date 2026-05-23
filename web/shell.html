@@ -655,12 +655,19 @@ function renderWorkstreamCard(w) {
   const lastTs = w.last_activity ? new Date(w.last_activity).toLocaleString() : '—';
   const stateEmoji = ({open:'🟢', paused:'⏸', completed:'✓', cancelled:'⊗'})[w.state] || '•';
   const numCalls = (w.tool_calls || []).length;
+  const memCount = w.memories_extracted_count || 0;
   card.innerHTML =
-    `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">`
+    `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">`
     + `  <span style="font-family:'JetBrains Mono',monospace;color:var(--cyan);">${esc(w._id)}</span>`
     + `  <span style="color:var(--dim);">${stateEmoji} ${esc(w.state || '?')}</span>`
     + `  <span style="background:rgba(0,212,255,0.12);color:var(--cyan);`
     + `         padding:1px 6px;border-radius:3px;font-size:10px;">${esc(w.domain || '—')}</span>`
+    + (memCount > 0
+        ? `  <span title="Memories extracted from this workstream" `
+          + `style="background:rgba(255,215,0,0.15);color:#FFD700;`
+          + `padding:1px 6px;border-radius:3px;font-size:10px;">`
+          + `💎 ${memCount} memor${memCount === 1 ? 'y' : 'ies'}</span>`
+        : '')
     + `  <span style="margin-left:auto;color:var(--dim);font-size:11px;">${lastTs}</span>`
     + `</div>`
     + (w.title ? `<div style="margin-bottom:6px;">${esc(w.title)}</div>` : '')

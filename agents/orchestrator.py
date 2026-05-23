@@ -145,6 +145,14 @@ class OrchestratorAgent:
         self.workstreams = self.db["agent_workstreams"]
         self.current_workstream_id: str | None = None
         self._ws_summary_tasks: set[asyncio.Task] = set()
+        # Long-term memory layer. When a workstream closes, the orchestrator
+        # extracts 0-5 reusable facts from its summary + tool-call trail and
+        # persists them here, vector-indexed for cross-session recall. The
+        # ReAct loop pulls top-K relevant memories into the agent's context
+        # at the start of each turn so past lessons inform current work.
+        self.memories = self.db["agent_memories"]
+        self._memory_extract_tasks: set[asyncio.Task] = set()
+        self._ws_closure_watcher: asyncio.Task | None = None
 
         if not os.environ.get("OPENAI_API_KEY"):
             raise ValueError("OPENAI_API_KEY missing")
@@ -177,17 +185,28 @@ class OrchestratorAgent:
     async def __aenter__(self):
         await self._sync_registry()
         await self._ensure_workstream_indexes()
+        await self._ensure_memory_indexes()
         await self._resume_open_workstreams()
-        self._watcher_task = asyncio.create_task(self._watch_servers())
+        # Background tasks: filesystem watcher + workstream-closure watcher.
+        # The latter triggers long-term memory extraction whenever a
+        # workstream transitions to state=completed.
+        self._watcher_task        = asyncio.create_task(self._watch_servers())
+        self._ws_closure_watcher  = asyncio.create_task(self._watch_workstream_closures())
+        # Catch-up: if any workstream was closed while the orchestrator
+        # wasn't running, extract its memories now.
+        await self._extract_backlog()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self._watcher_task:
-            self._watcher_task.cancel()
-            await asyncio.gather(self._watcher_task, return_exceptions=True)
-        # Wait for any pending summary updates so we don't lose them.
-        if self._ws_summary_tasks:
-            await asyncio.gather(*self._ws_summary_tasks, return_exceptions=True)
+        for t in (self._watcher_task, self._ws_closure_watcher):
+            if t:
+                t.cancel()
+                await asyncio.gather(t, return_exceptions=True)
+        # Wait for pending background tasks so we don't lose summaries
+        # or partially-written memory extractions.
+        pending = list(self._ws_summary_tasks) + list(self._memory_extract_tasks)
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
         await self.exit_stack.aclose()
         await self.http_client.aclose()
         await self.mongo_client.close()
@@ -225,6 +244,225 @@ class OrchestratorAgent:
         self.current_workstream_id = focus["_id"]
         self.last_domain  = focus.get("domain")
         self.last_service = None  # service stickiness doesn't survive a restart
+
+    # ─── Long-term memory layer ───────────────────────────────────────────
+    #
+    # When a workstream transitions to state=completed, extract reusable
+    # facts and store them in agent_memories, vector-indexed for cross-
+    # session recall. The ReAct loop pulls top-K relevant memories at the
+    # start of each turn so past lessons inform current tool calls.
+    #
+    # Wired through three surfaces:
+    #   • change-stream watcher (background, auto on closure)
+    #   • catch-up pass at startup (handles closures while we were down)
+    #   • workstream_service MCP tools (explicit user-facing recall)
+
+    async def _ensure_memory_indexes(self):
+        try:
+            await self.memories.create_index([("workstream_id", 1)], name="mem_by_ws")
+            await self.memories.create_index([("domain", 1)],        name="mem_by_domain")
+            await self.memories.create_index([("entities", 1)],      name="mem_by_entities")
+            await self.memories.create_index([("extracted_at", -1)], name="mem_recency")
+        except Exception as e:
+            print(f"⚠️ memory index ensure failed (non-fatal): {e}")
+
+    async def _watch_workstream_closures(self):
+        """Background task: watch agent_workstreams change stream for
+        state→completed transitions and trigger memory extraction. Resilient
+        to driver/network blips; restarts the stream with backoff."""
+        while True:
+            try:
+                stream = await self.workstreams.watch(full_document="updateLookup")
+                async with stream:
+                    async for change in stream:
+                        if change.get("operationType") not in ("update", "replace"):
+                            continue
+                        doc = change.get("fullDocument") or {}
+                        if doc.get("state") == "completed" \
+                                and not doc.get("memories_extracted"):
+                            t = asyncio.create_task(self._extract_memories(doc["_id"]))
+                            self._memory_extract_tasks.add(t)
+                            t.add_done_callback(self._memory_extract_tasks.discard)
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                print(f"⚠️ workstream-closure watcher: {e}; retrying in 3s")
+                await asyncio.sleep(3)
+
+    async def _extract_backlog(self):
+        """At boot, find any completed workstreams that didn't have memory
+        extraction run on them (e.g. closed while the orchestrator was
+        offline) and extract them now. Bounded — extracts the most recent
+        few, not the whole archive, so a fresh DB clone doesn't burn LLM
+        cost on history."""
+        cursor = self.workstreams.find(
+            {"state": "completed", "memories_extracted": {"$ne": True}},
+            {"_id": 1},
+        ).sort("last_activity", -1).limit(10)
+        backlog = [d async for d in cursor]
+        if not backlog:
+            return
+        await self._broadcast("MEMORY",
+            f"💎 Extracting memories for {len(backlog)} closed workstream(s) "
+            "(catch-up after restart)")
+        for w in backlog:
+            t = asyncio.create_task(self._extract_memories(w["_id"]))
+            self._memory_extract_tasks.add(t)
+            t.add_done_callback(self._memory_extract_tasks.discard)
+
+    async def _extract_memories(self, ws_id: str):
+        """LLM-extract reusable facts from a completed workstream and
+        persist them in agent_memories. Marks the workstream as extracted
+        so we don't repeat the work (or pay the LLM cost) on next restart."""
+        ws = await self.workstreams.find_one({"_id": ws_id})
+        if not ws or ws.get("memories_extracted"):
+            return
+
+        # Build a tight context for the LLM — title + summary + the most
+        # informative tail of the tool-call audit. The point is *reusable*
+        # knowledge, not transcript replay, so we keep the prompt small.
+        recent_calls = (ws.get("tool_calls") or [])[-12:]
+        call_lines = []
+        for c in recent_calls:
+            res = (c.get("result") or "").replace("\n", " ")[:180]
+            call_lines.append(f"  - {c.get('service', '?')}__{c.get('tool', '?')} → {res}")
+
+        prompt = (
+            f"You are reviewing a closed workstream from a multi-agent system. "
+            f"Extract REUSABLE facts that would help a future agent run faster "
+            f"or more correctly on a similar task involving the same entities.\n\n"
+            f"Workstream: {ws_id}\n"
+            f"Title: {ws.get('title', '(untitled)')}\n"
+            f"Domain: {ws.get('domain', '?')}\n"
+            f"Entities: {', '.join(ws.get('entities') or []) or '(none)'}\n"
+            f"Summary: {ws.get('summary', '') or '(empty)'}\n\n"
+            f"Recent tool calls:\n" + "\n".join(call_lines) + "\n\n"
+            f"Return 0 to 5 facts as JSON. Each fact should be a short, "
+            f"declarative statement that names the entity/template/value and "
+            f"why it matters. Examples of GOOD facts:\n"
+            f"  • 'Alpenmarkt's standard retail SLA template is strict-retail-v3.'\n"
+            f"  • 'Marienplatz site uses fiber uplink UP-MUC-MAR-F10; copper unavailable.'\n"
+            f"  • 'POS latency target for German retail is 40ms; 80ms warning threshold.'\n"
+            f"BAD facts (do NOT extract these):\n"
+            f"  • Transient ids (specific intent ids, timestamps) — they don't reuse.\n"
+            f"  • Generic best practices the LLM already knows.\n"
+            f"  • Operational data that's already in another collection.\n\n"
+            f"JSON schema:\n"
+            f'{{"facts":[{{"text":"...","category":"preference|template|target|config|playbook|lesson",'
+            f'"entities":["..."],"confidence":0.0-1.0}}, ...]}}\n'
+            f"Return {{\"facts\":[]}} if the workstream has nothing reusable to teach."
+        )
+        try:
+            resp = await self.openai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=600,
+                response_format={"type": "json_object"},
+            )
+            payload = json.loads(resp.choices[0].message.content)
+        except Exception as e:
+            print(f"⚠️ memory extraction failed for {ws_id}: {e}")
+            # Mark as attempted-but-empty so we don't retry forever
+            await self.workstreams.update_one(
+                {"_id": ws_id},
+                {"$set": {"memories_extracted": True,
+                          "memories_extracted_at": datetime.datetime.now(),
+                          "memories_extracted_count": 0,
+                          "memories_extraction_error": str(e)[:300]}},
+            )
+            return
+
+        facts = payload.get("facts") or []
+        # Sanity-filter the LLM output
+        clean = []
+        for f in facts:
+            text = (f.get("text") or "").strip()
+            if not text or len(text) < 10 or len(text) > 600:
+                continue
+            clean.append({
+                "text":       text,
+                "category":   (f.get("category") or "fact").strip()[:30],
+                "entities":   [e for e in (f.get("entities") or []) if isinstance(e, str)][:8],
+                "confidence": max(0.0, min(1.0, float(f.get("confidence", 0.5)))),
+            })
+
+        if clean:
+            now = datetime.datetime.now()
+            ws_seq = ws_id.replace("WS-", "")
+            docs = [{
+                "_id":           f"MEM-{ws_seq}-{i+1:02d}",
+                "workstream_id": ws_id,
+                "text":          f["text"],
+                "category":      f["category"],
+                "entities":      f["entities"],
+                "domain":        ws.get("domain"),
+                "confidence":    f["confidence"],
+                "extracted_at":  now,
+            } for i, f in enumerate(clean)]
+            try:
+                await self.memories.insert_many(docs, ordered=False)
+                await self._broadcast("MEMORY",
+                    f"💎 Extracted {len(docs)} fact(s) from {ws_id}")
+                for d in docs:
+                    await self._broadcast("MEMORY",
+                        f"   • [{d['category']}] {d['text'][:120]}")
+            except Exception as e:
+                print(f"⚠️ memory insert failed for {ws_id}: {e}")
+        else:
+            await self._broadcast("MEMORY",
+                f"💎 {ws_id} closed — no reusable facts extracted")
+
+        await self.workstreams.update_one(
+            {"_id": ws_id},
+            {"$set": {"memories_extracted":       True,
+                      "memories_extracted_at":    datetime.datetime.now(),
+                      "memories_extracted_count": len(clean)}},
+        )
+
+    async def _recall_memories(self, query: str, domain: str | None = None,
+                                entities: list[str] | None = None,
+                                limit: int = 5) -> list[dict]:
+        """Recall reusable facts relevant to the current context. Uses
+        Atlas Vector Search on agent_memories.text when the index is
+        configured; falls back to entity-overlap + recency otherwise so
+        the demo always has something to surface."""
+        # Vector path first
+        try:
+            vs_spec = {
+                "index":         "agent_memories_index",
+                "path":          "text",
+                "query":         query,
+                "numCandidates": 50,
+                "limit":         max(1, min(20, limit)),
+            }
+            flt: dict = {}
+            if domain:
+                flt["domain"] = {"$eq": domain}
+            if flt:
+                vs_spec["filter"] = flt
+            cursor = await self.memories.aggregate([
+                {"$vectorSearch": vs_spec},
+                {"$project": {
+                    "_id": 1, "text": 1, "category": 1, "entities": 1,
+                    "domain": 1, "confidence": 1, "workstream_id": 1,
+                    "score": {"$meta": "vectorSearchScore"},
+                }},
+            ])
+            hits = await cursor.to_list()
+            if hits:
+                return hits
+        except Exception:
+            pass
+
+        # Fallback: entity overlap + recency
+        q: dict = {}
+        if domain:
+            q["domain"] = domain
+        if entities:
+            q["entities"] = {"$in": entities}
+        cursor = self.memories.find(q).sort("extracted_at", -1).limit(limit)
+        return [d async for d in cursor]
 
     async def _watch_servers(self):
         """Re-sync registry whenever a .py file in mcp_servers/ is added,
@@ -1405,8 +1643,35 @@ class OrchestratorAgent:
         tool_lists = await asyncio.gather(*[_fetch_tools(n) for n in active])
         openai_tools = [tool for tools in tool_lists for tool in tools]
 
+        # Pull top-K reusable facts from agent_memories that match the
+        # current query in the active workstream's domain. These ride into
+        # the system prompt as a "you previously learned" block so the
+        # agent's tool decisions reflect lessons from prior workstreams.
+        memory_block = ""
+        try:
+            ws_doc = await self.workstreams.find_one(
+                {"_id": self.current_workstream_id},
+                {"domain": 1, "entities": 1}) if self.current_workstream_id else None
+            recalled = await self._recall_memories(
+                user_input,
+                domain   = (ws_doc or {}).get("domain") or self.last_domain,
+                entities = (ws_doc or {}).get("entities"),
+                limit    = 5,
+            )
+            if recalled:
+                lines = [f"  • [{m.get('category','fact')}] {m.get('text','')}"
+                         for m in recalled]
+                memory_block = ("\n\nYou previously learned the following from "
+                                "past workstreams (use only if relevant):\n"
+                                + "\n".join(lines))
+                await self._broadcast("MEMORY",
+                    f"🧠 Recalled {len(recalled)} relevant fact(s) for this turn")
+        except Exception as e:
+            print(f"⚠️ memory recall failed (non-fatal): {e}")
+
         # Build messages with conversation history
-        messages = [{"role": "system", "content": _SYSTEM_PROMPT}]
+        messages = [{"role": "system",
+                     "content": _SYSTEM_PROMPT + memory_block}]
         messages.extend(self.conversation_history)
         messages.append({"role": "user", "content": user_input})
 
