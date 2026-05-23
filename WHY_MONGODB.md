@@ -28,12 +28,14 @@ We built a multi-domain agentic AI platform — an LLM-driven orchestrator that 
                   ┌─────────────────────────────────────────────┐
                   │          ORCHESTRATOR  (Python)             │
                   │                                             │
+                  │  • Workstream classification                │
+                  │       multi-turn working memory             │
                   │  • Two-stage routing                        │
                   │       Stage 1: domain classifier            │
                   │       Stage 2: vector search within domain  │
                   │  • ReAct tool-call loop                     │
-                  │  • Session memory + stickiness              │
                   │  • Live filesystem watcher (zero-restart)   │
+                  │  • Crash-safe state (resume from anywhere)  │
                   └────────┬────────────────────────┬───────────┘
                            │                        │
                            ▼                        ▼
@@ -50,18 +52,26 @@ We built a multi-domain agentic AI platform — an LLM-driven orchestrator that 
               │  • $graphLookup       • Time-Series collections      │
               │  • 2dsphere geo       • Change Streams (live UI)     │
               │  • Atlas Triggers     • Sharding by domain/market    │
+              │                                                      │
+              │  Agentic memory tiers (all in one cluster):          │
+              │    raw command history  → agent_history              │
+              │    short-term workstreams → agent_workstreams        │
+              │    long-term semantic recall → vector-indexed        │
+              │                                summaries             │
               └──────────────────────────────────────────────────────┘
 ```
 
 ## The strategic story
 
-**One platform replaces five.** A serious agentic AI stack built on point solutions needs: a relational database for state, a vector database for semantic routing and memory, a graph database for entity dependencies, a search engine for text retrieval, a time-series database for telemetry, and a streaming/CDC layer to make UIs live. Six engines, six operational profiles, six security perimeters, six failure modes — all of which an AI team has to staff, observe, and reason about while also trying to ship intelligence.
+**One platform replaces five — and powers the agent's mind, not just its disk.** A serious agentic AI stack built on point solutions needs: a relational database for operational state, a vector database for semantic routing and memory, a graph database for entity dependencies, a search engine for text retrieval, a time-series database for telemetry, a streaming/CDC layer to make UIs live, *and* a separate memory store (Redis, Postgres, dedicated "agent state" SaaS) for the agent's working memory and conversational history. Seven or more engines, seven operational profiles, seven security perimeters, seven failure modes — all of which an AI team has to staff, observe, and reason about while also trying to ship intelligence.
 
-MongoDB Atlas collapses that stack into one operational store. Not by adding bolt-ons — by being a document database that natively integrates vector search, graph traversal, geospatial indexing, time-series collections, and change streams as first-class features of the same engine.
+MongoDB Atlas collapses that stack into one operational store. Not by adding bolt-ons — by being a document database that natively integrates vector search, graph traversal, geospatial indexing, time-series collections, and change streams as first-class features of the same engine. **The same Atlas cluster that holds the application's operational data also holds the agent's working memory** — workstreams, conversation summaries, tool-call provenance, and command history.
 
-**Time-to-market.** This whole platform — orchestrator, two industry demos, web dashboards, iOS and watchOS log viewers — is roughly 10,000 lines of code. A comparable system on a polyglot stack would spend most of its line count on glue: schema translation between engines, change-data pipelines between them, dual-writes, retry logic for cross-store consistency. With one store, that code simply doesn't exist.
+**Agentic memory at three time scales — all in one cluster.** Modern agents need memory at three resolutions: the *current turn* (in-process), the *active session and its open workstreams* (short-term), and the *long-term semantic recall* across past sessions ("what was I working on about Munich last week?"). Most teams stitch this together from Redis for short-term + Pinecone for long-term + Postgres for audit. Atlas is one store for all three: `agent_workstreams` as the working-memory collection, vector-indexed summaries as the long-term recall surface, `agent_history` as the raw audit trail. **Kill the agent process anywhere; restart; it picks up the workstream exactly where it left off** — because the state isn't in process memory, it's in Atlas.
 
-**AI-ready means store-ready.** The market is converging on a pattern: every operational system needs to also be a context source for an agent. Either your operational store can serve embeddings directly (so an LLM can ground its answers in your live data) or you build an ETL into a separate vector store and ship stale snapshots. MongoDB's auto-embedding vector indexes turn every collection into a context source the moment you create the index — no pipeline, no staleness.
+**Time-to-market.** This whole platform — orchestrator with workstream-aware routing, two industry demos, web dashboards, iOS and watchOS log viewers — is roughly 11,000 lines of code. A comparable system on a polyglot stack would spend most of its line count on glue: schema translation between engines, change-data pipelines between them, dual-writes, retry logic for cross-store consistency, *and* a homegrown agent-memory layer. With one store, that code simply doesn't exist.
+
+**AI-ready means store-ready.** The market is converging on a pattern: every operational system needs to also be a context source for an agent. Either your operational store can serve embeddings directly (so an LLM can ground its answers in your live data) or you build an ETL into a separate vector store and ship stale snapshots. MongoDB's auto-embedding vector indexes turn every collection into a context source the moment you create the index — no pipeline, no staleness. Workstream summaries are vector-indexed the same way operational data is — semantic recall across the agent's own history is a one-aggregation-stage query.
 
 **Risk reduction.** Fewer engines means fewer integration surfaces, fewer vendor relationships, fewer skill-set demands on your team. A 2-engineer team can credibly run a production agentic platform on Atlas. The same scope on a polyglot stack tends to need 5–8.
 
@@ -76,6 +86,10 @@ MongoDB Atlas collapses that stack into one operational store. Not by adding bol
 | High-cardinality telemetry | Time-series collections | TimescaleDB / InfluxDB |
 | Live UI updates | Change Streams | Debezium + Kafka + consumer |
 | Hybrid query (semantic + structured filter) | One `$vectorSearch` stage with `filter` | Rerank pipeline across 3 engines |
+| **Agent working memory (workstreams + state)** | `agent_workstreams` collection | Redis + custom serialiser + TTL gymnastics |
+| **Long-term agent memory (semantic recall)** | Vector-indexed summary field | Pinecone + ETL from session store |
+| **Crash-safe resume across process kills** | Workstream state persisted on every turn | Snapshot/restore plumbing, custom ser/des |
+| **Cross-session command history** | `agent_history` collection | Per-host readline files + sync tooling |
 
 Same workloads, one bill, one team, one set of dashboards.
 
@@ -221,11 +235,60 @@ async with await coll.watch(full_document="updateLookup") as stream:
 
 **Why MongoDB:** Change Streams are a first-class feature of the replica set. No Debezium, no Kafka, no separate CDC layer. The dashboard subscribes to the database the same way it subscribes to a WebSocket. For customers building agent UIs that need to react to background processes — long-running simulations, async tool calls, multi-step workflows — this is the difference between a polling loop and a true streaming UI.
 
-### Layer 5 — Session Memory & Stickiness
+### Layer 5 — Agentic Memory (the new headline beat)
 
-`agent_registry.episodic_memories` stores conversation history and user preferences as documents, vector-indexed for semantic recall ("what do you remember about my food preferences?"). The orchestrator also tracks per-conversation `last_service` and `last_domain` to bias short follow-up queries toward the active topic.
+This is the layer that elevates the demo from *"clever multi-agent router"* to *"the agent has a mind, and that mind lives in Atlas"*. Three resolutions of memory, all persisted in the same cluster.
 
-**Why MongoDB:** The same vector primitives that drive routing also drive memory. Same index syntax, same query shape, same operational store. Customers don't need a separate "memory store" sub-stack.
+#### 5a. Working memory — `agent_workstreams`
+
+Every conversation is decomposed into one or more **workstreams** — coherent threads of activity. Opening the Marienplatz store is one workstream. The TODO inquiry is another. A what-if simulation on `plan_ACME_M` is a third. All can be active in parallel; the user interleaves them naturally and the orchestrator tracks which is which.
+
+A workstream document looks like:
+
+```json
+{
+  "_id": "WS-2026-05-23-001",
+  "title": "Open Alpenmarkt store at Marienplatz",
+  "domain": "ibn",
+  "entities": ["IBN-005", "Marienplatz", "Alpenmarkt", "site-muc-mar"],
+  "state": "open",
+  "opened_at": "2026-05-22T14:53:00Z",
+  "last_activity": "2026-05-23T11:04:00Z",
+  "summary": "User submitted IBN-005 for a new Alpenmarkt branch …",
+  "tool_calls": [
+    {"service": "ibn_intent_service", "tool": "submit_intent",
+     "args": {…}, "ts": "…", "result": "…"},
+    {"service": "ibn_feasibility_service", "tool": "check_feasibility",
+     "args": {…}, "ts": "…", "result": "…"}
+  ],
+  "turn_count": 4
+}
+```
+
+Before Stage 1 routing, the orchestrator runs a **workstream classifier** that maps each query to an open workstream (or opens a new one). The chosen workstream's `domain` becomes Stage 1's sticky bias, and its `entities` are available to the agent's tool-call context. This is what fixes the multi-turn routing problem that no amount of per-turn `last_domain` tuning could solve: when the user types *"propose plan and execute it"* after a TODO interlude, the workstream classifier finds the IBN workstream by entity overlap and recency. Stage 1 stays in `ibn`. No misroute.
+
+#### 5b. Long-term memory — vector recall over workstream summaries
+
+Each workstream's `summary` is auto-rewritten by `gpt-4o-mini` after every turn and stored on the workstream document. A dedicated Atlas Vector Search index (`workstream_vector_index`) embeds these summaries on insert/update. Result: questions like *"what was I working on about Munich last week?"* run a single `$vectorSearch` aggregation over `agent_workstreams.summary` and surface the right past workstream — title, entities, last activity, full tool-call trail.
+
+#### 5c. Raw command history — `agent_history`
+
+Every accepted query in either the terminal shell (`main.py`) or the web shell (`web/shell.py`) is appended to `agent_registry.agent_history` with source attribution:
+
+```json
+{"_id": ObjectId, "text": "ok, run the feasibility check for Marienplatz",
+ "source": "web", "ts": "2026-05-23T11:04:00Z"}
+```
+
+Cursor-up history in the web shell loads from this collection on connect (newest-first), so it works *from the first prompt of a brand-new browser tab* — and walks back through entries typed in the terminal earlier the same day. A workstation reinstall doesn't lose anything; new machines that point at the same Atlas cluster immediately see the full history.
+
+**The WOW moment: kill `main.py` anywhere, restart, resume.** Because workstreams persist on every turn (and command history persists per-query), the user can `Ctrl-C` the orchestrator mid-feasibility-check, run `python main.py` again, type *"how's the Munich one going?"*, and the workstream classifier matches the open workstream from before the kill, reloads its summary + entities, and routes to `ibn` to continue. The process is stateless; the agent isn't.
+
+#### Why MongoDB for all of this
+
+The same vector primitives that drive service routing also drive workstream recall. The same document model that holds operational state holds the agent's working memory. `$lookup` joins the workstream's tool-call history with the underlying state documents (intents, scenarios). Change Streams on `agent_workstreams` power the dashboard's Workstreams tab. **There is no agent-memory product to buy, no Redis to operate, no separate consistency story to defend.**
+
+For customers building agentic platforms, this is the single most under-pitched advantage of Atlas: you're not just buying a vector DB, you're getting an entire memory plane for the agent. Pinecone gives you semantic recall. Redis gives you working state. Postgres gives you audit. Atlas gives you all three on the same primitive: a document collection with the right indexes.
 
 ## 2.2 Operational considerations the architecture honors
 
@@ -256,9 +319,11 @@ These will come up the moment a customer architect starts probing.
 The framework's evolutionary path is clean:
 
 - **Capability claims** (each service declares `id-shape` regexes for routing pre-filters before Stage 1) — handles 1000+ services without LLM calls for unambiguous queries.
-- **Per-tenant vector indexes** — already supported, just needs a tenant filter in the index.
-- **Routing analytics** — a `routing_decisions` collection that captures every routing decision and its outcome for offline learning and prompt tuning.
-- **Tool-call provenance** — every `session.call_tool()` result persisted with the calling conversation for replay and audit.
+- **Per-tenant vector indexes** — already supported, just needs a tenant filter on `mcp_services` and `agent_workstreams`.
+- **Routing analytics** — a `routing_decisions` collection that captures every Stage 1 + Stage 2 outcome for offline learning and prompt tuning.
+- **Workstream merge/split** — when the user explicitly relates two threads ("the Munich one and the Hamburg one are both Q3 rollouts"), merge their entities and tool-call trails.
+- **Long-term memory extraction** — when a workstream closes, distil reusable facts ("Alpenmarkt's standard SLA template is `strict-retail-v3`") into a vector-indexed `agent_memories` collection for cross-session recall.
+- **Cross-host orchestrator clustering** — workstreams already live in MongoDB, not in process memory; multi-host orchestrator setups are a one-line change away (each instance picks up workstreams from `state == "open"`).
 
 None of these require a new engine. All are collections + indexes on the same Atlas cluster.
 
@@ -268,18 +333,19 @@ None of these require a new engine. All are collections + indexes on the same At
 
 ## 3.1 The 30-second elevator
 
-> *"We replace the data plumbing of an agentic AI platform. Every team building an LLM agent today needs a service catalog, a routing brain, a memory store, an operational state DB, a graph for entity dependencies, a search engine, sometimes a time-series store. Most of them are wiring six engines together and discovering the integration tax eats their roadmap. We deliver all of that as features of one document database with native vector, graph, geospatial, and time-series — the same store they already trust to run their applications."*
+> *"We replace the data plumbing of an agentic AI platform — including the agent's own memory. Every team building an LLM agent today needs a service catalog, a routing brain, a working-memory store for active workstreams, a long-term memory store for semantic recall, an operational state DB, a graph for entity dependencies, a search engine, sometimes a time-series store. Most of them are wiring seven engines together and discovering the integration tax eats their roadmap. We deliver all of that — including the agent's mind — as features of one document database with native vector, graph, geospatial, time-series, and change streams. Kill the process anywhere; restart; the agent resumes. Because the state isn't in process memory, it's in Atlas."*
 
 ## 3.2 Talking points by stakeholder
 
 | Stakeholder | The hook |
 |---|---|
-| **CIO / CDO** | "Your AI agent stack will be the next polyglot tax if you let it. MongoDB collapses six engines into one." |
-| **Head of AI / ML Platform** | "Your embeddings are out of date the moment you ETL them out of your operational store. Atlas embeds in place, queryable the second after write." |
-| **Chief Architect** | "Atlas Vector Search supports structured pre-filters inside `$vectorSearch`. That's the difference between a hybrid query that recalls correctly and a rerank pipeline that doesn't." |
-| **Head of Engineering** | "One operational profile. Two engineers can run this. Same `mongod`, same indexes, same Atlas dashboard. No glue jobs." |
-| **VP Sales (of the customer)** | "Demos that work the day after the customer says yes, because the routing brain doesn't need re-tuning every time you add a new agent capability." |
-| **Compliance / Risk** | "One data perimeter. One audit log. One backup story. Atlas handles encryption, BYOK, regional sovereignty — the AI workload inherits it for free." |
+| **CIO / CDO** | "Your AI agent stack will be the next polyglot tax if you let it. MongoDB collapses seven engines — including the agent's memory plane — into one." |
+| **Head of AI / ML Platform** | "Your embeddings are out of date the moment you ETL them out of your operational store. Atlas embeds in place — operational data *and* the agent's own workstream summaries — queryable the second after write." |
+| **Chief Architect** | "Atlas Vector Search supports structured pre-filters inside `$vectorSearch`. That's the difference between a hybrid query that recalls correctly and a rerank pipeline that doesn't. The same primitive routes services *and* recalls past workstreams." |
+| **Head of Engineering** | "One operational profile. Two engineers can run this. Same `mongod`, same indexes, same Atlas dashboard. No Redis cluster for agent state, no Pinecone for memory, no separate audit DB." |
+| **Agent Platform Lead** | "Kill the agent process at any point during a workstream. Restart it. It picks up exactly where it left off — because the workstream lives in Atlas, not in process memory. Try doing that with Redis-backed agent state and a separate vector DB." |
+| **VP Sales (of the customer)** | "Demos that work the day after the customer says yes, because the routing brain doesn't need re-tuning every time you add a new agent capability, and the agent remembers what the user was working on yesterday." |
+| **Compliance / Risk** | "One data perimeter. One audit log — every tool call the agent made is in `agent_workstreams.tool_calls`. One backup story. Atlas handles encryption, BYOK, regional sovereignty — the AI workload inherits it for free." |
 
 ## 3.3 Competitive positioning, by stack the customer already has
 
@@ -294,6 +360,12 @@ None of these require a new engine. All are collections + indexes on the same At
 
 **Customer running TimescaleDB:**
 "For time-series telemetry from an agent platform — tool-call traces, session events, model outputs — Atlas time-series collections are within the same ballpark of compression and read throughput, with the catch-all benefit of being in the same store as your operational data. Cross-collection joins between telemetry and intents become aggregations, not federated queries."
+
+**Customer using Redis for agent state + Pinecone for agent memory:**
+"That's two products with two billing relationships, two operational profiles, and a sync job between them whose lag is your accuracy ceiling. Worse, the Redis copy is a *cache* — when the process dies, partial agent state may be lost. Atlas gives you working memory (`agent_workstreams`), semantic recall (vector-indexed summaries), and raw audit (`agent_history`) on the same primitive: a document collection with the right index. Killing the process is a non-event because the state was already in the database."
+
+**Customer using LangChain Memory / LlamaIndex with a separate store:**
+"Those abstractions assume you've solved 'where does memory live' and just plug them in. The honest version of that question — durable, queryable across sessions and machines, recoverable after a crash, audit-trail-grade — sends you back to a database. Atlas is the database that already happens to support semantic recall in the same query language. The orchestration framework can live in LangChain or our pure-Python ReAct loop or anything; the memory plane is what's hard, and Atlas does it natively."
 
 ## 3.4 Objection responses
 
@@ -312,41 +384,48 @@ MongoDB has a robust SQL→Aggregation translation story and a connector ecosyst
 **"We already have an embedding pipeline."**
 Great — you'll keep it for any cross-system pipelines. Atlas auto-embed is an additive feature for the workloads where you want the freshest embeddings (typically agent grounding). Coexists, doesn't replace.
 
+**"What about agent state? We use Redis for that and Pinecone for long-term memory."**
+That's the polyglot tax expressed inside the agent layer instead of the data layer — but it's still a tax. Atlas covers all three tiers of agentic memory natively: `agent_workstreams` for active threads (with full tool-call audit), vector-indexed summaries for semantic recall across past sessions, and `agent_history` for the raw audit trail. The kill-the-process-and-resume demo is the proof. No state in Redis means nothing to lose on crash; no Pinecone sync means recall is always over the live data. Production scale is the same posture you already have for your operational MongoDB workloads — replica set + sharding, BYOK, regional sovereignty inherited.
+
 **"Why are all the vector-search scores so close to each other? Looks like noise."**
 This is the most common pushback at the demo, and the honest answer is the model-behaviour one: modern embedding models (voyage-4, OpenAI `text-embedding-3`, Cohere `embed-v3`, Anthropic's own) output unit-norm vectors, so dotProduct equals cosine and semantically-related documents naturally compress into a narrow band of ~0.45–0.55. *This is not a MongoDB property — they would see the same compressed scores in Pinecone, Weaviate, or pgvector with the same model.* What matters is the **ranking**, and that's deterministic: in our diagnostic the right service won every single canonical query. The orchestrator highlights the winner with `▶` and shows the gap-to-runner-up so the visual story is unambiguous. If they want wider absolute spread, they can downgrade to an older model like `voyage-3-large` (0.65–0.85 range) — but the ranking quality on hard queries is meaningfully worse, which is why we picked voyage-4.
 
 ## 3.5 The 5-minute live demo storyline
 
-1. **Open the live feed.** Show `curl -sN https://notify.bjjl.dev/receive` streaming colored events.
-2. **`python main.py`** — orchestrator boots. Audience sees `[BOOTSTRAP] Registry: 24 services in 15 domains — acc(2), dtw(5), ibn(5), …`. Talking point: *"Atlas is the catalog. Filename prefix becomes a domain tag at sync time. No manual registration."*
+1. **Open the live feed.** Show `curl -sN https://notify.bjjl.dev/receive` streaming colored events. Open the web shell at `http://localhost:8070`, click the **Workstreams** tab — empty for now.
+2. **`python main.py`** — orchestrator boots. Audience sees `[BOOTSTRAP] Registry: 25 services in 16 domains — acc(2), dtw(5), ibn(5), workstream(1), …`. Talking point: *"Atlas is the catalog. Filename prefix becomes a domain tag at sync time. No manual registration. The catalog includes the agent's own audit-trail service — `workstream_service` — because the agent's memory is just another collection."*
 3. **Type:** *"I'm opening a new Alpenmarkt store at Marienplatz Munich. POS priority, guest WiFi strict, camera uplink, online by 18:00, max 40ms POS latency, 99.95% availability."*
 4. **Live feed lights up:**
    ```
+   [WORKSTREAM] 🆕 WS-2026-05-23-001 opened — Open Alpenmarkt store at Marienplatz [ibn]
    [ROUTING] Stage 1 → ibn (5 services)
    [ROUTING] Stage 2 in 'ibn':
    [ROUTING]   ▶ ibn_intent_service: 0.5031
    [ROUTING]     ibn_inventory_service: 0.5024  (-0.0007)
-   [ROUTING]     ibn_assurance_service: 0.5021  (-0.0010)
    [ROUTING]     …
    ```
-   Talking point: *"Breadth then depth. A 1000-service catalog scales the same way. The `▶` marks the winner; the gap is the routing margin. Modern embedding models compress absolute scores into a narrow band — what counts is the ranking, which is deterministic."*
+   Switch to the Workstreams tab — the WS-… card has appeared in real time via Change Streams. Talking point: *"The agent just opened a workstream — its own working-memory unit for this thread of activity. Notice the `▶` marker and the gap to runner-up: breadth then depth, ranking deterministic, scales to 1000s of services."*
 5. **Type the follow-up:** *"feasibility check!"*
-6. **Live feed:** Stage 1 → still `ibn` (sticky-hint from last domain). Stage 2 → `▶ ibn_feasibility_service`. Talking point: *"Session context keeps us in the right domain. A short follow-up doesn't widen the search."*
-7. **Switch domain.** Type: *"What if we raise prepaid M downlink to 20 Mbps in NYC Saturday night?"*
-8. **Live feed:** Stage 1 → `dtw`, Stage 2 → `dtw_scenario_service`. Talking point: *"Same orchestrator, same store, completely different agent stack — domain-routed."*
-9. **Run the scenario:** `simulate scenario DTW-SCN-002`. The simulation service runs `$graphLookup` + `$vectorSearch` *in the same tool call*. Open the DTW dashboard at `http://localhost:8080` and show the live updates flowing via Change Streams. Talking point: *"Graph for operational structure, vector for institutional memory, change streams for the live UI — three Atlas features, one tool call."*
-10. **The closing slide:** show the polyglot-equivalent stack diagram (Postgres + pgvector + Elasticsearch + PostGIS + TimescaleDB + Debezium + Kafka). Talking point: *"Same demo on that stack: maybe four months and two more engineers. Here: one Atlas cluster, two industry demos, ten thousand lines of code."*
+6. **Live feed:** `[WORKSTREAM] ↪ WS-… continued`. Stage 1 → still `ibn` (sticky-hint from the workstream's domain). Stage 2 → `▶ ibn_feasibility_service`. Talking point: *"The workstream classifier matched the existing thread by entity overlap — we're not just on the same domain, we're on the same workstream as the previous turn."*
+7. **Switch domain — interrupt with an orthogonal request.** Type: *"what's on my TODO list"*
+8. **Live feed:** new workstream opens, `todo_service.list_todos` runs. The IBN workstream is still listed as *open* in the Workstreams tab — paused, not lost. Talking point: *"Two workstreams are alive in parallel. The IBN one is paused; the TODO one is active. Customers love this — it's how their real users actually work."*
+9. **Resume the IBN workstream by name.** Type: *"now propose plan and execute it for Marienplatz"*
+10. **Live feed:** workstream classifier reaches across the TODO interruption to match `WS-… (Open Alpenmarkt store at Marienplatz)` by entity ("Marienplatz") and recency. Stage 1 → `ibn`. `propose_plan` + `activate_plan` run back-to-back. Talking point: *"That's multi-turn intent recognition that no single `last_domain` heuristic could give you — because the agent is reading workstream entities and summaries from Atlas, not just remembering the last service it called."*
+11. **🔥 The kill-and-resume moment.** `Ctrl-C` the orchestrator in front of the audience. Wait two seconds. Restart `python main.py`. The boot log shows `[BOOTSTRAP] Resumed: 2 open workstream(s) — WS-2026-05-23-001 (ibn), WS-2026-05-23-002 (todo)`. Type: *"how's the Munich store coming along?"* The workstream classifier recognises the entity, picks WS-2026-05-23-001, Stage 1 → `ibn`, and the agent picks up the thread. Talking point — *the line that earns the demo its reputation*: **"That's not snapshot-and-restore plumbing. The agent's state was already in Atlas the whole time. Kill it anywhere, restart, resume. The process is stateless; the agent isn't."**
+12. **Long-term memory query.** Type: *"what have we done today?"* The query routes to `workstream_service.recall_recent_activity` which aggregates over `agent_workstreams.last_activity` filtered by date. Audience sees a structured summary of every thread, organised by day, each with its entities and tool-call count. Talking point: *"Same vector primitives that route services also recall memory. `$vectorSearch` over workstream summaries — find threads by topic, not by id."*
+13. **Switch to the DTW domain.** *"What if we raise prepaid M downlink to 20 Mbps in NYC Saturday night?"* New workstream, new domain. Run `simulate scenario DTW-SCN-…` — the simulation service does `$graphLookup` + hybrid `$vectorSearch` in the same tool call. Open the DTW dashboard at `http://localhost:8080`. Talking point: *"Graph for operational structure, vector for institutional memory, change streams for the live UI — three Atlas features, one tool call. And it's all on the same cluster as the workstreams, the history, and the service catalog."*
+14. **The closing slide.** Show the polyglot-equivalent stack diagram (Postgres + pgvector + Elasticsearch + PostGIS + TimescaleDB + Debezium + Kafka + Redis-for-agent-state + Pinecone-for-agent-memory). Talking point: *"Same demo on that stack: maybe six months and three more engineers. Here: one Atlas cluster. Operational data, routing brain, agent's working memory, agent's long-term recall, raw command history, live UI — same primitives, same query language, same backup."*
 
 ## 3.6 The single sentence to leave behind
 
-> *"Atlas isn't just where your agentic AI platform stores its data — it's the data plane *of* the platform. Vector search is routing. Graph traversal is impact analysis. Time-series is telemetry. Change streams are the live UI. One database, every primitive an agent needs."*
+> *"Atlas isn't just where your agentic AI platform stores its data — it's the data plane of the platform and the memory plane of the agent. Vector search is routing. Graph traversal is impact analysis. Time-series is telemetry. Change streams are the live UI. **Workstreams are the agent's working memory; their summaries are its long-term recall; the command history is its audit trail — all on the same cluster.** One database, every primitive an agent needs. Kill the process. Restart. Resume. The agent remembers because Atlas remembers."*
 
 ---
 
 ## Closing
 
-The agentic AI wave is forcing every operational data store to also be an AI context source. MongoDB Atlas got there by being a flexible document database that happened to integrate the right specialist primitives (vector, graph, geo, time-series, change streams) before the wave hit. This framework is a worked example: every layer that an agent platform needs, served by the same Atlas cluster, with the integration tax engineered out.
+The agentic AI wave is forcing every operational data store to also be an AI context source — *and* the agent's own memory plane. MongoDB Atlas got there by being a flexible document database that happened to integrate the right specialist primitives (vector, graph, geo, time-series, change streams) before the wave hit, and by extending those same primitives to the agent's own state — workstreams, summaries, raw history — without bolting on a separate memory product. This framework is a worked example: every layer that an agent platform needs *plus the agent's own mind*, served by the same Atlas cluster, with the integration tax engineered out.
 
-Customers who adopt this pattern get a smaller engineering surface, fresher AI grounding, and a roadmap that scales by adding collections — not by adding engines.
+Customers who adopt this pattern get a smaller engineering surface, fresher AI grounding, durable agent memory that survives crashes, and a roadmap that scales by adding collections — not by adding engines.
 
-— *Demo source: [`github.com/anthropics/agentic-mcp-demo`](https://github.com/) (private). Two industry demos (IBN, DTW), one orchestrator, full source ~10k LOC.*
+— *Demo source: agentic-mcp-demo. Two industry demos (IBN, DTW), one orchestrator with workstream-aware routing, full source ~11k LOC. Kill it anywhere; restart; it picks up where it left off.*
