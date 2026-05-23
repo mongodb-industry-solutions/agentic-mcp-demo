@@ -32,6 +32,9 @@ Use this service when users say:
 - Delete:       "delete WS-...", "remove workstream", "purge completed
                 workstreams", "wipe all completed workstreams"
                 (DB removal — gone forever)
+- Nuclear:      "delete all workstreams", "wipe everything", "nuke
+                workstreams", "reset workstreams" (removes ALL workstreams
+                regardless of state — open, completed, paused, cancelled)
 
 This service does NOT submit intents, run simulations, manage TODOs, or do
 anything domain-specific — those are the actual demo services. It manages
@@ -340,6 +343,41 @@ def delete_workstream(workstream_id: str, cascade_memories: bool = True) -> str:
     extra = f"; also removed {mem_deleted} associated memorie(s)" \
         if mem_deleted else ""
     return f"🗑 Workstream {workstream_id} ({title!r}) deleted{extra}."
+
+
+@mcp.tool()
+def delete_all_workstreams(cascade_memories: bool = True) -> str:
+    """
+    NUCLEAR. Delete EVERY workstream document from the database
+    regardless of state — open, completed, paused, cancelled, anything.
+    Use only on explicit user request: 'delete all workstreams', 'wipe
+    everything', 'nuke the workstream table', 'reset workstreams'.
+
+    Stronger than delete_completed_workstreams (which is filtered to
+    state=completed). Use this one when the user wants a hard reset,
+    e.g. to clean up legacy/orphan workstreams left over from earlier
+    sessions.
+
+    By default cascade-deletes ALL extracted memories (agent_memories
+    documents whose workstream_id matches a deleted workstream).
+
+    Args:
+        cascade_memories: When True (default), also remove every
+                          associated memory document.
+    """
+    ids = [d["_id"] for d in workstreams.find({}, {"_id": 1})]
+    if not ids:
+        return "No workstreams to delete."
+    mem_deleted = 0
+    if cascade_memories:
+        mres = memories.delete_many({"workstream_id": {"$in": ids}})
+        mem_deleted = mres.deleted_count
+    wres = workstreams.delete_many({})
+    extra = f"; also removed {mem_deleted} associated memorie(s)" \
+        if mem_deleted else ""
+    return (f"💥 Nuclear delete: removed {wres.deleted_count} workstream(s) "
+            f"(all states){extra}. The agent_workstreams collection is "
+            f"now empty.")
 
 
 @mcp.tool()
