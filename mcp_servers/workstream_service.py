@@ -27,10 +27,27 @@ Use this service when users say:
                 "history of <workstream>"
 - Search:       "any workstreams about Munich", "find threads involving X",
                 "what workstreams concern the QoS uplift"
+- Close:        "close that workstream", "we're done with Marienplatz",
+                "mark WS-... completed"    (state change, doc kept)
+- Delete:       "delete WS-...", "remove workstream", "purge completed
+                workstreams", "wipe all completed workstreams"
+                (DB removal — gone forever)
 
 This service does NOT submit intents, run simulations, manage TODOs, or do
-anything domain-specific — those are the actual demo services. It only
-reads the orchestrator's own audit log.
+anything domain-specific — those are the actual demo services. It manages
+the orchestrator's own audit log: read, close, delete.
+
+Important distinction:
+- close_workstream sets state=completed (kept in DB, memory extraction
+  still runs, can be inspected later).
+- delete_workstream / delete_completed_workstreams REMOVE documents from
+  agent_workstreams entirely and cascade-delete the workstream's
+  extracted memories from agent_memories. There is no undo.
+
+When the user asks to remove / purge / wipe / clear multiple completed
+workstreams at once, prefer delete_completed_workstreams (single bulk
+operation) over iterating delete_workstream — it avoids the orchestrator's
+5-iteration ReAct cap.
 """
 
 import datetime
@@ -290,6 +307,76 @@ def close_workstream(workstream_id: str, note: str = "completed") -> str:
     return (f"✓ Workstream {workstream_id} marked completed. Note: {note}\n"
             f"  Long-term memory extraction will run automatically — "
             f"watch for the [MEMORY] broadcast lines.")
+
+
+@mcp.tool()
+def delete_workstream(workstream_id: str, cascade_memories: bool = True) -> str:
+    """
+    REMOVE a workstream document from the database entirely. NOT the same
+    as close_workstream — this is a true DELETE, the document is gone.
+    Use when the user says 'delete WS-...', 'remove that workstream',
+    'wipe WS-...'.
+
+    By default, also deletes any extracted memories associated with the
+    workstream (agent_memories.workstream_id == workstream_id), so the
+    audit trail and the knowledge it produced disappear together. Pass
+    cascade_memories=False to keep the memories as orphans.
+
+    Args:
+        workstream_id:    Workstream id to delete, e.g. 'WS-2026-05-23-001'.
+        cascade_memories: When True (default), also delete the
+                          workstream's extracted memories from
+                          agent_memories.
+    """
+    ws = workstreams.find_one({"_id": workstream_id}, {"_id": 1, "state": 1, "title": 1})
+    if not ws:
+        return f"❌ Workstream {workstream_id} not found."
+    mem_deleted = 0
+    if cascade_memories:
+        res = memories.delete_many({"workstream_id": workstream_id})
+        mem_deleted = res.deleted_count
+    workstreams.delete_one({"_id": workstream_id})
+    title = ws.get("title") or "(untitled)"
+    extra = f"; also removed {mem_deleted} associated memorie(s)" \
+        if mem_deleted else ""
+    return f"🗑 Workstream {workstream_id} ({title!r}) deleted{extra}."
+
+
+@mcp.tool()
+def delete_completed_workstreams(cascade_memories: bool = True) -> str:
+    """
+    BULK delete every workstream currently in state='completed'. Single
+    server-side operation — avoids the orchestrator's 5-iteration ReAct
+    cap that would otherwise stop a delete-one-at-a-time loop after the
+    fifth workstream.
+
+    Use when the user says 'delete all completed workstreams', 'purge
+    completed workstreams', 'wipe completed workstreams', 'clear all
+    finished workstreams'.
+
+    By default, also cascade-deletes the agent_memories extracted from
+    each removed workstream.
+
+    Args:
+        cascade_memories: When True (default), also delete the
+                          associated extracted memories.
+    """
+    # Snapshot ids first so we can cascade and report counts cleanly.
+    ids = [d["_id"] for d in workstreams.find(
+        {"state": "completed"}, {"_id": 1})]
+    if not ids:
+        return "No completed workstreams to delete."
+    mem_deleted = 0
+    if cascade_memories:
+        mres = memories.delete_many({"workstream_id": {"$in": ids}})
+        mem_deleted = mres.deleted_count
+    wres = workstreams.delete_many({"_id": {"$in": ids}})
+    extra = f"; also removed {mem_deleted} associated memorie(s)" \
+        if mem_deleted else ""
+    return (f"🗑 Deleted {wres.deleted_count} completed workstream(s) "
+            f"in one bulk operation{extra}. Ids: "
+            f"{', '.join(ids[:10])}"
+            + (f" … (+{len(ids) - 10} more)" if len(ids) > 10 else ""))
 
 
 # ─── Long-term memory tools ────────────────────────────────────────────────
