@@ -62,31 +62,36 @@ def _km_to_degrees(km: float, lat: float) -> tuple[float, float]:
 
 
 def _resolve_site(site_hint: str) -> dict | None:
-    """Resolve a site by fragments, tolerating word-order variations.
-
-    Strategy:
-      1. Exact regex match on the full hint.
-      2. $and of all tokens (all must appear in name).
-      3. $or of all tokens (any token matches) — handles cases like
-         "Alpenmarkt Stuttgart" where the store brand isn't in the site name.
-      4. Longest-token fallback for single-word partial hints.
-    """
+    """Resolve a site by name using Atlas Search fuzzy text, with regex fallback."""
     if not site_hint:
         return None
+    try:
+        results = list(sites.aggregate([
+            {"$search": {
+                "index": "ibn_sites_search",
+                "text": {
+                    "query": site_hint,
+                    "path":  "name",
+                    "fuzzy": {"maxEdits": 1, "prefixLength": 2},
+                },
+            }},
+            {"$limit": 1},
+        ]))
+        if results:
+            return results[0]
+    except Exception:
+        pass
+    # Fallback: regex token matching when the Search index is not yet available
     direct = sites.find_one({"name": {"$regex": site_hint, "$options": "i"}})
     if direct:
         return direct
     tokens = [t for t in site_hint.split() if len(t) >= 3]
     if not tokens:
         return None
-    # Try all tokens must match
     result = sites.find_one(
         {"$and": [{"name": {"$regex": t, "$options": "i"}} for t in tokens]}
     )
-    if result:
-        return result
-    # Fall back: any token matches (tolerates brand words not in site name)
-    return sites.find_one(
+    return result or sites.find_one(
         {"$or": [{"name": {"$regex": t, "$options": "i"}} for t in tokens]}
     )
 

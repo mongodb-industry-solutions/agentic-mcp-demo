@@ -45,8 +45,25 @@ compliance_events   = db["ibn_compliance_events"]
 
 
 def _resolve_site(site_hint: str) -> dict | None:
+    """Resolve a site by name using Atlas Search fuzzy text, with regex fallback."""
     if not site_hint:
         return None
+    try:
+        results = list(sites.aggregate([
+            {"$search": {
+                "index": "ibn_sites_search",
+                "text": {
+                    "query": site_hint,
+                    "path":  "name",
+                    "fuzzy": {"maxEdits": 1, "prefixLength": 2},
+                },
+            }},
+            {"$limit": 1},
+        ]))
+        if results:
+            return results[0]
+    except Exception:
+        pass
     direct = sites.find_one({"name": {"$regex": site_hint, "$options": "i"}})
     if direct:
         return direct
@@ -56,9 +73,7 @@ def _resolve_site(site_hint: str) -> dict | None:
     result = sites.find_one(
         {"$and": [{"name": {"$regex": t, "$options": "i"}} for t in tokens]}
     )
-    if result:
-        return result
-    return sites.find_one(
+    return result or sites.find_one(
         {"$or": [{"name": {"$regex": t, "$options": "i"}} for t in tokens]}
     )
 

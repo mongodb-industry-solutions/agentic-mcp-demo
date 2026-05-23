@@ -61,14 +61,25 @@ def _next_intent_id() -> str:
 
 
 def _resolve_site(site_hint: str) -> dict | None:
-    """
-    Resolve a site by fragments, tolerating word-order variations.
-    'Munich Marienplatz', 'Marienplatz Munich', and 'Marienplatz' all hit
-    the same site. 'Alpenmarkt Stuttgart' resolves via the 'Stuttgart' token
-    even though 'Alpenmarkt' (the store brand) isn't part of the site name.
-    """
+    """Resolve a site by name using Atlas Search fuzzy text, with regex fallback."""
     if not site_hint:
         return None
+    try:
+        results = list(sites.aggregate([
+            {"$search": {
+                "index": "ibn_sites_search",
+                "text": {
+                    "query": site_hint,
+                    "path":  "name",
+                    "fuzzy": {"maxEdits": 1, "prefixLength": 2},
+                },
+            }},
+            {"$limit": 1},
+        ]))
+        if results:
+            return results[0]
+    except Exception:
+        pass
     direct = sites.find_one({"name": {"$regex": site_hint, "$options": "i"}})
     if direct:
         return direct
@@ -78,9 +89,7 @@ def _resolve_site(site_hint: str) -> dict | None:
     result = sites.find_one(
         {"$and": [{"name": {"$regex": t, "$options": "i"}} for t in tokens]}
     )
-    if result:
-        return result
-    return sites.find_one(
+    return result or sites.find_one(
         {"$or": [{"name": {"$regex": t, "$options": "i"}} for t in tokens]}
     )
 
