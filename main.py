@@ -13,9 +13,9 @@ from rich.markdown import Markdown
 from rich import box
 from pymongo import MongoClient
 from agents.orchestrator import OrchestratorAgent, BROADCAST_RECEIVE_URL
+from agents import history as shell_history
 
 console = Console()
-history_file = os.path.expanduser("~/.agentic_demo_history")
 
 def show_banner():
     banner = """
@@ -125,10 +125,16 @@ async def interactive_loop():
         console.print("[red]❌ Missing MONGODB_URI[/]")
         return
 
+    # Seed readline's in-memory history from the shared MongoDB collection
+    # so cursor-up works from the first prompt — including across machines.
     try:
-        readline.read_history_file(history_file)
-    except FileNotFoundError:
-        pass
+        seed = shell_history.read_recent(limit=500)
+        # readline.add_history wants oldest-first; read_recent returns
+        # newest-first, so reverse.
+        for entry in reversed(seed):
+            readline.add_history(entry)
+    except Exception as e:
+        console.print(f"[dim yellow](history seed skipped: {e})[/]")
 
     show_banner()
 
@@ -144,6 +150,13 @@ async def interactive_loop():
 
                 if not user_input:
                     continue
+
+                # Persist into the shared MongoDB history collection so the
+                # web shell, and future terminal sessions on any host, see
+                # this entry. readline already added it to its in-memory
+                # buffer when the user pressed Enter, so cursor-up works
+                # within this session for free.
+                shell_history.append(user_input, source="terminal")
 
                 if user_input.lower() in ['exit', 'quit']:
                     console.print("\n[yellow]👋 Goodbye![/]")
@@ -185,5 +198,5 @@ if __name__ == "__main__":
         asyncio.run(interactive_loop())
     except KeyboardInterrupt:
         console.print("\n[yellow]Session interrupted.[/]")
-    finally:
-        readline.write_history_file(history_file)
+    # Note: history is persisted into MongoDB on every accepted query via
+    # shell_history.append, so no file write is needed at exit.

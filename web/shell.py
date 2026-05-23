@@ -25,6 +25,7 @@ from fastapi.responses import HTMLResponse
 from pymongo import MongoClient
 
 from agents.orchestrator import OrchestratorAgent
+from agents import history as shell_history
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 log = logging.getLogger("shell")
@@ -47,58 +48,9 @@ async def _ws_broadcast(tag: str, msg: str):
         clients.discard(ws)
 
 
-HISTORY_FILE = Path(os.path.expanduser("~/.agentic_demo_history"))
-
-# The terminal shell (main.py) reads/writes this file via Python's readline,
-# which uses the GNU bash V2 history format ('_HiStOrY_V2_' magic header +
-# backslash-escaped meta-characters like \040 for space). Routing the web
-# shell's reads/writes through the same readline module guarantees binary
-# compatibility — including escape decoding, dedup, and the V2 header — so
-# the two UIs stay perfectly in sync.
-import readline as _readline
-
-
-def _read_history(limit: int = 500) -> list[str]:
-    """Read the shared shell history file via readline (handles V2 format).
-    Returns the most-recent `limit` entries, newest first — the order the
-    browser's cursor-up walker wants."""
-    try:
-        _readline.clear_history()
-        _readline.read_history_file(str(HISTORY_FILE))
-    except FileNotFoundError:
-        return []
-    except Exception as e:
-        log.warning(f"history read failed: {e}")
-        return []
-    n = _readline.get_current_history_length()
-    if n == 0:
-        return []
-    start = max(1, n - limit + 1)
-    entries = [_readline.get_history_item(i) for i in range(start, n + 1)]
-    return list(reversed([e for e in entries if e]))
-
-
-def _append_history(text: str):
-    """Append one entry to the shared history file. Skips no-op duplicates
-    of the previous entry (matches readline's default behaviour). Uses
-    readline so the V2 escaping is consistent with main.py."""
-    text = text.strip()
-    if not text:
-        return
-    try:
-        try:
-            _readline.clear_history()
-            _readline.read_history_file(str(HISTORY_FILE))
-        except FileNotFoundError:
-            pass
-        n = _readline.get_current_history_length()
-        last = _readline.get_history_item(n) if n else None
-        if last == text:
-            return
-        _readline.add_history(text)
-        _readline.write_history_file(str(HISTORY_FILE))
-    except Exception as e:
-        log.warning(f"history append failed: {e}")
+# Shell history lives in MongoDB (agent_registry.agent_history). See
+# agents/history.py — both terminal and web shells share the same
+# collection, no file involved.
 
 
 def _mongo_info() -> dict:
@@ -184,16 +136,16 @@ async def ws_endpoint(ws: WebSocket):
     log.info(f"client connected ({len(clients)} total)")
 
     # Send initial info so the browser can render the banner. `history` is
-    # populated from ~/.agentic_demo_history, the same file the terminal
-    # shell (main.py) reads/writes via readline — so cursor-up in the
-    # browser walks back through queries typed in either UI.
+    # pulled from the agent_history MongoDB collection — the same store
+    # the terminal shell (main.py) reads/writes — so cursor-up in the
+    # browser walks back through queries typed in either UI on any host.
     info = app.state.mongo_info
     await ws.send_text(json.dumps({
         "type":    "hello",
         "host":    info["host"],
         "indexes": info["indexes"],
         "servers": list(_agent.sessions.keys()) if _agent else [],
-        "history": _read_history(),
+        "history": shell_history.read_recent(),
     }))
 
     try:
@@ -206,9 +158,10 @@ async def ws_endpoint(ws: WebSocket):
                 if not text:
                     continue
 
-                # Persist to the shared history file so cursor-up works
-                # across web + terminal sessions and survives restarts.
-                _append_history(text)
+                # Persist to the shared MongoDB history collection so
+                # cursor-up works across web + terminal sessions on any
+                # host and survives restarts.
+                shell_history.append(text, source="web")
 
                 async with _query_lock:
                     t0 = time.monotonic()
