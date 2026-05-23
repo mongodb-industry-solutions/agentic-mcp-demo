@@ -2991,10 +2991,24 @@ class OrchestratorAgent:
         # agent's tool decisions reflect lessons from prior workstreams.
         memory_block = ""
         preferences_block = ""
+        workstream_block = ""
         try:
             ws_doc = await self.workstreams.find_one(
                 {"_id": self.current_workstream_id},
-                {"domain": 1, "entities": 1}) if self.current_workstream_id else None
+                {"domain": 1, "entities": 1, "title": 1, "summary": 1,
+                 "state": 1}) if self.current_workstream_id else None
+            if ws_doc:
+                ents = ws_doc.get("entities") or []
+                summ = (ws_doc.get("summary") or "").strip()
+                workstream_block = (
+                    f"\n\n🗂 ACTIVE WORKSTREAM: {self.current_workstream_id}"
+                    f" — {ws_doc.get('title', '(untitled)')}"
+                    f" [{ws_doc.get('domain', '?')}]\n"
+                    + (f"Entities: {', '.join(ents)}\n" if ents else "")
+                    + (f"Summary: {summ}\n" if summ else "")
+                    + "Use the entities above (IDs, names) directly as tool "
+                    "arguments — do not invent or guess IDs."
+                )
             # Both planes recalled in parallel — different collections,
             # different shapes, independent failure modes.
             recalled, prefs_recalled = await asyncio.gather(
@@ -3077,6 +3091,7 @@ class OrchestratorAgent:
         #                          asked to repeat
         messages = [{"role": "system",
                      "content": _SYSTEM_PROMPT
+                                + workstream_block
                                 + memory_block
                                 + preferences_block
                                 + replay_recipe}]
