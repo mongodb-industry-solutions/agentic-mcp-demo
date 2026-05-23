@@ -18,6 +18,10 @@ Use this service when users say:
              "current metrics at <site>", "what are the metrics",
              "check status at <site>", "how is <site> performing",
              "live status", "site performance", "current telemetry"
+- Ranking:   "which store has the lowest latency", "best performing store",
+             "worst performing store", "highest POS latency", "lowest latency",
+             "rank stores by latency", "compare latency across stores",
+             "which site is fastest", "which site is slowest"
 - Diagnose:  "what happened", "diagnose", "diagnose <intent>",
              "why is it red", "explain the violation", "find similar incident"
 - Apply:     "apply the runbook", "apply <runbook_id>", "apply the fix",

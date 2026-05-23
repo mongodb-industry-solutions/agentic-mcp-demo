@@ -2122,7 +2122,9 @@ class OrchestratorAgent:
                    "telemetry injection, scenario injection, morning rush, traffic spike, "
                    "inject event, inject telemetry, simulate violation, "
                    "current metrics, site status, site performance, live telemetry, "
-                   "check status at site, how is site performing",
+                   "check status at site, how is site performing, "
+                   "lowest latency store, highest latency, best performing site, "
+                   "rank stores by latency, compare POS latency across sites",
             "dtw": "Digital Twin (ACME Mobile) — what-if simulations, QoS "
                    "uplift, policy migration, RAN/core topology, traffic load",
             "acc": "MongoDB ACC — sales proof points, one-pagers, PowerPoint export",
