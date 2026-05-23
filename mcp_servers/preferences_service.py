@@ -4,10 +4,7 @@
 #
 
 """
-Preferences Service — User self-disclosure: 'I love X', 'I'm a X',
-'I prefer Y', 'I hate Z', 'remember that I…', 'my favorite is X',
-'I'm allergic to Y'. Stores personal facts, preferences, hobbies,
-restrictions, routines.
+Preferences Service — User self-disclosure: 'I love X', 'I prefer Y', 'remember that I…', 'I'm a X', 'I hate Z'. Stores personal facts, preferences, hobbies, restrictions.
 
 Store, recall, list, and delete user preferences and personal facts
 the user EXPLICITLY shares about themselves. Distinct from the
