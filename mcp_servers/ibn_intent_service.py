@@ -64,7 +64,8 @@ def _resolve_site(site_hint: str) -> dict | None:
     """
     Resolve a site by fragments, tolerating word-order variations.
     'Munich Marienplatz', 'Marienplatz Munich', and 'Marienplatz' all hit
-    the same site.
+    the same site. 'Alpenmarkt Stuttgart' resolves via the 'Stuttgart' token
+    even though 'Alpenmarkt' (the store brand) isn't part of the site name.
     """
     if not site_hint:
         return None
@@ -74,8 +75,13 @@ def _resolve_site(site_hint: str) -> dict | None:
     tokens = [t for t in site_hint.split() if len(t) >= 3]
     if not tokens:
         return None
-    return sites.find_one(
+    result = sites.find_one(
         {"$and": [{"name": {"$regex": t, "$options": "i"}} for t in tokens]}
+    )
+    if result:
+        return result
+    return sites.find_one(
+        {"$or": [{"name": {"$regex": t, "$options": "i"}} for t in tokens]}
     )
 
 

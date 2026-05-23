@@ -53,8 +53,13 @@ def _resolve_site(site_hint: str) -> dict | None:
     tokens = [t for t in site_hint.split() if len(t) >= 3]
     if not tokens:
         return None
-    return sites.find_one(
+    result = sites.find_one(
         {"$and": [{"name": {"$regex": t, "$options": "i"}} for t in tokens]}
+    )
+    if result:
+        return result
+    return sites.find_one(
+        {"$or": [{"name": {"$regex": t, "$options": "i"}} for t in tokens]}
     )
 
 
