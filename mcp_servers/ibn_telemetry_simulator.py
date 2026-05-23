@@ -147,6 +147,67 @@ def inject_event(scenario: str = "morning_rush",
     targets = intent.get("parsed", {}).get("targets", {})
     threshold = targets.get("pos_latency_ms", 40)
 
+    # Check whether a latency-mitigation runbook has been applied to this
+    # intent.  If so the queue / PIR uplift configuration is in effect and
+    # the scenario will produce elevated but in-SLA traffic instead of a
+    # violation — demonstrating that the fix holds under load.
+    history = intent.get("history") or []
+    applied_runbooks = [
+        h.get("runbook_id") for h in history
+        if h.get("event") == "runbook_applied" and h.get("runbook_id")
+    ]
+    runbook_active = len(applied_runbooks) > 0
+
+    site_doc = sites.find_one({"_id": intent.get("site_id")})
+    site_name = site_doc["name"] if site_doc else "—"
+
+    if runbook_active:
+        # Runbook applied: generate elevated-but-compliant samples.
+        # Traffic pressure still raises latency, but the EF queue + PIR
+        # uplift keeps it inside the SLA window.
+        headroom = threshold * 0.9  # up to 90 % of threshold
+        samples = [
+            random.uniform(threshold * 0.6, headroom) + random.uniform(-1.5, 1.5)
+            for _ in range(8)
+        ]
+        samples = [max(1.0, min(s, threshold - 0.5)) for s in samples]
+        _write_telemetry_burst(intent, spec["metric"], samples)
+        observed_peak = max(samples)
+
+        compliance_events.insert_one({
+            "intent_id":  intent["_id"],
+            "kind":       "recovery",
+            "ts":         datetime.datetime.now(),
+            "metric":     spec["metric"],
+            "observed":   observed_peak,
+            "threshold":  threshold,
+            "scenario":   scenario,
+            "site_name":  site_name,
+            "justification": (
+                f"{spec['description']}. Peak {observed_peak:.1f}ms — within SLA "
+                f"≤{threshold}ms. Runbook {', '.join(applied_runbooks)} configuration "
+                f"(EF queue + PIR uplift) absorbed the load spike."
+            ),
+        })
+
+        intents.update_one(
+            {"_id": intent["_id"]},
+            {"$push": {"history": {
+                "ts":   datetime.datetime.now(),
+                "event": "scenario_injected_compliant",
+                "note":  f"Scenario '{scenario}' under runbook config; peak {observed_peak:.1f}ms.",
+            }}}
+        )
+
+        return (
+            f"✅ Injected scenario **{scenario}** at {site_name} ({intent['_id']}).\n"
+            f"  Peak POS latency: **{observed_peak:.1f}ms** (SLA ≤{threshold}ms) — **within target**\n"
+            f"  Status: 🟢 compliant\n"
+            f"  Runbook {', '.join(applied_runbooks)} configuration held: "
+            f"EF queue prioritisation + PIR uplift absorbed the morning rush load."
+        )
+
+    # No runbook — inject a real violation as before
     lo, hi = spec["above_threshold_by"]
     samples = [
         threshold + random.uniform(lo, hi) + random.uniform(-1.5, 1.5)
@@ -155,8 +216,6 @@ def inject_event(scenario: str = "morning_rush",
     _write_telemetry_burst(intent, spec["metric"], samples)
 
     observed_peak = max(samples)
-    site_doc = sites.find_one({"_id": intent.get("site_id")})
-    site_name = site_doc["name"] if site_doc else "—"
 
     # Violation event for change-stream pickup
     compliance_events.insert_one({
