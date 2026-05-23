@@ -2596,9 +2596,12 @@ class OrchestratorAgent:
 
                 self.sessions[name] = session
                 self.tool_cache.pop(name, None)  # invalidate stale cache on (re)start
+                await self._broadcast("AGENT", f"✓ Activated: {name}")
 
             except Exception as e:
                 print(f"  ❌ {name} failed: {e}")
+                await self._broadcast("ERROR",
+                    f"❌ Failed to activate {name}: {type(e).__name__}: {e}")
 
     async def _needs_context_enrichment(self, current_query: str, last_query: str) -> bool:
         """Use LLM to detect if current query is a follow-up or new topic"""
