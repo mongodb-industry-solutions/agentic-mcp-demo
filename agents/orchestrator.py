@@ -858,24 +858,24 @@ class OrchestratorAgent:
         """
         if not full_docstring or not full_docstring.strip():
             return f"Service: {server_name}"
-        # Drop "Use this service" / "NOT this service" sections deterministically
-        cutoffs = [
-            "\nUse this service when users say",
-            "\nUse this service when",
+        # Drop negative-scope guards only — "This service does NOT / is NOT".
+        # These describe what OTHER services do, which can corrupt the embedding
+        # with vocabulary from sibling services.
+        # Critically, keep the "Use this service when users say:" trigger-phrase
+        # block — those phrases are the sharpest routing signal and are
+        # deliberately distinct per-service (e.g. "apply runbook" only appears
+        # in ibn_assurance_service, "inject telemetry" only in ibn_telemetry).
+        negative_cutoffs = [
             "\n🚫 NOT this service",
             "\nThis service does NOT",
             "\nThis service is NOT",
         ]
         text = full_docstring
-        for marker in cutoffs:
+        for marker in negative_cutoffs:
             idx = text.find(marker)
             if idx > 0:
                 text = text[:idx]
-        # Take title + first body paragraph (paragraphs separated by blank line)
-        paragraphs = [p.strip() for p in text.strip().split("\n\n") if p.strip()]
-        keep = paragraphs[:2] if len(paragraphs) >= 2 else paragraphs[:1]
-        result = "\n\n".join(keep).strip() or full_docstring.strip()
-        return result[:600]
+        return text.strip()[:800]
 
     def _compute_file_hash(self, file_path: Path) -> str:
         """Compute hash of file content to detect changes"""
@@ -970,6 +970,9 @@ class OrchestratorAgent:
             needs_backfill = (
                 not db_doc.get("domain")
                 or not db_doc.get("full_description")
+                # Re-embed when the discriminator logic changed even if the
+                # file itself didn't — description drift without hash drift.
+                or db_doc.get("description") != local_servers[name]["description"]
             )
             if local_hash != db_hash or needs_backfill:
                 changed_servers.add(name)
