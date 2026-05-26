@@ -14,9 +14,13 @@ simulation is performed by the simulation service.
 
 Use this service when users say:
 - Submit:   "what if we raise prepaid M to 20 Mbps in NYC",
-            "simulate raising the cap", "model the effect of …",
+            "raise downlink from 7.2 to 20 Mbps in NYC and LA",
+            "increase QoS from X Mbps to Y Mbps — where do we bottleneck",
+            "raise the cap — what is the impact", "model the effect of …",
             "I want to run a what-if", "new scenario",
-            "what happens if we change APN for plan X"
+            "what happens if we change APN for plan X",
+            "where do we bottleneck if we raise downlink",
+            "what breaks if we increase the QoS profile"
 - Update:  "change the scenario to 50 Mbps", "update the scenario",
            "change the last scenario", "modify scope to NYC only",
            "change downlink target", "adjust the scenario"

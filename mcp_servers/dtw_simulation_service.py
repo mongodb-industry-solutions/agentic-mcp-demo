@@ -30,19 +30,17 @@ Atlas as a single store for both operational graph state and embedded
 semantic memory.
 
 Use this service when users say:
-- Simulate:  "simulate scenario DTW-SCN-003", "run the simulation",
+- Simulate:  "run the simulation", "simulate scenario DTW-SCN-003",
+             "run the simulation for DTW-SCN-001", "go ahead and simulate",
              "what does the simulation say", "project the impact",
-             "simulate QoS change", "simulate the roaming enable"
+             "compute the results", "execute the scenario"
 - Diff:      "diff scenarios A and B", "compare scenario results"
 - Stored:    "show me past results for scenario X"
 
-This service does NOT submit scenarios, look up plans/QoS/traffic models
-directly, or walk the graph standalone — those are the scenario, plan,
-traffic, and topology DTW services respectively.
-
-Both simulation tools accept either a pre-existing `scenario_id` or a
-free-text `text` description — when only text is given, the scenario is
-created inline and the simulation runs immediately in one step.
+This service does NOT submit or define new scenarios. When a user describes
+a new what-if for the first time ("raise X to Y in Z", "what if we change
+plan X", "model the effect of…") use dtw_scenario_service to create and
+verify the scenario first — then come here to run the simulation.
 """
 
 import datetime
