@@ -371,11 +371,15 @@ def update_scenario(modification: str, scenario_id: str = None) -> str:
 @mcp.tool()
 def list_scenarios(status_filter: str = None) -> str:
     """
-    List scenarios, optionally filtered by status.
+    List scenarios, optionally filtered by status. Call with NO arguments
+    to see all scenarios ("what scenarios exist", "what's in the queue",
+    "show all what-ifs", "current scenarios"). Only pass a status_filter
+    when the user explicitly asks for a specific status (e.g. "show only
+    submitted scenarios", "list completed ones").
 
     Args:
-        status_filter: Optional. Common values: 'submitted', 'simulated',
-                       'completed', 'cancelled'.
+        status_filter: Optional. 'submitted' (awaiting simulation),
+                       'completed', 'cancelled'. Omit for all scenarios.
     """
     q = {"status": status_filter} if status_filter else {}
     docs = list(scenarios.find(q).sort("submitted_at", DESCENDING))

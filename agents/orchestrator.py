@@ -3042,7 +3042,17 @@ class OrchestratorAgent:
                     "When the query says 'all', 'every', 'fleet', or 'across "
                     "all stores/sites', call the tool with NO scope arguments "
                     "to get the full result set — do not narrow to workstream "
-                    "entities."
+                    "entities.\n"
+                    "CRITICAL: The workstream summary describes PAST actions "
+                    "and results — it is history, not live data. Never answer "
+                    "a user query from the summary alone. Always call the "
+                    "appropriate tool to get current results, even if the "
+                    "summary appears to contain the answer.\n"
+                    "CRITICAL: When the user describes a new what-if scenario "
+                    "('raise X to Y in Z', 'what if we change plan X'), always "
+                    "call create_scenario to parse and record it as a new "
+                    "scenario — do not reuse a scenario ID from the workstream "
+                    "context for a new simulation request."
                 )
                 bcast_parts = [ws_doc.get("title", "(untitled)")]
                 if ents:
