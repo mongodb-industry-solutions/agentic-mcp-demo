@@ -471,6 +471,33 @@ def build_plan_qos_edges() -> list:
     return out
 
 
+def build_qos_to_cell_edges(network_elements: list) -> list:
+    """Edges from each QoS profile to every cell it can apply to.
+
+    Without these edges, $graphLookup starting at a plan dead-ends at the
+    QoS profile — the WOW graph walk (plan → qos → cells → eNBs → SGW →
+    PGW) needs this 'applies_to' link to descend into the RAN. We connect
+    every QoS profile to every Cell because QoS is configured at the
+    bearer level and is not market-scoped; the simulation narrows by
+    scope at query time.
+    """
+    cells = [e for e in network_elements if e.get("type") == "Cell"]
+    out = []
+    for qos in QOS_PROFILES:
+        for cell in cells:
+            cid = cell["_id"]
+            out.append({
+                "_id":       f"edge_{qos['_id']}_to_{cid}",
+                "from_id":   qos["_id"],
+                "to_id":     cid,
+                "from_type": "qos_profile",
+                "to_type":   "Cell",
+                "relation":  "applies_to",
+                "market":    cell.get("market"),
+            })
+    return out
+
+
 # ─── Subscribers (~1000) ──────────────────────────────────────────────────
 #
 # Procedurally generated. Distribution roughly mirrors plan popularity for
@@ -1144,7 +1171,8 @@ def insert_all(db):
     print("📥 Inserting fixtures...")
     elements, ne_edges = build_all_network_elements()
     plan_edges = build_plan_qos_edges()
-    edges = ne_edges + plan_edges
+    qos_cell_edges = build_qos_to_cell_edges(elements)
+    edges = ne_edges + plan_edges + qos_cell_edges
     subscribers = build_subscribers(elements, count=1000)
     traffic_models = build_traffic_models(elements)
 

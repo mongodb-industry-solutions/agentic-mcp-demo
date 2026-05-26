@@ -177,9 +177,16 @@ def _affected_cells(plan_id: str, markets: list[str]) -> list[dict]:
     return list(elements.find({"_id": {"$in": list(cell_ids)}, "type": "Cell"}))
 
 
-def _graph_dependency_walk(start_id: str, max_depth: int = 4) -> list[dict]:
-    """Run $graphLookup downstream from a node, return the discovered edges
-    plus their depth. Used to enumerate the dependency tree for the scenario."""
+def _graph_dependency_walk(start_id: str, max_depth: int = 6) -> list[dict]:
+    """Run $graphLookup DOWNSTREAM from a node, return the discovered edges
+    plus their depth. Used to enumerate the dependency tree for the scenario.
+
+    $graphLookup semantics: connectToField is matched against the current
+    seed; connectFromField is the field whose value becomes the next seed.
+    For a forward (downstream) walk on edges of shape {from_id, to_id}, we
+    match the next edge by from_id == current_seed and follow to_id as the
+    next seed. (Reversing these two field names would do an upstream walk.)
+    """
     pipeline = [
         {"$match": {"from_id": start_id}},
         {"$limit": 1},
@@ -187,8 +194,8 @@ def _graph_dependency_walk(start_id: str, max_depth: int = 4) -> list[dict]:
             "$graphLookup": {
                 "from":             "dtw_topology_edges",
                 "startWith":        "$to_id",
-                "connectFromField": "from_id",
-                "connectToField":   "to_id",
+                "connectFromField": "to_id",      # next seed = current edge's to_id
+                "connectToField":   "from_id",    # match next edge where from_id = seed
                 "as":               "walk",
                 "maxDepth":         max_depth - 1,
                 "depthField":       "depth",
@@ -225,25 +232,35 @@ def _project_cell_load(cell: dict, old_qos: dict, new_qos: dict,
         projected_mbps += subs * new_user_mbps
         contributing_subs += subs
 
-    original_util  = (original_mbps / cap_dl) if cap_dl else 0
+    original_util_raw  = (original_mbps / cap_dl) if cap_dl else 0
     # Combine with the cell's existing background utilization (other plans
     # not in scope keep loading the cell at their current level).
     background_util = (cell.get("capacity") or {}).get("current_utilization", 0.0)
     # Subtract the scope's *original* contribution (which is part of the
     # observed background) before re-adding the projected.
-    isolated_bg = max(0.0, background_util - original_util)
-    projected_util = isolated_bg + (projected_mbps / cap_dl if cap_dl else 0)
+    isolated_bg = max(0.0, background_util - original_util_raw)
+    projected_util_raw = isolated_bg + (projected_mbps / cap_dl if cap_dl else 0)
+
+    # Display utilisation is always clamped to [0, 1] — a cell can't physically
+    # be more than 100% utilised. Surface the overshoot as a separate
+    # demand_factor so users see WHY a cell is BLOCK without seeing impossible
+    # deltas like +418pp.
+    original_clamped  = max(0.0, min(1.0, original_util_raw + isolated_bg))
+    projected_clamped = max(0.0, min(1.0, projected_util_raw))
+    delta_pp          = round(100.0 * (projected_clamped - original_clamped), 1)
+    demand_factor     = round(projected_util_raw, 2)  # 1.0 = exactly at cap
 
     return {
         "cell_id":              cell["_id"],
         "market":               cell.get("market"),
         "tech":                 cell.get("tech"),
         "capacity_dl_mbps":     cap_dl,
-        "original_utilization": round(min(0.99, max(0.0, original_util + isolated_bg)), 3),
-        "projected_utilization": round(min(1.0, max(0.0, projected_util)), 3),
+        "original_utilization":  round(original_clamped, 3),
+        "projected_utilization": round(projected_clamped, 3),
         "contributing_subs":    contributing_subs,
-        "risk":                 _classify(projected_util),
-        "delta_pct":            round(100.0 * (projected_util - (original_util + isolated_bg)), 1),
+        "risk":                 _classify(projected_util_raw),
+        "delta_pct":            delta_pp,
+        "demand_factor":        demand_factor,
     }
 
 
@@ -590,12 +607,16 @@ def simulate_qos_change(scenario_id: str = None, text: str = None) -> str:
     if cells_over_capacity:
         lines.append("### 🔴 Cells over capacity threshold")
         for c in cells_over_capacity[:10]:
+            df = c.get("demand_factor", c["projected_utilization"])
+            demand_str = (f" · demand **{df:.1f}× cap**"
+                          if df > 1.05 else "")
             lines.append(
                 f"- `{c['cell_id']}` · {c.get('market')} · "
                 f"{int(100*c['original_utilization'])}% → "
                 f"{int(100*c['projected_utilization'])}% "
-                f"({'+' if c['delta_pct'] >= 0 else ''}{c['delta_pct']:.1f}pp) "
-                f"· {c['contributing_subs']} subs · **{c['risk']}**"
+                f"({'+' if c['delta_pct'] >= 0 else ''}{c['delta_pct']:.1f}pp)"
+                f"{demand_str} · {c['contributing_subs']} subs · "
+                f"**{c['risk']}**"
             )
         if len(cells_over_capacity) > 10:
             lines.append(f"  … and {len(cells_over_capacity) - 10} more.")
