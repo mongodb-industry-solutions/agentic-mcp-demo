@@ -17,6 +17,9 @@ Use this service when users say:
             "simulate raising the cap", "model the effect of …",
             "I want to run a what-if", "new scenario",
             "what happens if we change APN for plan X"
+- Update:  "change the scenario to 50 Mbps", "update the scenario",
+           "change the last scenario", "modify scope to NYC only",
+           "change downlink target", "adjust the scenario"
 - List:    "list scenarios", "show all what-ifs",
            "show submitted scenarios", "completed scenarios"
 - Detail: "get scenario DTW-SCN-001", "show me the scenario",
@@ -241,25 +244,123 @@ def create_scenario(text: str) -> str:
     logger.info(f"Created scenario {sid}")
 
     lines = [
-        f"📝 Scenario **{sid}** submitted.",
-        f"  Type: {doc['scenario_type']}",
-        f"  {doc['description']}",
+        f"## 📝 Scenario {sid} — awaiting confirmation",
+        f"",
+        f"**Type:** {doc['scenario_type']}",
+        f"**Description:** {doc['description']}",
+        f"",
+        f"**Parsed parameters — please verify:**",
     ]
     if cs.get("plan_id"):
-        lines.append(f"  Plan: {cs['plan_id']}")
+        lines.append(f"- Plan: `{cs['plan_id']}`")
     if cs.get("old_qos_profile_id") and cs.get("new_qos_profile_id"):
-        lines.append(f"  QoS: {cs['old_qos_profile_id']} → {cs['new_qos_profile_id']}")
+        lines.append(f"- QoS profile: `{cs['old_qos_profile_id']}` → `{cs['new_qos_profile_id']}`")
+    elif cs.get("new_qos_profile_id"):
+        lines.append(f"- New QoS profile: `{cs['new_qos_profile_id']}`")
     if cs.get("apn_change"):
-        lines.append(f"  APN: {cs['apn_change'].get('from')} → {cs['apn_change'].get('to')}")
+        lines.append(f"- APN: `{cs['apn_change'].get('from')}` → `{cs['apn_change'].get('to')}`")
+    if cs.get("pcrf_template_change"):
+        lines.append(f"- PCRF template: `{cs['pcrf_template_change'].get('from')}` → `{cs['pcrf_template_change'].get('to')}`")
     if cs.get("roaming_enable"):
-        lines.append(f"  Roaming enable: {', '.join(cs['roaming_enable'])}")
+        lines.append(f"- Roaming enable: {', '.join(cs['roaming_enable'])}")
     if sc.get("markets"):
-        lines.append(f"  Markets: {', '.join(sc['markets'])}")
+        lines.append(f"- Markets: {', '.join(sc['markets'])}")
     if sc.get("time_windows"):
-        lines.append(f"  Time windows: {', '.join(sc['time_windows'])}")
-    lines.append("")
-    lines.append(f"  Next: call simulate_qos_change('{sid}') "
-                 "(or simulate_roaming_change for policy-only scenarios).")
+        lines.append(f"- Time windows: {', '.join(sc['time_windows'])}")
+    lines += [
+        f"",
+        f"If the parameters look correct, say **'run the simulation'**.",
+        f"To adjust, say e.g. **'change {sid} to 50 Mbps'** or "
+        f"**'add LA to the scope'** — then simulate.",
+    ]
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def update_scenario(modification: str, scenario_id: str = None) -> str:
+    """
+    Apply a natural-language modification to an existing submitted scenario
+    before running the simulation. Re-parses the original request with the
+    change applied and updates change_set + scope in place.
+
+    If scenario_id is omitted, targets the most-recently submitted scenario
+    (i.e. 'the last one', 'the current scenario').
+
+    Args:
+        modification: What to change, in plain language — e.g.
+                      "raise downlink to 50 Mbps", "NYC only",
+                      "change time window to Sunday morning",
+                      "add LA to the scope".
+        scenario_id:  Scenario to update. Defaults to the most recent
+                      submitted (not yet simulated) scenario.
+    """
+    if scenario_id:
+        s = scenarios.find_one({"_id": scenario_id})
+    else:
+        s = scenarios.find_one(
+            {"status": "submitted"},
+            sort=[("submitted_at", DESCENDING)],
+        )
+    if not s:
+        return ("❌ No submitted scenario found. "
+                "Create one first with a what-if request.")
+    if s.get("status") not in ("submitted",):
+        return (f"❌ Scenario {s['_id']} is already '{s.get('status')}' "
+                f"and cannot be modified. Submit a new scenario instead.")
+
+    # Re-parse with original text + modification so the LLM sees full context.
+    combined = f"{s['raw_text']}. Amendment: {modification}"
+    parsed = _parse_natural_language(combined)
+
+    cs = parsed.get("change_set") or {}
+    cs["plan_id"]            = _resolve_plan_id(cs.get("plan_id") or "") or cs.get("plan_id")
+    cs["old_qos_profile_id"] = _resolve_qos_id(cs.get("old_qos_profile_id") or "") or cs.get("old_qos_profile_id")
+    cs["new_qos_profile_id"] = _resolve_qos_id(cs.get("new_qos_profile_id") or "") or cs.get("new_qos_profile_id")
+    sc = parsed.get("scope") or {}
+    sc["markets"] = ([m for m in sc.get("markets", []) if _resolve_market_id(m)]
+                     or sc.get("markets") or [])
+
+    scenarios.update_one(
+        {"_id": s["_id"]},
+        {
+            "$set": {
+                "change_set":  cs,
+                "scope":       sc,
+                "description": parsed.get("summary") or s["description"],
+            },
+            "$push": {"history": {
+                "ts":    datetime.datetime.now(),
+                "event": "updated",
+                "note":  modification,
+            }},
+        },
+    )
+
+    lines = [
+        f"## ✏️ Scenario {s['_id']} updated",
+        f"",
+        f"**Modification applied:** {modification}",
+        f"",
+        f"**Updated parameters — please verify:**",
+    ]
+    if cs.get("plan_id"):
+        lines.append(f"- Plan: `{cs['plan_id']}`")
+    if cs.get("old_qos_profile_id") and cs.get("new_qos_profile_id"):
+        lines.append(f"- QoS profile: `{cs['old_qos_profile_id']}` → `{cs['new_qos_profile_id']}`")
+    elif cs.get("new_qos_profile_id"):
+        lines.append(f"- New QoS profile: `{cs['new_qos_profile_id']}`")
+    if cs.get("apn_change"):
+        lines.append(f"- APN: `{cs['apn_change'].get('from')}` → `{cs['apn_change'].get('to')}`")
+    if cs.get("roaming_enable"):
+        lines.append(f"- Roaming enable: {', '.join(cs['roaming_enable'])}")
+    if sc.get("markets"):
+        lines.append(f"- Markets: {', '.join(sc['markets'])}")
+    if sc.get("time_windows"):
+        lines.append(f"- Time windows: {', '.join(sc['time_windows'])}")
+    lines += [
+        f"",
+        f"Say **'run the simulation'** when ready, or describe another change.",
+    ]
     return "\n".join(lines)
 
 
