@@ -838,44 +838,103 @@ class OrchestratorAgent:
 
     def _extract_discriminator(self, full_docstring: str, server_name: str) -> str:
         """
-        Pull the unique semantic content out of a docstring for the embedded
-        `description` field. The goal is to make the vector representation
-        reflect what makes this service *different* from its siblings, not
-        the shared scaffolding that all our services repeat.
+        Build the text that gets EMBEDDED for Stage 2 vector routing.
 
-        Convention used by our docstrings:
-          Line 1:  "Service Title — short tagline"      ← unique
-          Blank line
-          Paragraph: focused purpose statement          ← unique
-          Blank line
-          "Use this service when users say:" block      ← noise (overlaps siblings)
-          "This service does NOT …" guard              ← noise (overlaps siblings)
+        Architectural beat: voyage-4 (and any bi-encoder) collapses sibling
+        services to within 0.001-0.005 of each other when the embedded text
+        is dominated by shared exposition — "ACME", "QoS", "plan", "scenario",
+        "downlink" all appear in every DTW service description. The tie-break
+        LLM then has to disambiguate on every query, which is slow and
+        stochastic.
 
-        We take title + first body paragraph. If the docstring is short or
-        unstructured, fall back to the whole thing. Capped to keep the
-        embedder focused — voyage-4 produces tighter clusters when fed long
-        boilerplate-heavy text.
+        The fix: stop embedding the exposition. Embed only:
+          1. The one-line service tagline (what it IS)
+          2. The verbatim trigger phrases from the "Use this service when"
+             section (what users SAY)
+
+        This makes each service's embedding a centroid of expected user
+        queries. Cosine similarity becomes sharply discriminative: scenario
+        descriptions land closer to scenario-service triggers than to
+        simulation-service triggers, and the score gap widens enough to skip
+        the tie-break entirely.
+
+        Negative-scope guards ("This service does NOT…", "🚫 NOT this
+        service") are stripped — they describe sibling services and pollute
+        the embedding with the wrong vocabulary.
+
+        Returns a string formatted as:
+            <tagline>
+            Users invoke this with queries like:
+            <quoted trigger phrases, one per line>
         """
+        import re
+
         if not full_docstring or not full_docstring.strip():
             return f"Service: {server_name}"
-        # Drop negative-scope guards only — "This service does NOT / is NOT".
-        # These describe what OTHER services do, which can corrupt the embedding
-        # with vocabulary from sibling services.
-        # Critically, keep the "Use this service when users say:" trigger-phrase
-        # block — those phrases are the sharpest routing signal and are
-        # deliberately distinct per-service (e.g. "apply runbook" only appears
-        # in ibn_assurance_service, "inject telemetry" only in ibn_telemetry).
-        negative_cutoffs = [
-            "\n🚫 NOT this service",
-            "\nThis service does NOT",
-            "\nThis service is NOT",
-        ]
-        text = full_docstring
-        for marker in negative_cutoffs:
-            idx = text.find(marker)
-            if idx > 0:
-                text = text[:idx]
-        return text.strip()[:800]
+
+        lines = full_docstring.splitlines()
+
+        # 1. Tagline — first non-empty line, drop "Title — " prefix if any.
+        tagline = ""
+        for ln in lines:
+            s = ln.strip()
+            if s:
+                tagline = s
+                break
+        if " — " in tagline:
+            tagline = tagline.split(" — ", 1)[1].strip()
+        elif tagline.startswith("SERVER:"):
+            tagline = tagline[len("SERVER:"):].strip()
+
+        # 2. Trigger phrases — content of the "Use this service when" section,
+        # stopping at the first paragraph break (blank line) or negative guard.
+        # The trigger section is a bulleted list; trailing prose after it must
+        # be excluded or it pollutes the embedding with shared vocabulary.
+        trigger_lines: list[str] = []
+        in_section = False
+        for ln in lines:
+            s = ln.strip()
+            if re.search(r"use this service when", s, re.I):
+                in_section = True
+                continue
+            if not in_section:
+                continue
+            # Negative guards / cross-service notes — hard stop.
+            if (s.startswith("🚫")
+                or re.match(r"this service (does not|is not|operates|only)", s, re.I)
+                or re.match(r"both .* tools accept", s, re.I)):
+                break
+            # Blank line after content → end of bullet block, prose follows.
+            if not s and trigger_lines:
+                break
+            # Skip leading blanks before the first bullet.
+            if not s:
+                continue
+            # Prose break: line is not a bullet and not a quoted continuation.
+            if trigger_lines and not (s.startswith("-") or s.startswith('"')):
+                break
+            trigger_lines.append(s)
+
+        if not trigger_lines:
+            # No "Use this service when" section — fall back to the previous
+            # behaviour: full text up to the negative guards, capped at 800.
+            text = full_docstring
+            for marker in ("\n🚫 NOT this service",
+                           "\nThis service does NOT",
+                           "\nThis service is NOT"):
+                idx = text.find(marker)
+                if idx > 0:
+                    text = text[:idx]
+            return text.strip()[:800]
+
+        triggers = "\n".join(trigger_lines)
+        result = (
+            f"{tagline}\n\n"
+            f"Users invoke this with queries like:\n{triggers}"
+        )
+        # 1500-char cap — trigger sections are typically 400-1000 chars; this
+        # leaves headroom while still keeping the embedding focused.
+        return result[:1500]
 
     def _compute_file_hash(self, file_path: Path) -> str:
         """Compute hash of file content to detect changes"""
