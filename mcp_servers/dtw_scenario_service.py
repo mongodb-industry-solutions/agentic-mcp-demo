@@ -230,6 +230,27 @@ def create_scenario(text: str) -> str:
     sc["markets"] = [m for m in (sc.get("markets") or []) if _resolve_market_id(m)] \
                     or (sc.get("markets") or [])
 
+    # Reject inputs that don't actually describe a what-if change.
+    # Without this guard, imperative commands ("run simulation", "show me
+    # results") get parsed into empty scenarios with scenario_type='other'
+    # and pollute dtw_scenarios.
+    has_change = bool(
+        cs.get("plan_id") or cs.get("new_qos_profile_id")
+        or cs.get("apn_change") or cs.get("pcrf_template_change")
+        or cs.get("roaming_enable")
+    )
+    if not has_change:
+        return (
+            "❌ This doesn't look like a what-if scenario description.\n\n"
+            "A scenario must name a plan/QoS/APN/PCRF/roaming change, e.g.\n"
+            "  • 'raise prepaid ACME M downlink to 20 Mbps in NYC'\n"
+            "  • 'enable roaming for plan_ACME_Premium in Canada'\n\n"
+            "If you intended to RUN a simulation on an existing scenario, "
+            "use dtw_simulation_service.simulate_qos_change(scenario_id) "
+            "instead. If you want to see the latest scenarios, call "
+            "list_scenarios()."
+        )
+
     sid = _next_scenario_id()
     doc = {
         "_id":            sid,

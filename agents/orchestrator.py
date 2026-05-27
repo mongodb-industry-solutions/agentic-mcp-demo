@@ -2686,6 +2686,27 @@ class OrchestratorAgent:
         if not last_query:
             return False
 
+        # Skip for self-contained imperative commands. "run simulation",
+        # "execute scenario", "show fleet status" are complete commands and
+        # carry their own routing signal — enriching them with the previous
+        # query DILUTES that signal (e.g. "run simulation" appended to a
+        # scenario description routes to scenario_service, not
+        # simulation_service, because the description vocab dominates).
+        # Pattern: starts with an imperative verb AND has at least one more
+        # token. Single-word inputs ("yes", "now") still go through LLM.
+        words = current_query.strip().split()
+        if len(words) >= 2:
+            import re
+            imperative_verbs = re.compile(
+                r"^(run|execute|simulate|launch|start|begin|trigger|fire|"
+                r"stop|abort|cancel|reset|clear|delete|wipe|"
+                r"show|list|describe|display|find|fetch|get|"
+                r"add|remove|update|modify|change|set|"
+                r"confirm|approve|proceed|retry|restart|"
+                r"inject|apply|diagnose|compare|diff)$", re.I)
+            if imperative_verbs.match(words[0]):
+                return False
+
         # Ask LLM: Is this a follow-up?
         resp = await self.openai.chat.completions.create(
             model="gpt-4o-mini",
