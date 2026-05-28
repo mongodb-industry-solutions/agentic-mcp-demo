@@ -13,15 +13,15 @@ products (ACME M, Premium, Plus5G, Connect, …), their bound QoS profiles
 to sample subscribers for a given plan.
 
 Use this service when users say:
-- Describe:  "describe plan ACME M", "show plan ACME-M", "what is in plan X"
-- QoS:       "show QoS profile qos_prepaid_7_2", "details on the prepaid QoS",
-             "what does qos_prepaid_20 look like", "QoS profile params"
+- Describe:  "describe plan <id>", "show plan <id>", "what is in plan <id>"
+- QoS:       "show QoS profile <id>", "details on a QoS profile",
+             "what does this QoS profile look like", "QoS profile params"
 - List:      "list plans", "show all plans", "what plans do we have",
              "list prepaid plans", "postpaid plans"
-- Compare:   "compare qos_prepaid_7_2 to qos_prepaid_20",
-             "diff QoS profiles", "what changes from 7.2 to 20 Mbps"
-- Sample:    "show some subscribers on plan ACME M",
-             "subscriber sample", "who is on plan X"
+- Compare:   "compare two QoS profiles", "diff QoS profiles",
+             "field-by-field QoS comparison"
+- Sample:    "show some subscribers on plan <id>",
+             "subscriber sample", "who is on plan <id>"
 
 This service does NOT traverse the topology graph, model traffic, run
 simulations, or own scenarios — those belong to the topology, traffic,

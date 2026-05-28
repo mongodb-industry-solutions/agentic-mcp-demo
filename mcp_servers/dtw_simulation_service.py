@@ -208,6 +208,18 @@ def _graph_dependency_walk(start_id: str, max_depth: int = 6) -> list[dict]:
 
 # ─── Per-cell load projection ──────────────────────────────────────────────
 
+# Concurrency factor: fraction of subscribers actively transmitting in the DL
+# direction at any instant during a peak window. In real mobile networks this
+# is ~5-10% — subscribers attach to the cell continuously but only a small
+# fraction generate active downlink traffic concurrently (page views, video
+# starts, etc. are bursty). The traffic-model fixtures count nominal
+# subscriber populations; we apply this factor to convert nominal → active.
+# Without it, a single plan's nominal subs × avg-Mbps frequently exceeds the
+# cell's capacity, saturating original_utilization at 100% before the
+# scenario even runs.
+CONCURRENCY_FACTOR = 0.08
+
+
 def _project_cell_load(cell: dict, old_qos: dict, new_qos: dict,
                        tm_entries: list[dict]) -> dict:
     """Project the projected vs original DL utilization on one cell, given
@@ -224,12 +236,13 @@ def _project_cell_load(cell: dict, old_qos: dict, new_qos: dict,
         subs   = entry.get("active_subscribers_estimate", 0)
         avg    = entry.get("avg_per_user_mbps", 0.0)
         corr   = entry.get("correlation_to_qos", 0.5)
+        active_subs = subs * CONCURRENCY_FACTOR
         # Old aggregate Mbps on this cell from this plan's contribution
-        original_mbps += subs * avg
+        original_mbps += active_subs * avg
         # New per-user Mbps: subs that were QoS-throttled get a bump up to the
         # new cap; uncorrelated subs see less effect.
         new_user_mbps = min(new_max, avg * (1.0 + corr * (ratio - 1.0)))
-        projected_mbps += subs * new_user_mbps
+        projected_mbps += active_subs * new_user_mbps
         contributing_subs += subs
 
     original_util_raw  = (original_mbps / cap_dl) if cap_dl else 0
@@ -461,9 +474,7 @@ def _hybrid_knowledge_search(fingerprint: str, scenario: dict) -> tuple[list, li
 @mcp.tool()
 def simulate_qos_change(scenario_id: str = None, text: str = None) -> str:
     """
-    Run a QoS-uplift simulation (Flow A). Accepts either a pre-created
-    scenario id OR a natural-language description — when text is given,
-    the scenario is created inline before the simulation runs.
+    Run a QoS-uplift simulation (Flow A) on an EXISTING submitted scenario.
 
     Performs four steps in one tool call:
       1) Resolve plan + old/new QoS profiles from the scenario change_set.
@@ -472,15 +483,42 @@ def simulate_qos_change(scenario_id: str = None, text: str = None) -> str:
       4) Hybrid $vectorSearch + structured filter on dtw_knowledge_chunks for
          analogous past scenarios and their mitigation playbooks.
 
+    Resolution order:
+      • If scenario_id is given, use it.
+      • Otherwise, use the MOST-RECENTLY SUBMITTED scenario (the usual
+        demo flow: create_scenario → optional update_scenario → "run").
+      • Only if NO submitted scenario exists at all do we accept text= as
+        a fallback and create one inline. Do NOT pass text= when an
+        existing scenario was just created by dtw_scenario_service —
+        that would create a duplicate scenario with potentially stale
+        parameters (e.g. ignoring the user's most recent amendment).
+
     Args:
-        scenario_id: Existing scenario id, e.g. 'DTW-SCN-003'. Optional when text is given.
-        text:        Natural-language what-if request (e.g. 'Raise ACME M downlink to 20 Mbps
-                     in NYC Saturday evening'). Used to create the scenario inline.
+        scenario_id: Existing scenario id, e.g. 'DTW-SCN-003'. Usually
+                     unnecessary — the tool defaults to the most-recent
+                     submitted scenario.
+        text:        ONE-SHOT FALLBACK ONLY. Free-text what-if used to
+                     create a scenario inline when NO submitted scenario
+                     exists. Ignored if any submitted scenario is present.
     """
-    if not scenario_id and text:
-        scenario_id = _create_scenario_inline(text)
     if not scenario_id:
-        return "❌ Provide either scenario_id or text describing the QoS change."
+        # Always prefer an existing submitted scenario. text= is only used
+        # when the collection is empty (true one-shot). This guards against
+        # the agent passing the original query as text when an existing
+        # scenario is already in workstream context — which would create a
+        # duplicate scenario with the original (pre-amendment) parameters.
+        latest = scenarios.find_one(
+            {"status": "submitted"},
+            sort=[("submitted_at", DESCENDING)],
+        )
+        if latest:
+            scenario_id = latest["_id"]
+        elif text:
+            scenario_id = _create_scenario_inline(text)
+        else:
+            return ("❌ No submitted scenario found. Submit a what-if first "
+                    "(e.g. 'Raise ACME M downlink to 20 Mbps in NYC').")
+
     s = scenarios.find_one({"_id": scenario_id})
     if not s:
         return f"❌ Scenario {scenario_id} not found."
@@ -493,9 +531,12 @@ def simulate_qos_change(scenario_id: str = None, text: str = None) -> str:
     old_qos_id = cs.get("old_qos_profile_id")
     new_qos_id = cs.get("new_qos_profile_id")
     if not (plan_id and old_qos_id and new_qos_id):
-        return ("❌ Scenario change_set is missing plan_id / old_qos_profile_id / "
-                "new_qos_profile_id — required for simulate_qos_change. "
-                "Use simulate_roaming_change for policy-only scenarios.")
+        return (f"❌ Scenario {scenario_id} change_set is incomplete "
+                f"(plan_id={plan_id}, old_qos_profile_id={old_qos_id}, "
+                f"new_qos_profile_id={new_qos_id}). Re-create the scenario "
+                f"with a full what-if description or use update_scenario to "
+                f"fill in the missing fields. (For policy-only scenarios, "
+                f"use simulate_roaming_change instead.)")
 
     plan    = plans.find_one({"_id": plan_id})
     old_qos = qos_profiles.find_one({"_id": old_qos_id})
@@ -675,10 +716,20 @@ def simulate_roaming_change(scenario_id: str = None, text: str = None) -> str:
                      template, enable Canada roaming"). Used when no
                      scenario_id is provided.
     """
-    if not scenario_id and text:
-        scenario_id = _create_scenario_inline(text)
+    # Always prefer an existing submitted scenario over creating inline from
+    # text — see simulate_qos_change docstring for the full rationale.
     if not scenario_id:
-        return "❌ Provide either scenario_id or text describing the roaming/policy change."
+        latest = scenarios.find_one(
+            {"status": "submitted"},
+            sort=[("submitted_at", DESCENDING)],
+        )
+        if latest:
+            scenario_id = latest["_id"]
+        elif text:
+            scenario_id = _create_scenario_inline(text)
+        else:
+            return ("❌ No submitted scenario found. Submit one first "
+                    "(e.g. 'Migrate ACME M to new APN, enable Canada roaming').")
 
     s = scenarios.find_one({"_id": scenario_id})
     if not s:

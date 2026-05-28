@@ -25,10 +25,22 @@ from pymongo import AsyncMongoClient, ReturnDocument
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from openai import AsyncOpenAI
+import voyageai
 
 
 BROADCAST_URL         = "https://notify.bjjl.dev/send"
 BROADCAST_RECEIVE_URL = "https://notify.bjjl.dev/receive"
+
+# Pre-compiled in _needs_context_enrichment: queries starting with one of
+# these verbs are treated as self-contained imperatives — no enrichment
+# from the previous turn (which would dilute their routing signal).
+_IMPERATIVE_VERBS = re.compile(
+    r"^(run|execute|simulate|launch|start|begin|trigger|fire|"
+    r"stop|abort|cancel|reset|clear|delete|wipe|"
+    r"show|list|describe|display|find|fetch|get|"
+    r"add|remove|update|modify|change|set|"
+    r"confirm|approve|proceed|retry|restart|"
+    r"inject|apply|diagnose|compare|diff)$", re.I)
 
 # ── Memory promotion / decay knobs ────────────────────────────────────────
 # Memories carry a `tier` field that signals their standing:
@@ -187,6 +199,18 @@ class OrchestratorAgent:
 
         self.openai = AsyncOpenAI()
         self.model = os.environ.get("OPENAI_MODEL", "gpt-4o")
+
+        # Voyage AI client for asymmetric retrieval (input_type='document' at
+        # index time, 'query' at search time). Atlas autoEmbed does NOT set
+        # input_type — which collapses voyage-4 scores into a tight band and
+        # picks wrong winners. We do the embeddings ourselves to get the
+        # asymmetric retrieval voyage-4 was designed for.
+        if not os.environ.get("VOYAGE_API_KEY"):
+            raise ValueError("VOYAGE_API_KEY missing — required for "
+                             "asymmetric voyage-4 retrieval in Stage 2")
+        self.voyage = voyageai.Client(api_key=os.environ["VOYAGE_API_KEY"])
+        self.embed_model = "voyage-4"
+        self.embed_dim   = 1024
         self.http_client = httpx.AsyncClient()
         self.tool_cache: Dict[str, List[Dict]] = {}  # server_name → openai tool dicts
         self.temp_dir = Path(tempfile.mkdtemp(prefix="mcp_cloud_"))
@@ -836,6 +860,61 @@ class OrchestratorAgent:
         except:
             return f"Service: {file_path.stem}"
 
+    # Stopwords for the text-match tiebreaker — content words only.
+    _TM_STOPWORDS = frozenset({
+        "a", "an", "the", "and", "or", "but", "of", "to", "in", "on", "at",
+        "for", "with", "from", "by", "is", "are", "was", "were", "be", "been",
+        "being", "have", "has", "had", "do", "does", "did", "will", "would",
+        "should", "can", "could", "we", "us", "you", "i", "me", "my", "our",
+        "your", "where", "what", "when", "how", "why", "this", "that",
+        "these", "those", "it", "if", "as", "so", "than", "then", "into",
+        "out", "up", "down", "over", "under", "again", "now", "very",
+    })
+
+    def _text_match_score(self, query: str, description: str) -> float:
+        """Score a service by how many distinctive query phrases literally
+        appear in its embedded description (which contains its trigger
+        phrases verbatim). Longer n-gram matches are worth more — a 3-token
+        overlap is a much stronger signal than three isolated tokens.
+
+        Used as a deterministic Stage 2 tiebreaker before the LLM call:
+        when voyage-4 collapses sibling services into a < 0.001 cosine
+        band, literal phrase overlap with the trigger phrases is the
+        objective signal that disambiguates them.
+        """
+        q_lc = query.lower()
+        d_lc = description.lower()
+        q_tokens = re.findall(r"[a-z0-9.]+", q_lc)
+        q_tokens = [t for t in q_tokens
+                    if t not in self._TM_STOPWORDS and len(t) >= 2]
+        if not q_tokens:
+            return 0.0
+        # Build a STOPWORD-STRIPPED form of the description so "run simulation"
+        # in the query matches "run the simulation" in the description — the
+        # article-vs-no-article gap is a common source of false misses.
+        d_tokens = re.findall(r"[a-z0-9.]+", d_lc)
+        d_tokens = [t for t in d_tokens
+                    if t not in self._TM_STOPWORDS and len(t) >= 2]
+        d_stripped = " ".join(d_tokens)
+
+        score = 0.0
+        # 4-, 3-, 2-gram matches (longer wins more). Same n-gram counted once.
+        for n in (4, 3, 2):
+            seen: set = set()
+            for i in range(len(q_tokens) - n + 1):
+                phrase = " ".join(q_tokens[i:i + n])
+                if phrase in seen:
+                    continue
+                if phrase in d_stripped:
+                    seen.add(phrase)
+                    score += n * n  # 16, 9, 4 per match
+        # Plus single-token matches — weakest signal, distinct tokens only.
+        d_token_set = set(d_tokens)
+        for t in set(q_tokens):
+            if t in d_token_set:
+                score += 1
+        return score
+
     def _extract_discriminator(self, full_docstring: str, server_name: str) -> str:
         """
         Build the text that gets EMBEDDED for Stage 2 vector routing.
@@ -867,8 +946,6 @@ class OrchestratorAgent:
             Users invoke this with queries like:
             <quoted trigger phrases, one per line>
         """
-        import re
-
         if not full_docstring or not full_docstring.strip():
             return f"Service: {server_name}"
 
@@ -958,6 +1035,31 @@ class OrchestratorAgent:
         stem = server_name.strip()
         return stem.split("_", 1)[0] if "_" in stem else stem
 
+    def _embed_for_index(self, text: str) -> list:
+        """Compute a voyage-4 embedding with input_type='document'.
+
+        This is the index-time call. voyage-4 is an asymmetric retrieval
+        model: it prepends "Represent the document for retrieval: " to the
+        text before vectorising. Using this with input_type='query' for
+        searches gives ~5-10× larger gap between correct and incorrect
+        matches than the symmetric (input_type=None) form that Atlas
+        autoEmbed uses under the hood.
+        """
+        resp = self.voyage.embed([text], model=self.embed_model,
+                                 input_type="document")
+        return resp.embeddings[0]
+
+    def _embed_for_query(self, text: str) -> list:
+        """Compute a voyage-4 embedding with input_type='query'.
+
+        Used at $vectorSearch time. The asymmetric prompt is what gives
+        voyage-4 its retrieval quality — without it, queries and short
+        documents collapse to nearly the same region of vector space.
+        """
+        resp = self.voyage.embed([text], model=self.embed_model,
+                                 input_type="query")
+        return resp.embeddings[0]
+
     async def _sync_registry(self):
         """Smart sync: Add new, update changed, remove deleted MCP servers"""
         if not self.server_dir.exists():
@@ -1019,8 +1121,10 @@ class OrchestratorAgent:
 
         # Check for actual changes (hash comparison) OR missing-field
         # backfill needed (registry doc predates a schema upgrade — missing
-        # `domain` after the two-stage routing upgrade, or missing
-        # `full_description` after the embedded-discriminator split).
+        # `domain` after the two-stage routing upgrade, missing
+        # `full_description` after the embedded-discriminator split, or
+        # missing `description_embedding` after the asymmetric-retrieval
+        # upgrade that bypasses Atlas autoEmbed).
         changed_servers = set()
         for name in potential_updates:
             local_hash = local_servers[name]["file_hash"]
@@ -1029,12 +1133,37 @@ class OrchestratorAgent:
             needs_backfill = (
                 not db_doc.get("domain")
                 or not db_doc.get("full_description")
+                or not db_doc.get("description_embedding")
                 # Re-embed when the discriminator logic changed even if the
                 # file itself didn't — description drift without hash drift.
                 or db_doc.get("description") != local_servers[name]["description"]
             )
             if local_hash != db_hash or needs_backfill:
                 changed_servers.add(name)
+
+        # Compute voyage-4 document embeddings for every new or changed
+        # service. One blocking API call per service (parallelizable later);
+        # at demo scale this is a handful of services on startup.
+        services_to_embed = list(new_servers | changed_servers)
+        if services_to_embed:
+            await self._broadcast("BOOTSTRAP",
+                f"🧬 Embedding {len(services_to_embed)} service "
+                f"description(s) with voyage-4 (input_type='document')…")
+            for name in services_to_embed:
+                try:
+                    vec = await asyncio.to_thread(
+                        self._embed_for_index,
+                        local_servers[name]["description"])
+                    local_servers[name]["description_embedding"] = vec
+                except Exception as e:
+                    # One bad embedding shouldn't kill the whole sync. Drop
+                    # the service from this round; it'll be retried on the
+                    # next sync (filewatcher hit, restart, etc.).
+                    await self._broadcast("BOOTSTRAP",
+                        f"⚠ Embedding failed for {name}: {e!s} — skipping "
+                        f"this service this round")
+                    new_servers.discard(name)
+                    changed_servers.discard(name)
 
         # Sync operations
         total_changes = len(new_servers) + len(changed_servers) + len(deleted_servers)
@@ -1099,16 +1228,25 @@ class OrchestratorAgent:
     async def _semantic_search(self, query: str, limit: int = 5,
                                domains: List[str] | None = None) -> List[Dict]:
         """Stage 2: vector search, optionally pre-filtered to one or more
-        domains. Falls back to unfiltered search if Atlas rejects the filter
+        domains. Uses ASYMMETRIC voyage-4 retrieval: query is embedded with
+        input_type='query', documents were embedded at index time with
+        input_type='document'. This is voyage-4's design and produces
+        sharply discriminative scores — Atlas autoEmbed does not do this
+        and collapses sibling services into a noise band.
+
+        Falls back to unfiltered search if Atlas rejects the filter
         (index hasn't been re-configured to include `domain` yet) — flips
         a flag so we don't keep trying."""
+        # Embed the query off-thread so the event loop stays responsive.
+        query_vector = await asyncio.to_thread(self._embed_for_query, query)
+
         def _build_pipeline(filter_doc: dict | None):
             vs: dict = {
-                "index": "vector_index",
-                "path":  "description",
-                "query": query,
+                "index":         "vector_index",
+                "path":          "description_embedding",
+                "queryVector":   query_vector,
                 "numCandidates": 50,
-                "limit": limit,
+                "limit":         limit,
             }
             if filter_doc:
                 vs["filter"] = filter_doc
@@ -2181,7 +2319,6 @@ class OrchestratorAgent:
 
         def _extract_triggers(desc: str, max_per_service: int = 6) -> list[str]:
             """Return quoted trigger phrases from 'Use this service when' section."""
-            import re
             in_section = False
             found: list[str] = []
             for line in desc.splitlines():
@@ -2490,6 +2627,35 @@ class OrchestratorAgent:
                 winner_services=[winner])
             return [winner]
 
+        # ── Deterministic text-match tiebreaker ─────────────────────────────
+        # Voyage-4 (and most bi-encoders) compress scores into a tight band
+        # for short focused service descriptions, so the cosine gap is often
+        # < 0.001 even when one service is the obviously-correct match. The
+        # LLM tie-break is slow (1-2s) and stochastic. Before falling through
+        # to it, run a cheap deterministic check: count literal phrase
+        # matches between the query and each candidate's description (which
+        # contains its trigger phrases verbatim). If one candidate clearly
+        # leads on phrase overlap, the LLM is unnecessary.
+        text_scores = [
+            (self._text_match_score(query, c.get("description") or ""), c)
+            for c in candidates[:5]
+        ]
+        text_scores.sort(key=lambda x: x[0], reverse=True)
+        top_t = text_scores[0]
+        second_t = text_scores[1] if len(text_scores) >= 2 else (0, None)
+        # Fire when top has a real match AND a clear lead over runner-up.
+        # "Clear lead" = at least 2× the runner-up score, or runner-up is 0.
+        if top_t[0] >= 3 and (second_t[1] is None
+                              or top_t[0] >= 2 * second_t[0] + 1):
+            winner = top_t[1]["server_name"]
+            await self._broadcast("ROUTING",
+                f"✓ Text-match tiebreaker (phrase overlap "
+                f"{int(top_t[0])} vs {int(second_t[0])}): {winner}")
+            self._decision_under("stage2",
+                method="text_match_tiebreaker",
+                winner_services=[winner])
+            return [winner]
+
         # Stickiness is intentionally NOT applied here — it runs as a last-
         # resort fallback AFTER the LLM tie-break, not as a shortcut around
         # it. The previous behaviour ("if best_score < 0.6 and use_stickiness
@@ -2570,11 +2736,28 @@ class OrchestratorAgent:
                     "content": (
                         f"User query: '{query}'\n\n"
                         f"Top service matches:\n{candidate_list}\n\n"
-                        f"Pick the SINGLE best service for this query.\n"
-                        f"Only return more than one if the query EXPLICITLY asks "
-                        f"for multiple distinct actions (e.g. 'submit and then "
-                        f"check feasibility'). For vague or ambiguous queries, "
-                        f"pick the one most likely meant.\n"
+                        f"Pick the SINGLE service that PERFORMS the user's "
+                        f"action.\n\n"
+                        f"ACTION vs OBJECT — disambiguation rules:\n"
+                        f"  • The verb of the query identifies the ACTION "
+                        f"(run, simulate, create, list, show, get, apply, "
+                        f"inject, diagnose, compare, update, cancel, …).\n"
+                        f"  • Entity IDs / proper nouns (DTW-SCN-003, IBN-005, "
+                        f"plan_ACME_M, runbook DTW-RB-007) are the OBJECT of "
+                        f"the action — they do NOT identify the service.\n"
+                        f"  • Pick the service that owns the ACTION on that "
+                        f"object, not the service that owns the object's "
+                        f"lifecycle. Example: 'run simulation for scenario "
+                        f"DTW-SCN-003' — the verb 'run simulation' identifies "
+                        f"the simulation service; 'scenario DTW-SCN-003' is "
+                        f"just the input. Pick the simulation service.\n"
+                        f"  • Only the scenario service is correct when the "
+                        f"verb itself is 'create/list/show/cancel/update' a "
+                        f"scenario (lifecycle), not when the verb operates "
+                        f"ON a scenario via another tool.\n\n"
+                        f"Only return more than one service if the query "
+                        f"EXPLICITLY asks for multiple distinct actions "
+                        f"(e.g. 'submit and then check feasibility').\n"
                         f"Reply with service name(s) only, comma-separated.\n"
                         f"If truly none apply, reply 'NONE'."
                     )
@@ -2696,15 +2879,7 @@ class OrchestratorAgent:
         # token. Single-word inputs ("yes", "now") still go through LLM.
         words = current_query.strip().split()
         if len(words) >= 2:
-            import re
-            imperative_verbs = re.compile(
-                r"^(run|execute|simulate|launch|start|begin|trigger|fire|"
-                r"stop|abort|cancel|reset|clear|delete|wipe|"
-                r"show|list|describe|display|find|fetch|get|"
-                r"add|remove|update|modify|change|set|"
-                r"confirm|approve|proceed|retry|restart|"
-                r"inject|apply|diagnose|compare|diff)$", re.I)
-            if imperative_verbs.match(words[0]):
+            if _IMPERATIVE_VERBS.match(words[0]):
                 return False
 
         # Ask LLM: Is this a follow-up?

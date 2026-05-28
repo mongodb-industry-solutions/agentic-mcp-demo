@@ -13,14 +13,13 @@ service to inspect network elements, find what cells exist in a market, and
 walk the dependency graph from any starting node via $graphLookup.
 
 Use this service when users say:
-- Element:   "show eNB ne_eNB_NYC_Metro_01", "describe PGW NYC", "get HSS",
-             "look up network element X"
-- Cells:     "list cells in NYC Metro", "show LA cells",
-             "what cells does eNB X host"
-- Traverse:  "what depends on PGW NYC", "find all elements connected to plan ACME M",
-             "show the dependency graph from cell X",
-             "trace impact from plan ACME M downstream",
-             "graph walk from <id>"
+- Element:   "show network element <id>", "describe <network-element-id>",
+             "look up <ne_*>", "get the HSS / SGW / PGW record"
+- Cells:     "list cells in <market>", "show cells in a market",
+             "what cells does an eNB host"
+- Traverse:  "what depends on a network element", "trace dependencies",
+             "show the dependency graph from <id>",
+             "graph walk from <id>", "topology traversal"
 - Markets:   "list markets", "what markets do we cover",
              "geographic footprint"
 

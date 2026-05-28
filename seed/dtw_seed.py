@@ -81,6 +81,25 @@ QOS_PROFILES = [
         ],
         "hss_policy_template_ref": "pcrf_template_prepaid_plus",
     },
+    # Intermediate prepaid tiers (5-30 Mbps integer values) so what-if
+    # amendments like "change to 19 Mbps" resolve to an exact profile rather
+    # than being silently rounded to the nearest available. Generated from
+    # the 20 Mbps template with proportional uplink.
+    *[
+        {
+            "_id": f"qos_prepaid_{mbps}",
+            "name": f"Prepaid {mbps} Mbps",
+            "max_downlink_mbps": float(mbps),
+            "max_uplink_mbps":   round(mbps * 5.0 / 20.0, 1),
+            "qci": 8,
+            "arp": 6,
+            "per_apn_overrides": [
+                {"apn": "fast.acme-mobile.net", "max_downlink_mbps": float(mbps)}
+            ],
+            "hss_policy_template_ref": "pcrf_template_prepaid_plus",
+        }
+        for mbps in range(5, 31)  # 5, 6, …, 30 — exact integer coverage
+    ],
     {
         "_id": "qos_prepaid_basic",
         "name": "Prepaid Entry 3 Mbps",

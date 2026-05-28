@@ -29,6 +29,9 @@ Use this service when users say:
 - Detail: "get scenario DTW-SCN-001", "show me the scenario",
           "scenario details"
 - Cancel: "cancel scenario X", "discard scenario X"
+- Delete:  "delete scenario X", "remove scenario X", "wipe scenario X",
+           "delete all scenarios", "wipe all dtw scenarios",
+           "clear scenarios", "reset scenarios"
 
 This service does NOT run the actual simulation, traverse the topology, or
 return load-projection results. Once a scenario is submitted, call
@@ -48,6 +51,7 @@ import datetime
 import json
 import logging
 import os
+import re
 
 from pymongo import MongoClient, DESCENDING
 from openai import OpenAI
@@ -333,17 +337,106 @@ def update_scenario(modification: str, scenario_id: str = None) -> str:
         return (f"❌ Scenario {s['_id']} is already '{s.get('status')}' "
                 f"and cannot be modified. Submit a new scenario instead.")
 
-    # Re-parse with original text + modification so the LLM sees full context.
-    combined = f"{s['raw_text']}. Amendment: {modification}"
-    parsed = _parse_natural_language(combined)
+    # Focused amendment LLM: give it the EXISTING scenario as JSON and the
+    # user's modification, ask for the updated JSON. This is much more
+    # reliable than re-parsing "original + amendment" as one block, which
+    # the LLM tended to anchor on the original (e.g. keeping new_qos =
+    # qos_prepaid_20 even when the user said "change to 15 Mbps").
+    original_cs = s.get("change_set") or {}
+    original_sc = s.get("scope") or {}
+    amend_prompt = (
+        "You are amending an existing what-if scenario on a telecom digital "
+        "twin. Apply the user's modification to the EXISTING change_set and "
+        "scope, leaving fields untouched when the modification is silent on "
+        "them. Return ONLY the COMPLETE updated JSON — same schema as the "
+        "input, every field included.\n\n"
+        f"Known plans: {', '.join(_known_plans())}\n"
+        f"Known QoS profiles: {', '.join(_known_qos())}\n"
+        f"Known markets: {', '.join(_known_markets())}\n\n"
+        f"Existing change_set: {json.dumps(original_cs)}\n"
+        f"Existing scope:      {json.dumps(original_sc)}\n\n"
+        f"User modification: {modification!r}\n\n"
+        "Schema:\n"
+        "{\n"
+        '  "change_set": {\n'
+        '    "plan_id": string | null,\n'
+        '    "old_qos_profile_id": string | null,\n'
+        '    "new_qos_profile_id": string | null,\n'
+        '    "apn_change": { "from": string, "to": string } | null,\n'
+        '    "pcrf_template_change": { "from": string, "to": string } | null,\n'
+        '    "roaming_enable": string[] | null\n'
+        "  },\n"
+        '  "scope": {\n'
+        '    "markets": string[],\n'
+        '    "time_windows": string[]\n'
+        "  },\n"
+        '  "summary": string\n'
+        "}\n\n"
+        "Examples of correct amendments:\n"
+        "- modification 'change to 15 Mbps' + existing new_qos_profile_id "
+        "'qos_prepaid_20' → new_qos_profile_id 'qos_prepaid_15'.\n"
+        "- modification 'NYC only' + existing scope.markets "
+        "['NYC_Metro','LA_Metro'] → scope.markets ['NYC_Metro'].\n"
+        "- modification 'add Chicago' + existing scope.markets "
+        "['NYC_Metro'] → scope.markets ['NYC_Metro','Chicago_Metro'].\n"
+        "- modification 'change to Sunday morning' + existing "
+        "scope.time_windows ['Saturday_20_23'] → "
+        "scope.time_windows ['Sunday_06_12']."
+    )
+    resp = openai_client.chat.completions.create(
+        model=PARSE_MODEL,
+        messages=[{"role": "user", "content": amend_prompt}],
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
+    parsed = json.loads(resp.choices[0].message.content)
 
     cs = parsed.get("change_set") or {}
     cs["plan_id"]            = _resolve_plan_id(cs.get("plan_id") or "") or cs.get("plan_id")
     cs["old_qos_profile_id"] = _resolve_qos_id(cs.get("old_qos_profile_id") or "") or cs.get("old_qos_profile_id")
     cs["new_qos_profile_id"] = _resolve_qos_id(cs.get("new_qos_profile_id") or "") or cs.get("new_qos_profile_id")
+    # Belt-and-braces: if the amendment LLM dropped a field that the
+    # original had, restore it from the original.
+    for k, v in original_cs.items():
+        if cs.get(k) in (None, "", [], {}) and v not in (None, "", [], {}):
+            cs[k] = v
+
     sc = parsed.get("scope") or {}
     sc["markets"] = ([m for m in sc.get("markets", []) if _resolve_market_id(m)]
                      or sc.get("markets") or [])
+    for k, v in original_sc.items():
+        if sc.get(k) in (None, "", [], {}) and v not in (None, "", [], {}):
+            sc[k] = v
+
+    # Substitution detection: when the user requested a specific Mbps value
+    # but the LLM mapped to the nearest available profile, surface the
+    # substitution explicitly. Silently rounding "change to 19 Mbps" down to
+    # qos_prepaid_18 (18 Mbps) is the kind of dishonest UX that makes users
+    # think the system is broken.
+    substitution_note = ""
+    # The TARGET rate in an amendment is the LAST Mbps mention — "change
+    # from 7.2 Mbps to 19 Mbps" must capture 19, not 7.2. Use findall and
+    # take the final match.
+    mbps_matches = re.findall(r"(\d+(?:\.\d+)?)\s*mbps", modification, re.I)
+    if mbps_matches and cs.get("new_qos_profile_id"):
+        requested_rate = float(mbps_matches[-1])
+        profile = qos_profiles.find_one({"_id": cs["new_qos_profile_id"]})
+        actual_rate = (profile or {}).get("max_downlink_mbps")
+        if actual_rate is not None and abs(requested_rate - actual_rate) > 0.05:
+            # Find all prepaid profiles for the available-tiers hint
+            available = sorted([
+                p.get("max_downlink_mbps")
+                for p in qos_profiles.find(
+                    {"_id": {"$regex": r"^qos_prepaid_"}},
+                    {"max_downlink_mbps": 1})
+                if p.get("max_downlink_mbps")
+            ])
+            substitution_note = (
+                f"⚠️ Requested **{requested_rate:g} Mbps** has no exact QoS "
+                f"profile — using nearest match `{cs['new_qos_profile_id']}` "
+                f"(**{actual_rate:g} Mbps**). Available prepaid tiers: "
+                f"{', '.join(f'{r:g}' for r in available)} Mbps."
+            )
 
     scenarios.update_one(
         {"_id": s["_id"]},
@@ -382,6 +475,8 @@ def update_scenario(modification: str, scenario_id: str = None) -> str:
         lines.append(f"- Markets: {', '.join(sc['markets'])}")
     if sc.get("time_windows"):
         lines.append(f"- Time windows: {', '.join(sc['time_windows'])}")
+    if substitution_note:
+        lines += ["", substitution_note]
     lines += [
         f"",
         f"Say **'run the simulation'** when ready, or describe another change.",
@@ -484,7 +579,9 @@ def get_scenario(scenario_id: str) -> str:
 @mcp.tool()
 def cancel_scenario(scenario_id: str, reason: str = "user request") -> str:
     """
-    Cancel a scenario. Sets status='cancelled' and records the reason.
+    Soft-cancel a scenario. Sets status='cancelled' and records the reason —
+    the document is RETAINED for audit. Use delete_scenario to remove the
+    document entirely.
 
     Args:
         scenario_id: Scenario id.
@@ -504,6 +601,47 @@ def cancel_scenario(scenario_id: str, reason: str = "user request") -> str:
         },
     )
     return f"⊗ Scenario {scenario_id} cancelled. Reason: {reason}"
+
+
+@mcp.tool()
+def delete_scenario(scenario_id: str) -> str:
+    """
+    Hard-delete a scenario document. Removes it from the dtw_scenarios
+    collection entirely so it no longer appears on the dashboard.
+    Distinct from cancel_scenario which only marks status='cancelled'.
+
+    Use this when the user says "delete scenario X", "remove scenario X",
+    "wipe scenario X", or similar.
+
+    Args:
+        scenario_id: Scenario id to delete.
+    """
+    r = scenarios.delete_one({"_id": scenario_id})
+    if r.deleted_count == 0:
+        return f"❌ Scenario {scenario_id} not found."
+    return f"🗑️  Scenario {scenario_id} deleted."
+
+
+@mcp.tool()
+def delete_all_scenarios(keep_demo: bool = True) -> str:
+    """
+    Hard-delete every scenario document — used to reset state between demo
+    runs. Removes the documents entirely; the dashboard's Change Stream
+    fires and the scenarios disappear from the UI.
+
+    Use this when the user says "delete all scenarios", "wipe all
+    scenarios", "clear scenarios", "reset scenarios", or similar.
+
+    Args:
+        keep_demo: When True (default), keep the seeded DTW-SCN-DEMO-* fixture
+                   scenarios so the demo still has reference data after a
+                   wipe. Pass False to delete those too.
+    """
+    q = {} if not keep_demo else {"_id": {"$not": {"$regex": r"^DTW-SCN-DEMO-"}}}
+    r = scenarios.delete_many(q)
+    suffix = " (DEMO fixtures preserved)" if keep_demo else ""
+    return (f"🗑️  Hard-deleted {r.deleted_count} scenario document(s)"
+            f"{suffix}. The dtw_scenarios collection is now reset.")
 
 
 if __name__ == "__main__":

@@ -13,15 +13,15 @@ service consumes these models to project load changes; this service is the
 read/inspect API for them.
 
 Use this service when users say:
-- Lookup:    "show traffic model for ACME M in NYC on Saturday night",
-             "what is the load model for plan X in market Y",
-             "traffic model details", "get traffic model X"
-- Estimate:  "estimate load on cell X during Saturday night",
-             "what's the projected utilization on cell X",
-             "cell load for time window Y"
+- Lookup:    "show the traffic model for <plan> in <market> during <window>",
+             "fetch the traffic model details", "get the load model",
+             "traffic-model fixture lookup", "traffic-model record"
+- Estimate:  "estimate baseline load on cell <id> in window <id>",
+             "what is the current baseline utilization of cell <id>",
+             "baseline cell load for time window <id>"
 - Windows:   "list time windows", "what time windows do we have",
              "show traffic windows"
-- Peak:      "what are the peak hours for NYC", "peak window for market X"
+- Peak:      "what are the peak windows", "peak window for market <id>"
 
 The traffic models are static fixtures — they describe the *expected* load
 pattern. The simulation service applies them under a proposed change to

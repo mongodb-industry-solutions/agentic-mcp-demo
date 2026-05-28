@@ -8,5 +8,6 @@ python-pptx
 requests
 rich
 uv
+voyageai
 watchfiles
 websockets
