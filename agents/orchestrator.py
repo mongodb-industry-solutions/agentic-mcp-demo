@@ -30,17 +30,6 @@ from openai import AsyncOpenAI
 BROADCAST_URL         = "https://notify.bjjl.dev/send"
 BROADCAST_RECEIVE_URL = "https://notify.bjjl.dev/receive"
 
-# Pre-compiled in _needs_context_enrichment: queries starting with one of
-# these verbs are treated as self-contained imperatives — no enrichment
-# from the previous turn (which would dilute their routing signal).
-_IMPERATIVE_VERBS = re.compile(
-    r"^(run|execute|simulate|launch|start|begin|trigger|fire|"
-    r"stop|abort|cancel|reset|clear|delete|wipe|"
-    r"show|list|describe|display|find|fetch|get|"
-    r"add|remove|update|modify|change|set|"
-    r"confirm|approve|proceed|retry|restart|"
-    r"inject|apply|diagnose|compare|diff)$", re.I)
-
 # ── Memory promotion / decay knobs ────────────────────────────────────────
 # Memories carry a `tier` field that signals their standing:
 #   "extracted"  — freshly mined from a closed workstream (default)
@@ -2796,54 +2785,6 @@ class OrchestratorAgent:
                 await self._broadcast("ERROR",
                     f"❌ Failed to activate {name}: {type(e).__name__}: {e}")
 
-    async def _needs_context_enrichment(self, current_query: str, last_query: str) -> bool:
-        """Use LLM to detect if current query is a follow-up or new topic"""
-
-        # Skip for long queries (already have context)
-        if len(current_query.split()) > 5:
-            return False
-
-        # Skip if no previous query
-        if not last_query:
-            return False
-
-        # Skip for self-contained imperative commands. "run simulation",
-        # "execute scenario", "show fleet status" are complete commands and
-        # carry their own routing signal — enriching them with the previous
-        # query DILUTES that signal (e.g. "run simulation" appended to a
-        # scenario description routes to scenario_service, not
-        # simulation_service, because the description vocab dominates).
-        # Pattern: starts with an imperative verb AND has at least one more
-        # token. Single-word inputs ("yes", "now") still go through LLM.
-        words = current_query.strip().split()
-        if len(words) >= 2:
-            if _IMPERATIVE_VERBS.match(words[0]):
-                return False
-
-        # Ask LLM: Is this a follow-up?
-        resp = await self.openai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Previous query: '{last_query}'\n"
-                    f"Current query: '{current_query}'\n\n"
-                    f"Is the current query a FOLLOW-UP to the previous one? "
-                    f"Answer only 'YES' or 'NO'.\n\n"
-                    f"Examples:\n"
-                    f"- Previous: 'solana price', Current: 'and now?' → YES\n"
-                    f"- Previous: 'solana price', Current: 'update' → YES\n"
-                    f"- Previous: 'hungry', Current: 'crypto price' → NO (topic change)\n"
-                    f"- Previous: 'restaurant', Current: 'crypto' → NO (topic change)"
-                )
-            }],
-            temperature=0,
-            max_tokens=5
-        )
-
-        result = resp.choices[0].message.content.strip().upper()
-        return result == "YES"
-
     def _format_result_preview(self, text: str, max_lines: int = 3, max_chars: int = 250) -> str:
         lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
         preview = lines[:max_lines]
@@ -2981,8 +2922,11 @@ class OrchestratorAgent:
         #     scoping is irrelevant.
         is_meta_query = self._is_meta_query(user_input)
 
-        # Compute enrichment posture upfront — used by both Stage 1 and
-        # _route_query downstream.
+        # Sticky-bias posture: short non-imperative follow-ups (e.g. "yes",
+        # "do it", "and now?") have weak routing signal of their own, so
+        # _route_query should bias toward last_service. Longer or
+        # imperative-led queries carry their own signal and shouldn't get
+        # the sticky boost.
         _SELF_CONTAINED = {
             "list", "show", "add", "update", "delete", "remove", "change",
             "set", "refresh", "display", "what", "how", "get", "find",
@@ -2990,14 +2934,13 @@ class OrchestratorAgent:
         }
         first_word = user_input.split()[0].lower() if user_input.split() else ""
         is_self_contained = first_word in _SELF_CONTAINED
-        needs_enrichment_check = (
+        is_short_followup = (
             last_user_queries
             and len(user_input.split()) < 5
             and not is_self_contained
         )
 
         stage1_domains: List[str] | None = None
-        query_for_routing: str = user_input
 
         if is_meta_query:
             await self._broadcast("WORKSTREAM",
@@ -3020,30 +2963,18 @@ class OrchestratorAgent:
                     was_pure_closure, closed_ids = \
                     await self._classify_workstream(user_input, last_user_queries)
             else:
-                # Stage 1 FIRST — possibly in parallel with follow-up
-                # detection on short queries.
-                if needs_enrichment_check:
-                    is_followup, stage1_domains = await asyncio.gather(
-                        self._needs_context_enrichment(
-                            user_input, last_user_queries[-1]),
-                        self._classify_domain(
-                            user_input, sticky_hint=self.last_domain),
-                    )
-                    if is_followup:
-                        enriched_query = f"{last_user_queries[-1]}. {user_input}"
-                        await self._broadcast("AGENT",
-                            f"Follow-up detected, enriched: '{enriched_query}'")
-                        # Re-run Stage 1 on the enriched text — it may
-                        # surface a domain the bare short query missed.
-                        stage1_domains = await self._classify_domain(
-                            enriched_query, sticky_hint=self.last_domain)
-                        query_for_routing = enriched_query
-                    else:
-                        await self._broadcast("AGENT",
-                            "Topic change detected, no enrichment")
-                else:
-                    stage1_domains = await self._classify_domain(
-                        user_input, sticky_hint=self.last_domain)
+                # Stage 1 always runs on the bare user_input. We do NOT
+                # concatenate previous-turn text into the routing input —
+                # that biases the vector search toward the prior domain's
+                # vocabulary (e.g. "feasibility check!" after intent
+                # creation would route to intent_service because the
+                # enriched form is 95% intent vocabulary). Cross-turn
+                # continuity is carried by:
+                #   (a) last_domain sticky hint passed to Stage 1, and
+                #   (b) the workstream context block injected into the
+                #       ReAct system prompt at execution time.
+                stage1_domains = await self._classify_domain(
+                    user_input, sticky_hint=self.last_domain)
 
                 # Workstream classifier — scoped to Stage 1's domains.
                 ws_id, ws_is_new, ws_domain, replay_source_id, \
@@ -3134,8 +3065,8 @@ class OrchestratorAgent:
         # parallel where applicable). For meta queries stage1_domains
         # is None, so _route_query runs its own Stage 1.
         service_names = await self._route_query(
-            query_for_routing,
-            use_stickiness=needs_enrichment_check and not is_meta_query,
+            user_input,
+            use_stickiness=is_short_followup and not is_meta_query,
             precomputed_domains=stage1_domains,
         )
 

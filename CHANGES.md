@@ -197,6 +197,36 @@ Also: a CRITICAL rule that the workstream summary describes past actions, not
 live data — always call the appropriate tool for current results, even if the
 summary appears to contain the answer.
 
+### Removed query enrichment for routing (`agents/orchestrator.py`)
+Previous-turn text was being concatenated into the current query and used
+for Stage 1 + Stage 2 vector search ("feasibility check!" after intent
+creation got enriched to "I'm opening a new Alpenmarkt store … feasibility
+check!" and routed to `ibn_intent_service` because the enriched form was
+95% intent vocabulary). Bare "feasibility check!" routes correctly to
+`ibn_feasibility_service` with a 0.066 gap — well above the clear-winner
+threshold.
+
+Removed:
+- `_needs_context_enrichment` method (LLM call that detected follow-ups)
+- The enrichment branch in `process_query` (asyncio.gather of follow-up
+  detection + Stage 1, the Stage 1 re-run on enriched text, the
+  `query_for_routing = enriched_query` assignment)
+- `_IMPERATIVE_VERBS` module constant (only used by the removed method)
+- The "Follow-up detected, enriched: …" broadcast
+
+Kept:
+- The `_SELF_CONTAINED` set, renamed `needs_enrichment_check` →
+  `is_short_followup` to reflect its remaining purpose: gating the
+  `use_stickiness` flag on `_route_query`. Short non-imperative
+  follow-ups ("yes", "do it", "and now?") still get sticky-bias toward
+  `last_service` because their bare text has weak routing signal.
+- Cross-turn continuity now flows entirely through (a) the `last_domain`
+  sticky hint to Stage 1 and (b) the workstream context block injected
+  into the ReAct system prompt — no query-text manipulation.
+
+Net: one LLM call removed per short follow-up turn (~200ms savings), one
+source of routing bias eliminated, ~80 LOC removed.
+
 ### Revert manual voyage-4 embedding pipeline; fix is `quantization: float` on autoEmbed (`agents/orchestrator.py`, `seed/*.py`, MongoDB indexes)
 The earlier diagnosis was wrong. Atlas `autoEmbed` *does* pass voyage-4's
 asymmetric `input_type` parameter (`document` at index time, `query` at search
