@@ -197,6 +197,16 @@ Also: a CRITICAL rule that the workstream summary describes past actions, not
 live data — always call the appropriate tool for current results, even if the
 summary appears to contain the answer.
 
+### Removed `DTW-SCN-DEMO-A` fixture (`seed/dtw_seed.py`, `mcp_servers/dtw_scenario_service.py`)
+The seeded DEMO-A scenario was leftover scaffolding from when `dtw_scenarios`
+had no other population path. The two-step what-if flow creates real scenarios
+on the first user turn, so the fixture added no value and was confusing during
+debugging (it kept appearing in the dashboard alongside scenarios under test).
+The seed no longer inserts anything into `dtw_scenarios` — the collection is
+empty after seeding and is populated at runtime by `create_scenario`.
+`delete_all_scenarios` simplified accordingly: dropped the `keep_demo` arg and
+the regex carve-out. Now a plain `delete_many({})`.
+
 ### Code-review cleanups (`agents/orchestrator.py`, `mcp_servers/dtw_scenario_service.py`)
 Four redundant `import re` statements inside methods removed (already imported at
 module level). The imperative-verb regex in `_needs_context_enrichment` was

@@ -1112,39 +1112,6 @@ KNOWLEDGE_CHUNKS = [
 ]
 
 
-# ─── Sample seeded scenarios — Flow A and Flow B ──────────────────────────
-#
-# Two completed scenarios so the demo has history to show even before the
-# agent runs new ones. The scenario_service.create_scenario tool generates
-# new entries with status='submitted' that the simulation_service then
-# processes.
-
-SCENARIOS = [
-    {
-        "_id": "DTW-SCN-DEMO-A",
-        "description": "DEMO: Raise ACME M prepaid DL cap to 20 Mbps in NYC & LA",
-        "scenario_type": "qos_change",
-        "raw_text": "Raise prepaid M downlink to 20 Mbps in NYC and LA Saturday night.",
-        "change_set": {
-            "plan_id": "plan_ACME_M",
-            "old_qos_profile_id": "qos_prepaid_7_2",
-            "new_qos_profile_id": "qos_prepaid_20",
-        },
-        "scope": {
-            "markets": ["NYC_Metro", "LA_Metro"],
-            "time_windows": ["Saturday_20_23"],
-        },
-        "status": "completed",
-        "submitted_at": days_ago(7),
-        "history": [
-            {"ts": days_ago(7), "event": "submitted", "note": "demo seed"},
-            {"ts": days_ago(6), "event": "simulated", "note": "demo seed"},
-        ],
-        "results": None,  # populated by simulate_qos_change on demand
-    },
-]
-
-
 # ─── Loader ───────────────────────────────────────────────────────────────
 
 DTW_COLLECTIONS = [
@@ -1203,7 +1170,8 @@ def insert_all(db):
     db["dtw_subscribers"].insert_many(subscribers)
     db["dtw_traffic_models"].insert_many(traffic_models)
     db["dtw_knowledge_chunks"].insert_many(KNOWLEDGE_CHUNKS)
-    db["dtw_scenarios"].insert_many(SCENARIOS)
+    # dtw_scenarios is intentionally empty after seed — scenarios are
+    # created at runtime by dtw_scenario_service.create_scenario.
 
     type_counts: dict = {}
     for el in elements:
@@ -1218,7 +1186,7 @@ def insert_all(db):
     print(f"    {len(subscribers)} subscribers")
     print(f"    {len(traffic_models)} traffic models")
     print(f"    {len(KNOWLEDGE_CHUNKS)} knowledge chunks")
-    print(f"    {len(SCENARIOS)} seeded scenarios")
+    print(f"    dtw_scenarios: empty (populated at runtime)")
 
 
 VECTOR_INDEX_CONFIG = {

@@ -623,7 +623,7 @@ def delete_scenario(scenario_id: str) -> str:
 
 
 @mcp.tool()
-def delete_all_scenarios(keep_demo: bool = True) -> str:
+def delete_all_scenarios() -> str:
     """
     Hard-delete every scenario document — used to reset state between demo
     runs. Removes the documents entirely; the dashboard's Change Stream
@@ -631,17 +631,10 @@ def delete_all_scenarios(keep_demo: bool = True) -> str:
 
     Use this when the user says "delete all scenarios", "wipe all
     scenarios", "clear scenarios", "reset scenarios", or similar.
-
-    Args:
-        keep_demo: When True (default), keep the seeded DTW-SCN-DEMO-* fixture
-                   scenarios so the demo still has reference data after a
-                   wipe. Pass False to delete those too.
     """
-    q = {} if not keep_demo else {"_id": {"$not": {"$regex": r"^DTW-SCN-DEMO-"}}}
-    r = scenarios.delete_many(q)
-    suffix = " (DEMO fixtures preserved)" if keep_demo else ""
-    return (f"🗑️  Hard-deleted {r.deleted_count} scenario document(s)"
-            f"{suffix}. The dtw_scenarios collection is now reset.")
+    r = scenarios.delete_many({})
+    return (f"🗑️  Hard-deleted {r.deleted_count} scenario document(s). "
+            f"The dtw_scenarios collection is now empty.")
 
 
 if __name__ == "__main__":
