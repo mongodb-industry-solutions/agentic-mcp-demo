@@ -35,10 +35,11 @@ INDEX     = "agent_memories_index"
 DEFINITION = {
     "fields": [
         {
-            "type":     "autoEmbed",
-            "modality": "text",
-            "path":     "text",
-            "model":    "voyage-4",
+            "type":         "autoEmbed",
+            "modality":     "text",
+            "path":         "text",
+            "model":        "voyage-4",
+            "quantization": "float",   # full precision; default 'scalar' (int8) compresses scores
         },
         {"type": "filter", "path": "domain"},
         {"type": "filter", "path": "category"},

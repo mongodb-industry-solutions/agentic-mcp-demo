@@ -990,10 +990,11 @@ VECTOR_INDEX_CONFIG = {
     "definition": {
         "fields": [
             {
-                "type":     "autoEmbed",
-                "modality": "text",
-                "path":     "text",
-                "model":    "voyage-4",
+                "type":         "autoEmbed",
+                "modality":     "text",
+                "path":         "text",
+                "model":        "voyage-4",
+                "quantization": "float",   # full precision; default 'scalar' (int8) compresses scores
             },
             {"type": "filter", "path": "kind"},
             {"type": "filter", "path": "ts"},

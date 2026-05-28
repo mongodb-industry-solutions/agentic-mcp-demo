@@ -35,10 +35,15 @@ INDEX     = "workstream_vector_index"
 DEFINITION = {
     "fields": [
         {
-            "type":     "autoEmbed",
-            "modality": "text",
-            "path":     "summary",
-            "model":    "voyage-4",
+            "type":         "autoEmbed",
+            "modality":     "text",
+            "path":         "summary",
+            "model":        "voyage-4",
+            # quantization defaults to 'scalar' (int8) which compresses
+            # cosine scores into a narrow noise band for short texts.
+            # 'float' keeps full 32-bit precision and the discriminative
+            # range voyage-4 actually produces.
+            "quantization": "float",
         },
         {"type": "filter", "path": "state"},
         {"type": "filter", "path": "domain"},

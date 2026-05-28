@@ -25,7 +25,6 @@ from pymongo import AsyncMongoClient, ReturnDocument
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from openai import AsyncOpenAI
-import voyageai
 
 
 BROADCAST_URL         = "https://notify.bjjl.dev/send"
@@ -199,18 +198,6 @@ class OrchestratorAgent:
 
         self.openai = AsyncOpenAI()
         self.model = os.environ.get("OPENAI_MODEL", "gpt-4o")
-
-        # Voyage AI client for asymmetric retrieval (input_type='document' at
-        # index time, 'query' at search time). Atlas autoEmbed does NOT set
-        # input_type — which collapses voyage-4 scores into a tight band and
-        # picks wrong winners. We do the embeddings ourselves to get the
-        # asymmetric retrieval voyage-4 was designed for.
-        if not os.environ.get("VOYAGE_API_KEY"):
-            raise ValueError("VOYAGE_API_KEY missing — required for "
-                             "asymmetric voyage-4 retrieval in Stage 2")
-        self.voyage = voyageai.Client(api_key=os.environ["VOYAGE_API_KEY"])
-        self.embed_model = "voyage-4"
-        self.embed_dim   = 1024
         self.http_client = httpx.AsyncClient()
         self.tool_cache: Dict[str, List[Dict]] = {}  # server_name → openai tool dicts
         self.temp_dir = Path(tempfile.mkdtemp(prefix="mcp_cloud_"))
@@ -877,10 +864,12 @@ class OrchestratorAgent:
         phrases verbatim). Longer n-gram matches are worth more — a 3-token
         overlap is a much stronger signal than three isolated tokens.
 
-        Used as a deterministic Stage 2 tiebreaker before the LLM call:
-        when voyage-4 collapses sibling services into a < 0.001 cosine
-        band, literal phrase overlap with the trigger phrases is the
-        objective signal that disambiguates them.
+        Used as a deterministic Stage 2 tiebreaker before the LLM call.
+        Even with full-precision (`quantization: float`) voyage-4 autoEmbed,
+        sibling services that share vocabulary occasionally land within
+        ~0.005 cosine of each other; literal phrase overlap with the
+        trigger phrases is the objective signal that disambiguates them
+        without an LLM round-trip.
         """
         q_lc = query.lower()
         d_lc = description.lower()
@@ -1035,31 +1024,6 @@ class OrchestratorAgent:
         stem = server_name.strip()
         return stem.split("_", 1)[0] if "_" in stem else stem
 
-    def _embed_for_index(self, text: str) -> list:
-        """Compute a voyage-4 embedding with input_type='document'.
-
-        This is the index-time call. voyage-4 is an asymmetric retrieval
-        model: it prepends "Represent the document for retrieval: " to the
-        text before vectorising. Using this with input_type='query' for
-        searches gives ~5-10× larger gap between correct and incorrect
-        matches than the symmetric (input_type=None) form that Atlas
-        autoEmbed uses under the hood.
-        """
-        resp = self.voyage.embed([text], model=self.embed_model,
-                                 input_type="document")
-        return resp.embeddings[0]
-
-    def _embed_for_query(self, text: str) -> list:
-        """Compute a voyage-4 embedding with input_type='query'.
-
-        Used at $vectorSearch time. The asymmetric prompt is what gives
-        voyage-4 its retrieval quality — without it, queries and short
-        documents collapse to nearly the same region of vector space.
-        """
-        resp = self.voyage.embed([text], model=self.embed_model,
-                                 input_type="query")
-        return resp.embeddings[0]
-
     async def _sync_registry(self):
         """Smart sync: Add new, update changed, remove deleted MCP servers"""
         if not self.server_dir.exists():
@@ -1121,10 +1085,8 @@ class OrchestratorAgent:
 
         # Check for actual changes (hash comparison) OR missing-field
         # backfill needed (registry doc predates a schema upgrade — missing
-        # `domain` after the two-stage routing upgrade, missing
-        # `full_description` after the embedded-discriminator split, or
-        # missing `description_embedding` after the asymmetric-retrieval
-        # upgrade that bypasses Atlas autoEmbed).
+        # `domain` after the two-stage routing upgrade or missing
+        # `full_description` after the embedded-discriminator split).
         changed_servers = set()
         for name in potential_updates:
             local_hash = local_servers[name]["file_hash"]
@@ -1133,37 +1095,14 @@ class OrchestratorAgent:
             needs_backfill = (
                 not db_doc.get("domain")
                 or not db_doc.get("full_description")
-                or not db_doc.get("description_embedding")
-                # Re-embed when the discriminator logic changed even if the
+                # Re-sync when the discriminator logic changed even if the
                 # file itself didn't — description drift without hash drift.
+                # Atlas autoEmbed will re-embed the changed `description`
+                # field on the update automatically.
                 or db_doc.get("description") != local_servers[name]["description"]
             )
             if local_hash != db_hash or needs_backfill:
                 changed_servers.add(name)
-
-        # Compute voyage-4 document embeddings for every new or changed
-        # service. One blocking API call per service (parallelizable later);
-        # at demo scale this is a handful of services on startup.
-        services_to_embed = list(new_servers | changed_servers)
-        if services_to_embed:
-            await self._broadcast("BOOTSTRAP",
-                f"🧬 Embedding {len(services_to_embed)} service "
-                f"description(s) with voyage-4 (input_type='document')…")
-            for name in services_to_embed:
-                try:
-                    vec = await asyncio.to_thread(
-                        self._embed_for_index,
-                        local_servers[name]["description"])
-                    local_servers[name]["description_embedding"] = vec
-                except Exception as e:
-                    # One bad embedding shouldn't kill the whole sync. Drop
-                    # the service from this round; it'll be retried on the
-                    # next sync (filewatcher hit, restart, etc.).
-                    await self._broadcast("BOOTSTRAP",
-                        f"⚠ Embedding failed for {name}: {e!s} — skipping "
-                        f"this service this round")
-                    new_servers.discard(name)
-                    changed_servers.discard(name)
 
         # Sync operations
         total_changes = len(new_servers) + len(changed_servers) + len(deleted_servers)
@@ -1228,23 +1167,22 @@ class OrchestratorAgent:
     async def _semantic_search(self, query: str, limit: int = 5,
                                domains: List[str] | None = None) -> List[Dict]:
         """Stage 2: vector search, optionally pre-filtered to one or more
-        domains. Uses ASYMMETRIC voyage-4 retrieval: query is embedded with
-        input_type='query', documents were embedded at index time with
-        input_type='document'. This is voyage-4's design and produces
-        sharply discriminative scores — Atlas autoEmbed does not do this
-        and collapses sibling services into a noise band.
+        domains. Uses Atlas autoEmbed against voyage-4 — Atlas embeds the
+        `description` field at insert/update time AND embeds the raw query
+        text on every search, applying voyage-4's asymmetric input_type
+        prompts ('document' vs 'query') internally. The autoEmbed index is
+        configured with `quantization: float` so scores keep full float32
+        precision and stay discriminative (the default `scalar` int8
+        quantization compressed sibling-service scores into a noise band).
 
         Falls back to unfiltered search if Atlas rejects the filter
         (index hasn't been re-configured to include `domain` yet) — flips
         a flag so we don't keep trying."""
-        # Embed the query off-thread so the event loop stays responsive.
-        query_vector = await asyncio.to_thread(self._embed_for_query, query)
-
         def _build_pipeline(filter_doc: dict | None):
             vs: dict = {
                 "index":         "vector_index",
-                "path":          "description_embedding",
-                "queryVector":   query_vector,
+                "path":          "description",
+                "query":         query,
                 "numCandidates": 50,
                 "limit":         limit,
             }

@@ -197,6 +197,48 @@ Also: a CRITICAL rule that the workstream summary describes past actions, not
 live data — always call the appropriate tool for current results, even if the
 summary appears to contain the answer.
 
+### Revert manual voyage-4 embedding pipeline; fix is `quantization: float` on autoEmbed (`agents/orchestrator.py`, `seed/*.py`, MongoDB indexes)
+The earlier diagnosis was wrong. Atlas `autoEmbed` *does* pass voyage-4's
+asymmetric `input_type` parameter (`document` at index time, `query` at search
+time) — the actual cause of the score collapse on `mcp_services` was the
+default `quantization: "scalar"` (int8), which compresses cosine scores into
+a noise band for short-text vectors. The one-line fix is to set
+`quantization: "float"` on every autoEmbed field, keeping full float32
+precision.
+
+Applied to all six vector indexes in the demo:
+- `mcp_services / vector_index`
+- `agent_workstreams / workstream_vector_index`
+- `agent_memories / agent_memories_index`
+- `user_preferences / user_preferences_index`
+- `ibn_knowledge_chunks / ibn_knowledge_index`
+- `dtw_knowledge_chunks / dtw_knowledge_index`
+
+Updated four seed scripts (`seed/workstream_index.py`, `seed/memories_index.py`,
+`seed/ibn_seed.py`, `seed/dtw_seed.py`) to include `quantization: "float"` in
+every autoEmbed field. Recreated all six live indexes with the new config.
+
+Removed the manual-embedding scaffolding the previous (wrong) diagnosis added
+to the orchestrator:
+- `voyageai` import, voyage Client init, `VOYAGE_API_KEY` env-var requirement
+- `_embed_for_index` / `_embed_for_query` helper methods
+- The per-service voyage API call loop in `_sync_registry`
+- The `description_embedding` field on every `mcp_services` doc (unset via
+  `update_many`)
+- `_semantic_search` now passes raw `query: <text>` to `$vectorSearch` against
+  the `description` field (autoEmbed handles the embedding on both sides)
+
+Net result: ~40 lines of code removed, one dependency removed from the
+orchestrator hot path (`voyage.embed` per query no longer needed), and the
+score range stays just as discriminative as the manual route (0.59-0.72 with
+real gaps). `voyageai` is kept in `requirements.in` because
+`restaurant_guide.py` uses it for its own ad-hoc embeddings.
+
+The text-match tiebreaker stays — it's still useful for the rare queries
+where sibling services share enough vocabulary to land within ~0.005 of each
+other ("Raise prepaid ACME M…" routes to `dtw_traffic_service` at 0.7029 and
+`dtw_scenario_service` at 0.6955; text-match resolves it 63 vs 2).
+
 ### Removed `DTW-SCN-DEMO-A` fixture (`seed/dtw_seed.py`, `mcp_servers/dtw_scenario_service.py`)
 The seeded DEMO-A scenario was leftover scaffolding from when `dtw_scenarios`
 had no other population path. The two-step what-if flow creates real scenarios
