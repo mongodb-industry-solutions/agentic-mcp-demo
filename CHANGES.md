@@ -3,6 +3,15 @@
 ## 2026-05-27
 
 ### Asymmetric voyage-4 retrieval — replaces Atlas autoEmbed for Stage 2 routing (`agents/orchestrator.py`, MongoDB `vector_index`)
+
+> ⚠️ **Diagnosis later corrected.** The bypass-autoEmbed approach described
+> below was based on the wrong root-cause hypothesis. Atlas `autoEmbed`
+> *does* pass voyage-4's `input_type` parameter correctly; the actual
+> cause of the score collapse was the default `quantization: scalar`
+> (int8). The bypass was later reverted in favor of the one-line fix
+> `quantization: "float"` on every autoEmbed field — see the entry
+> *"Revert manual voyage-4 embedding pipeline"* below.
+
 Atlas `autoEmbed` does not set the `input_type` parameter when embedding documents
 at index time vs. queries at search time. Voyage-4 is an asymmetric retrieval model
 that prepends a different internal prompt for `input_type="query"` vs.
