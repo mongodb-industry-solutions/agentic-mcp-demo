@@ -84,7 +84,8 @@ QOS_PROFILES = [
     # Intermediate prepaid tiers (5-30 Mbps integer values) so what-if
     # amendments like "change to 19 Mbps" resolve to an exact profile rather
     # than being silently rounded to the nearest available. Generated from
-    # the 20 Mbps template with proportional uplink.
+    # the 20 Mbps template with proportional uplink. Skips 20 (already
+    # defined above as `qos_prepaid_20`).
     *[
         {
             "_id": f"qos_prepaid_{mbps}",
@@ -98,7 +99,7 @@ QOS_PROFILES = [
             ],
             "hss_policy_template_ref": "pcrf_template_prepaid_plus",
         }
-        for mbps in range(5, 31)  # 5, 6, …, 30 — exact integer coverage
+        for mbps in range(5, 31) if mbps != 20  # 5-30 minus the explicit 20
     ],
     {
         "_id": "qos_prepaid_basic",
