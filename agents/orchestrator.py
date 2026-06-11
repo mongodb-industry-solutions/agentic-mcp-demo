@@ -364,17 +364,23 @@ class OrchestratorAgent(BroadcastMixin, RegistryMixin, RouterMixin,
             replay_recipe = await self._build_replay_recipe(
                 replay_source_id, target_workstream_id=ws_id)
 
-        # ── Phase 1 agent dispatch (MULTI_AGENT_PLAN.md) ──────────────────
-        # When AGENT_MODE enables a DomainAgent for the resolved domain,
-        # hand the whole turn to it: the agent runs its own ReAct loop
-        # over its domain's MCP tools, and _dispatch_to_agent mirrors the
-        # legacy post-processing. Everything else falls through to the
-        # legacy single-loop path below.
+        # ── Phase 2 agent dispatch (MULTI_AGENT_PLAN.md) ──────────────────
+        # Resolve the turn to DomainAgents via the card-ranked selector.
+        # One agent → passthrough dispatch (the shell does no ReAct of
+        # its own). Two or more → parallel dispatch with scoped
+        # sub-tasks and a synthesis pass. Domains without an agent (or
+        # with AGENT_MODE off) fall through to the direct-to-server
+        # path below — that path remains the shell's own tool surface
+        # for singleton services.
         if not is_meta_query:
-            _agent = self._select_domain_agent(stage1_domains, ws_domain)
-            if _agent is not None:
+            _agents = await self._select_agents_for_turn(
+                user_input, stage1_domains, ws_domain)
+            if len(_agents) == 1:
                 return await self._dispatch_to_agent(
-                    _agent, user_input, replay_recipe, turn_t0)
+                    _agents[0], user_input, replay_recipe, turn_t0)
+            if len(_agents) >= 2:
+                return await self._dispatch_multi(
+                    _agents, user_input, replay_recipe, turn_t0)
 
         # ── Stage 2 — vector search within precomputed Stage 1 domains ────
         # Follow-up detection and Stage 1 already ran upfront (in

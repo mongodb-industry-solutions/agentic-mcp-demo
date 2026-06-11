@@ -70,17 +70,47 @@ class DomainAgent:
         self.description = description  # agent card text (vector-indexed)
         self.system_prompt = system_prompt
 
+    # Per-task server cap: domains with more services than this get
+    # narrowed by an in-domain Stage 2 vector search; smaller domains
+    # (today's 5-service IBN/DTW domains) activate everything.
+    MAX_SERVERS_PER_TASK = 5
+
     async def servers_in_domain(self) -> List[str]:
         """All registered MCP services claimed by this agent's domain."""
         cursor = self.host.collection.find(
             {"domain": self.domain}, {"server_name": 1})
         return sorted([d["server_name"] async for d in cursor])
 
-    async def _activate_domain_servers(self) -> List[str]:
-        """Activate every server in this agent's domain (Phase 1: the
-        agent sees all of its domain's tools; per-task Stage 2 narrowing
-        moves inside the agent in Phase 2). Returns the active names."""
+    async def _select_servers(self, task: str) -> List[str]:
+        """Stage 2, inside the agent (Phase 2 of MULTI_AGENT_PLAN.md):
+        decide which of the domain's servers to activate for THIS task.
+        Small domains take all servers; larger ones are narrowed by
+        $vectorSearch over mcp_services pre-filtered to this domain —
+        the same Atlas primitive the shell used to apply globally, now
+        scoped to the agent's own catalog slice."""
         names = await self.servers_in_domain()
+        if len(names) <= self.MAX_SERVERS_PER_TASK:
+            return names
+        try:
+            hits = await self.host._semantic_search(
+                task, limit=self.MAX_SERVERS_PER_TASK,
+                domains=[self.domain])
+            selected = [h["server_name"] for h in hits
+                        if h.get("server_name") in set(names)]
+            if selected:
+                await self.host._broadcast("ROUTING",
+                    f"[{self.name}] in-domain Stage 2 narrowed "
+                    f"{len(names)} → {len(selected)} servers")
+                return selected
+        except Exception as e:
+            print(f"⚠️ [{self.name}] in-domain Stage 2 failed, "
+                  f"activating all domain servers: {e}")
+        return names
+
+    async def _activate_domain_servers(self, task: str) -> List[str]:
+        """Activate the servers selected for this task. Returns the
+        active names."""
+        names = await self._select_servers(task)
         matches = self.host._resolve_server_paths(names)
         if matches:
             await self.host._broadcast("ROUTING",
@@ -116,7 +146,7 @@ class DomainAgent:
         """
         host = self.host
 
-        active = await self._activate_domain_servers()
+        active = await self._activate_domain_servers(task)
         if not active:
             return AgentResult(
                 answer=(f"I couldn't activate any services for the "

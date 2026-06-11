@@ -124,7 +124,18 @@ Acceptance: a feature flag (`AGENT_MODE=1`) routes IBN queries through
 `DomainAgent("ibn")` while everything else uses the legacy path. Outputs
 match the legacy path on the scripted demo flows.
 
-## Phase 2 — Promote the shell to coordinator
+## Phase 2 — Promote the shell to coordinator ✅ DONE 2026-06-11
+
+Completed — see the 2026-06-11 Phase 2 entry in CHANGES.md. Deviations
+from the sketch below: the legacy direct-to-server path is retained as
+the shell's own tool surface for non-agent domains (it is the
+"singletons stay direct tools of the shell" box, not dead code);
+`AGENT_MODE` default remains off pending soak; the `agent` field on
+`agent_memories` is deferred (the existing `domain` field already
+scopes recall); broadcast indenting shipped in Phase 1. New since the
+sketch: an anyio task-affinity constraint surfaced — stdio sessions
+must be entered from the task that closes the AsyncExitStack, so
+multi-dispatch pre-activates servers before fanning out.
 
 Rewire `process_query`:
 

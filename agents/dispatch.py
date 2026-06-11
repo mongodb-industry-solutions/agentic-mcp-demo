@@ -21,10 +21,11 @@ selects by exact domain match).
 
 import asyncio
 import datetime
+import json
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional
 
-from .domain_agent import AgentContext, DomainAgent
+from .domain_agent import AgentContext, AgentResult, DomainAgent
 
 AGENT_CARDS_INDEX_NAME = "agent_cards_index"
 AGENT_CARDS_INDEX_DEFINITION = {
@@ -43,31 +44,124 @@ AGENT_CARDS_INDEX_DEFINITION = {
 
 class AgentDispatchMixin:
 
-    def _select_domain_agent(self, stage1_domains: Optional[List[str]],
-                             ws_domain: Optional[str]) -> Optional[DomainAgent]:
-        """Pick the DomainAgent for this turn, or None for the legacy
-        path. Conservative Phase 1 rule: dispatch only when the domain is
-        unambiguous — the workstream classifier resolved a domain, or
-        Stage 1 returned exactly one. The AGENT_MODE flag gates which
-        domains are agent-enabled (None = all registered)."""
+    async def _rank_agents_via_cards(self, query: str,
+                                     domains: List[str]) -> List[tuple]:
+        """Rank candidate agents by $vectorSearch over agent_cards —
+        the same Atlas primitive Stage 2 uses for services, applied to
+        the agents' discovery surface (Phase 2 of MULTI_AGENT_PLAN.md).
+        Returns [(domain, score), …] best-first; falls back to the
+        Stage 1 order with null scores if the index isn't ready."""
+        cards = self.db["agent_cards"]
+        pipeline = [
+            {"$vectorSearch": {
+                "index":         AGENT_CARDS_INDEX_NAME,
+                "path":          "description",
+                "query":         query,
+                "filter":        {"domain": {"$in": domains}},
+                "numCandidates": 50,
+                "limit":         max(len(domains), 1),
+            }},
+            {"$project": {
+                "_id": 1, "domain": 1,
+                "score": {"$meta": "vectorSearchScore"},
+            }},
+        ]
+        try:
+            cursor = await cards.aggregate(pipeline)
+            hits = await cursor.to_list()
+            ranked = [(h["domain"], h.get("score")) for h in hits
+                      if h.get("domain") in self.domain_agents]
+            # Append any candidate the index missed so Stage 1's verdict
+            # is never silently dropped by a stale/partial card index.
+            seen = {d for d, _ in ranked}
+            ranked += [(d, None) for d in domains if d not in seen]
+            if ranked:
+                return ranked
+        except Exception as e:
+            print(f"⚠️ agent card ranking failed (non-fatal): {e}")
+        return [(d, None) for d in domains]
+
+    async def _select_agents_for_turn(
+            self, user_input: str,
+            stage1_domains: Optional[List[str]],
+            ws_domain: Optional[str]) -> List[DomainAgent]:
+        """Resolve this turn to zero, one, or several DomainAgents.
+
+        Phase 2 rules, in precedence order:
+        1. Stage 1 put TWO OR MORE agent-enabled domains in scope →
+           multi-agent turn (card-ranked), even inside a workstream —
+           cross-domain questions are inherently cross-workstream.
+        2. The workstream classifier resolved an agent-enabled domain →
+           that single agent (session continuity).
+        3. Stage 1 resolved exactly one agent-enabled domain → that agent.
+        4. Otherwise → [] (legacy direct-to-server path).
+
+        The AGENT_MODE flag gates which domains are agent-enabled
+        (None = all registered)."""
         if not self.domain_agents:
-            return None
+            return []
         enabled = self._agent_domains_enabled
         if enabled is not None and not enabled:
-            return None
+            return []
 
-        def _eligible(domain: Optional[str]) -> Optional[DomainAgent]:
-            if not domain:
-                return None
-            if enabled is not None and domain not in enabled:
-                return None
-            return self.domain_agents.get(domain)
+        def _ok(domain: Optional[str]) -> bool:
+            return bool(domain) and domain in self.domain_agents \
+                and (enabled is None or domain in enabled)
 
-        if ws_domain:
-            return _eligible(ws_domain)
-        if stage1_domains and len(stage1_domains) == 1:
-            return _eligible(stage1_domains[0])
-        return None
+        candidates: List[str] = []
+        for d in stage1_domains or []:
+            if _ok(d) and d not in candidates:
+                candidates.append(d)
+
+        if len(candidates) >= 2:
+            ranked = await self._rank_agents_via_cards(user_input, candidates)
+            self._decision_under("agent_cards", ranked=[
+                {"agent": self.domain_agents[d].name,
+                 "score": s} for d, s in ranked])
+            return [self.domain_agents[d] for d, _ in ranked]
+        if _ok(ws_domain):
+            return [self.domain_agents[ws_domain]]
+        if len(candidates) == 1:
+            return [self.domain_agents[candidates[0]]]
+        return []
+
+    async def _split_subtasks(self, user_input: str,
+                              agents: List[DomainAgent]) -> Dict[str, str]:
+        """Scope the user's request into one focused sub-task per agent
+        (gpt-4o-mini, like the other routing helpers). Returns
+        {domain: sub-task}; an agent the splitter rules out gets no
+        entry. Any failure degrades to every agent receiving the full
+        query — over-asking is safe, dropping an agent is not."""
+        prompt = (
+            "You are the coordinator of domain-specialist agents. Split "
+            "the user's request into one focused sub-task per agent, "
+            "phrased as a self-contained instruction. Use null for an "
+            "agent that has nothing to contribute to this request.\n\n"
+            f"User request: {user_input!r}\n\n"
+            "Agents:\n"
+            + "\n".join(f"- {a.domain}: {a.description[:220]}"
+                        for a in agents)
+            + "\n\nReturn ONLY JSON, one key per agent domain: "
+              '{"<domain>": "<sub-task>"|null, ...}'
+        )
+        try:
+            resp = await self.openai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                response_format={"type": "json_object"},
+            )
+            parsed = json.loads(resp.choices[0].message.content)
+            out = {}
+            for a in agents:
+                st = parsed.get(a.domain)
+                if isinstance(st, str) and st.strip():
+                    out[a.domain] = st.strip()
+            if out:
+                return out
+        except Exception as e:
+            print(f"⚠️ sub-task split failed (non-fatal): {e}")
+        return {a.domain: user_input for a in agents}
 
     async def _build_agent_context(self, user_input: str,
                                    replay_recipe: str) -> AgentContext:
@@ -261,6 +355,162 @@ class AgentDispatchMixin:
             had_replay_recipe=bool(replay_recipe),
             agent_services_used=result.services_used,
             agent_status=result.status,
+            duration_ms=int((time.monotonic() - turn_t0) * 1000))
+
+        return final_answer
+
+    async def _dispatch_multi(self, agents: List[DomainAgent],
+                              user_input: str, replay_recipe: str,
+                              turn_t0: float) -> str:
+        """Run one turn across several DomainAgents concurrently and
+        synthesize a single answer (Phase 2 of MULTI_AGENT_PLAN.md).
+        The shared stdio session pool is safe under concurrency via the
+        per-session locks in _call_tool_locked; the agents' domains are
+        disjoint so their server sets don't overlap anyway."""
+        names = [a.name for a in agents]
+        self._decision_set(dispatched_agents=names)
+        await self._broadcast("DISPATCH",
+            "⇉ parallel dispatch: " + ", ".join(
+                f"{a.name} [{a.domain}]" for a in agents))
+
+        # Context (workstream block, memories, preferences) is built once
+        # and shared — both agents see the same operational memory.
+        context = await self._build_agent_context(user_input, replay_recipe)
+
+        subtasks = await self._split_subtasks(user_input, agents)
+        active = [a for a in agents if a.domain in subtasks]
+        if not active:                      # splitter ruled everyone out
+            active = agents
+            subtasks = {a.domain: user_input for a in agents}
+        for a in active:
+            await self._broadcast("DISPATCH",
+                f"  {a.name} ← {subtasks[a.domain][:160]}")
+        self._decision_under("multi", subtasks={
+            a.name: subtasks[a.domain] for a in active})
+
+        # If the splitter narrowed the turn to one agent, it's a plain
+        # single dispatch — same post-processing, no synthesis.
+        if len(active) == 1:
+            return await self._dispatch_to_agent(
+                active[0], user_input, replay_recipe, turn_t0)
+
+        first_service_seen = False
+
+        async def _on_tool_call(srv: str, tool: str, res_txt: str):
+            nonlocal first_service_seen
+            if not first_service_seen and srv != "preferences_service":
+                self.last_service = srv
+                first_service_seen = True
+            if self.current_workstream_id:
+                if self._is_meta_tool(tool):
+                    self._current_decision["meta_tool_calls_filtered"] = (
+                        self._current_decision.get(
+                            "meta_tool_calls_filtered", 0) + 1
+                    )
+                else:
+                    try:
+                        await self._attach_to_workstream(
+                            self.current_workstream_id,
+                            user_input, srv, tool, res_txt)
+                    except Exception as e:
+                        print(f"⚠️ workstream attach failed: {e}")
+
+        self.last_domain = active[0].domain  # best-ranked agent's domain
+
+        # Pre-activate every agent's domain servers from THIS task before
+        # fanning out. MCP stdio sessions are anyio-scoped: the context
+        # managers entered on the shared AsyncExitStack must be entered in
+        # the same task that exits the stack at shutdown. The gather()
+        # below runs agents in child tasks — activating there crashes
+        # aclose() with "Attempted to exit cancel scope in a different
+        # task". Inside run(), _activate_domain_servers sees the sessions
+        # already present and skips.
+        for a in active:
+            names = await a.servers_in_domain()
+            await self._activate_servers(self._resolve_server_paths(names))
+
+        results = await asyncio.gather(
+            *[a.run(subtasks[a.domain], context, on_tool_call=_on_tool_call)
+              for a in active],
+            return_exceptions=True)
+
+        sections: List[tuple] = []          # (agent, AgentResult)
+        for a, r in zip(active, results):
+            if isinstance(r, Exception):
+                print(f"⚠️ {a.name} failed: {r}")
+                r = AgentResult(
+                    answer=f"({a.name} failed: {type(r).__name__}: {r})",
+                    status="error")
+            sections.append((a, r))
+
+        # Synthesis. VERBATIM content must reach the user untouched, so
+        # if any agent short-circuited verbatim we compose labelled
+        # sections instead of paraphrasing through an LLM.
+        synthesis_t0 = time.monotonic()
+        if any(r.verbatim for _, r in sections):
+            final_answer = "\n\n".join(
+                f"## {a.name} [{a.domain}]\n\n{r.answer}"
+                for a, r in sections)
+        else:
+            synth_messages = [
+                {"role": "system", "content": (
+                    "You are the coordinator of domain-specialist agents "
+                    "in a network operations system. Combine the "
+                    "specialist answers below into ONE coherent response "
+                    "to the user's request.\n"
+                    "- Use ONLY facts from the specialist answers — do "
+                    "not invent data.\n"
+                    "- Keep concrete details: IDs, metrics, statuses, "
+                    "tables, runbook steps.\n"
+                    "- If a specialist reported an error or no data, say "
+                    "so plainly.\n"
+                    "- Operational tone for NOC engineers; speak in "
+                    "third person about customers."
+                )},
+                {"role": "user", "content": (
+                    f"User request: {user_input}\n\n"
+                    + "\n\n".join(
+                        f"### {a.name} [{a.domain}]\n{r.answer}"
+                        for a, r in sections))},
+            ]
+            synth = await self.openai.chat.completions.create(
+                model=self.model, messages=synth_messages)
+            final_answer = (synth.choices[0].message.content
+                            or "\n\n".join(r.answer for _, r in sections))
+        synthesis_ms = int((time.monotonic() - synthesis_t0) * 1000)
+
+        # Store conversation turn
+        self.conversation_history.append(
+            {"role": "user", "content": user_input})
+        self.conversation_history.append(
+            {"role": "assistant", "content": final_answer})
+        if len(self.conversation_history) > 20:
+            self.conversation_history = self.conversation_history[-20:]
+
+        if self.current_workstream_id:
+            t = asyncio.create_task(self._update_workstream_summary(
+                self.current_workstream_id, user_input, final_answer))
+            self._ws_summary_tasks.add(t)
+            t.add_done_callback(self._ws_summary_tasks.discard)
+
+        await self._persist_decision(
+            tool_calls_count=sum(r.tool_calls_count for _, r in sections),
+            iterations_used=max((r.iteration for _, r in sections),
+                                default=0),
+            max_iterations=max((r.max_iterations for _, r in sections),
+                               default=0),
+            max_iterations_hit=any(
+                r.iteration >= r.max_iterations and r.max_iterations
+                for _, r in sections),
+            had_replay_recipe=bool(replay_recipe),
+            agents={a.name: {
+                "status":        r.status,
+                "subtask":       subtasks[a.domain],
+                "tool_calls":    r.tool_calls_count,
+                "services_used": r.services_used,
+                "verbatim":      r.verbatim,
+            } for a, r in sections},
+            synthesis_ms=synthesis_ms,
             duration_ms=int((time.monotonic() - turn_t0) * 1000))
 
         return final_answer

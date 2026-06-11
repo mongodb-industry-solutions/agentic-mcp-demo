@@ -2,6 +2,52 @@
 
 ## 2026-06-11
 
+### Phase 2 of the multi-agent refactor — coordinator shell, card-ranked selection, parallel dispatch + synthesis (`agents/dispatch.py`, `agents/domain_agent.py`)
+
+The shell is now a coordinator over DomainAgents:
+
+- **Agent selection via agent cards** — `_select_agents_for_turn`
+  resolves Stage 1's domain verdict to agents. When two or more
+  agent-enabled domains are in scope, candidates are ranked by
+  `$vectorSearch` over `agent_cards.description` (with `domain` filter) —
+  agent discovery is itself an Atlas vector search, recorded in the
+  routing-decision under `agent_cards.ranked` with real scores.
+  Precedence: multi-domain fan-out beats workstream continuity beats
+  single Stage 1 domain (cross-domain questions are inherently
+  cross-workstream). `_select_domain_agent` (Phase 1) is removed.
+- **Stage 2 moved inside the agent** — `DomainAgent._select_servers`
+  narrows large domains per-task via `_semantic_search` pre-filtered to
+  the agent's domain; domains at or under `MAX_SERVERS_PER_TASK` (5 —
+  today's IBN/DTW) activate everything. The shell no longer runs Stage 2
+  for agent turns.
+- **Parallel multi-domain dispatch** — `_dispatch_multi`: gpt-4o-mini
+  splits the request into per-agent sub-tasks (failure degrades to
+  every agent getting the full query), agents run concurrently via
+  `asyncio.gather` sharing one context build, and a gpt-4o synthesis
+  pass combines the answers (skipped — labelled sections instead — when
+  any agent returned VERBATIM content). Analytics gain
+  `dispatched_agents`, per-agent `outcome.agents.{status, subtask,
+  tool_calls, services_used}`, `multi.subtasks`, and `synthesis_ms`.
+- **anyio task-affinity fix** — MCP stdio context managers entered on
+  the shared `AsyncExitStack` must be entered in the task that later
+  closes the stack. Multi-dispatch therefore pre-activates every
+  agent's servers from the dispatcher's task before `gather()`; agents
+  find the sessions present and skip activation. Without this,
+  shutdown crashed with "Attempted to exit cancel scope in a different
+  task than it was entered in".
+
+The legacy direct-to-server path is NOT deleted — it remains the
+shell's own tool surface for the 15 domains without an agent, exactly
+as the target architecture sketches ("singletons stay direct tools of
+the shell"). `AGENT_MODE` default stays off pending soak; flipping the
+default is the post-soak step.
+
+Verified on live Atlas: cross-domain turn ("IBN fleet compliance + DTW
+scenarios") with Stage 1 [ibn, dtw], card ranking (dtw 0.685 / ibn
+0.629), correct per-domain sub-tasks, both agents concurrent (1 tool
+call each), coherent synthesis, clean shutdown; single-dispatch and
+legacy-fallthrough regressions pass.
+
 ### Phase 1 of the multi-agent refactor — DomainAgent + agent cards (`agents/domain_agent.py`, `agents/catalog/`, `agents/dispatch.py`)
 
 First step from *one orchestrator → N MCP servers* toward *shell → domain
