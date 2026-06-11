@@ -1,5 +1,42 @@
 # CHANGES.md
 
+## 2026-06-11
+
+### Phase 0 of the multi-agent refactor — decompose the orchestrator monolith (`agents/`)
+
+`agents/orchestrator.py` (3,395 lines, six concerns in one class) is split
+into mixin modules with **byte-identical method bodies** — verified by
+extracting every member block from `HEAD` and asserting exact-substring
+presence in the new files. Zero behavior change; this is the prerequisite
+for the multi-agent architecture (see `MULTI_AGENT_PLAN.md`).
+
+New layout: `broadcast.py` (ANSI palette + live-feed POST), `registry.py`
+(service discovery / hash sync), `router.py` (two-stage routing + the
+routing-decision analytics helpers), `memory.py` (extract / recall /
+promote / decay + knobs), `workstreams.py` (short-term working memory),
+`mcp_pool.py` (stdio session pool), `react.py` (`_SYSTEM_PROMPT` + the
+ReAct loop). `orchestrator.py` remains the composition root —
+`OrchestratorAgent` now inherits the seven mixins and keeps only
+`__init__`, the context-manager lifecycle, and `process_query`.
+
+The only authored change is the ReAct seam: the tool-collection + context
+assembly + tool-iteration section of `process_query` became
+`ReactMixin._run_react`, which returns
+`{answer, verbatim, iteration, max_iterations, tool_calls_count}`. The
+VERBATIM short-circuit persists its routing-decision record inside
+`_run_react` (as before) and signals `verbatim=True` so `process_query`
+returns immediately, skipping history/summary/persist — identical control
+flow to the inline original.
+
+Public surface unchanged: `main.py` and `web/shell.py` keep importing
+`OrchestratorAgent` / `BROADCAST_RECEIVE_URL` from `agents.orchestrator`,
+which re-exports all former module-level constants for compatibility.
+
+Verified: `py_compile` on all modules; full bootstrap against live Atlas
+(26 services synced, 17 domains, open workstream resumed); one end-to-end
+query through routing → activation → ReAct → analytics
+(`outcome.tool_calls_count=1, iterations_used=2` persisted correctly).
+
 ## 2026-05-27
 
 ### Asymmetric voyage-4 retrieval — replaces Atlas autoEmbed for Stage 2 routing (`agents/orchestrator.py`, MongoDB `vector_index`)

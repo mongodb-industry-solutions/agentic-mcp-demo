@@ -35,7 +35,7 @@ There is no test suite or linter configured — this is a prototype/demo project
 
 ### Entry Points
 - `main.py` — Interactive CLI loop; supports `status`, `memory`, `exit`, or natural language queries
-- `agents/orchestrator.py` — `OrchestratorAgent` class; the core brain
+- `agents/orchestrator.py` — `OrchestratorAgent` class; the core brain. Composition root over seven mixin modules in `agents/` (Phase 0 of `MULTI_AGENT_PLAN.md`): `broadcast.py`, `registry.py`, `router.py`, `memory.py`, `workstreams.py`, `mcp_pool.py`, `react.py`. The class behavior is unchanged — the sections below describe methods that now physically live in those modules
 - `mcp_servers/*.py` — Pluggable FastMCP service modules
 - `web/portfolio_dashboard.py` — FastAPI + WebSocket dashboard for the portfolio service, driven by MongoDB Change Streams (run separately on `localhost:8050`)
 - `web/ibn_dashboard.py` — FastAPI + WebSocket dashboard for the Intent-Based Networking demo, driven by Change Streams across `ibn_intents`, `ibn_compliance_events`, `ibn_telemetry`, `ibn_policy_snapshots` (run separately on `localhost:8060`; supports `?mode=eng` and `?mode=exec`)
