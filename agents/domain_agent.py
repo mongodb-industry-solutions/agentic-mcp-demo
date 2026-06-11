@@ -21,6 +21,7 @@ agents/catalog/. The description doubles as the agent card text synced
 to the vector-indexed agent_registry.agent_cards collection.
 """
 
+import datetime
 import json
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
@@ -220,7 +221,11 @@ class DomainAgent:
         if consult_enabled:
             openai_tools.append(self._consult_tool_spec(others))
 
+        # The date matters: Phase 4 moved NL field extraction (including
+        # relative-deadline resolution like "by tomorrow 18:00") from the
+        # MCP servers into the agents.
         system = (self.system_prompt
+                  + f"\n\nToday's date is {datetime.date.today().isoformat()}."
                   + (self.CONSULT_GUIDANCE if consult_enabled else "")
                   + context.workstream_block
                   + context.memory_block

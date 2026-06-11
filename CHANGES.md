@@ -2,6 +2,58 @@
 
 ## 2026-06-11
 
+### Phase 4 of the multi-agent refactor — thin the MCP servers; AGENT_MODE default flipped (`mcp_servers/`, `agents/`)
+
+The three embedded OpenAI calls moved up into the domain agents. The
+rule is now enforced for the IBN/DTW domains: **servers contain zero
+`openai` imports** — reasoning lives in agents, execution lives in
+servers. (The remaining `openai` imports under `mcp_servers/` are
+`acc_proof_point_service`, `portfolio_service`, `preferences_service` —
+other domains, candidates for when they get agents.)
+
+- **`ibn_intent_service.submit_intent`** now takes structured fields
+  (`raw_text`, `site_name`, `services`, `pos_latency_ms`, …, `deadline`
+  as ISO). The agent's own LLM performs extraction as part of
+  tool-argument generation — no separate parse call exists anywhere.
+  Deviation from the plan sketch: no deprecated text wrapper — the only
+  callers are LLMs reading live schemas, so the signature changed in
+  place.
+- **`dtw_scenario_service`** — `create_scenario` and `update_scenario`
+  take structured fields; the amendment LLM is gone (the agent computes
+  updated values itself, with conversation context — strictly better
+  than the old blind re-parse). Hint resolution stays server-side as a
+  data operation: new `_resolve_qos_hint` accepts ids, names, and
+  numeric rates; a rate with no exact profile maps to the nearest one
+  with an explicit substitution note (verified: '47 Mbps' →
+  `qos_postpaid_standard` 50 Mbps + warning). update_scenario semantics:
+  each provided field REPLACES the stored value wholesale.
+- **`dtw_simulation_service`** — `_create_scenario_inline` and the
+  `text=` fallback params are gone; simulation never creates scenarios.
+- **Agents** — `DomainAgent.run` injects today's date into the system
+  prompt (relative-deadline resolution moved agent-side; verified: 'by
+  tomorrow 18:00' → 2026-06-12T18:00). IBN/DTW catalog prompts gain
+  extraction guidance sections.
+- **AGENT_MODE default flipped to `all`** (the deferred Phase 2
+  post-soak cleanup): agents are on by default;
+  `AGENT_MODE=off|0|legacy` opts out to legacy routing.
+- **Workstream-context fix** — testing surfaced that the entity-reuse
+  guidance in the workstream block made the agent reuse the existing
+  IBN-005 intent (running check_feasibility on it) instead of
+  submitting a new one for a "I'm opening a new store at X" request.
+  Both copies of the block (react.py legacy + dispatch.py) gain a
+  CRITICAL rule: a NEW intent description always goes through
+  submit_intent, never reuses an intent ID from context. ⚠ During that
+  test the live IBN-005 document was accidentally deleted; it was
+  reconstructed from `PLAN-IBN-005-20260602172308` + the workstream
+  audit trail (status active, runbook history preserved, an explicit
+  'restored' history entry added).
+
+Verified on live Atlas: e2e IBN submission (new IBN-006, site resolved
+to site-ham-alt, targets 35ms/99.9%/strict, deadline resolved, test doc
+removed afterwards), e2e DTW scenario creation ('7.2 to 19 Mbps in NYC
+Saturday evening' → correct change_set/scope), substitution-note unit
+test, and `py_compile` across all touched files.
+
 ### Phase 3 of the multi-agent refactor — agent-to-agent consultation (`agents/domain_agent.py`, `agents/dispatch.py`)
 
 Domain agents can now ask each other questions mid-turn:

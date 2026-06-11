@@ -7,10 +7,15 @@
 DTW Scenario Service — What-if scenario lifecycle for the digital twin demo.
 
 The submit-and-track surface of the Digital Twin demo. Owns dtw_scenarios.
-Captures natural-language what-if requests ("raise prepaid M to 20 Mbps in
-NYC and LA on Saturday night"), parses them into a structured change_set +
-scope via gpt-4o, and tracks lifecycle status. The actual numerical
-simulation is performed by the simulation service.
+Records what-if scenarios ("raise prepaid M to 20 Mbps in NYC and LA on
+Saturday night") as a structured change_set + scope and tracks lifecycle
+status. Field extraction from natural language is performed by the calling
+domain agent (Phase 4 of MULTI_AGENT_PLAN.md) — this service receives
+structured fields plus the verbatim raw text and performs only data
+operations: plan/QoS/market hint resolution (including numeric rates like
+'19 Mbps' → nearest profile, with an explicit substitution note),
+persistence, and lifecycle transitions. The actual numerical simulation is
+performed by the simulation service.
 
 Use this service when users say:
 - Submit:   "what if we raise prepaid M to 20 Mbps in NYC",
@@ -48,13 +53,11 @@ wrong tool.
 """
 
 import datetime
-import json
 import logging
 import os
 import re
 
 from pymongo import MongoClient, DESCENDING
-from openai import OpenAI
 from mcp.server.fastmcp import FastMCP
 
 logging.disable(logging.WARNING)
@@ -68,9 +71,6 @@ scenarios     = db["dtw_scenarios"]
 plans         = db["dtw_plans"]
 qos_profiles  = db["dtw_qos_profiles"]
 markets_coll  = db["dtw_markets"]
-
-openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-PARSE_MODEL   = os.environ.get("OPENAI_MODEL", "gpt-4o")
 
 
 def _next_scenario_id() -> str:
@@ -129,45 +129,41 @@ def _resolve_market_id(hint: str) -> str | None:
     return None
 
 
-def _parse_natural_language(text: str) -> dict:
-    """Use gpt-4o to extract a structured what-if scenario from natural language."""
-    today = datetime.date.today().isoformat()
-    prompt = (
-        f"You are a parser for telecom what-if scenarios on a digital twin. "
-        f"Today is {today}.\n\n"
-        f"Extract structured fields from this request:\n\n{text!r}\n\n"
-        f"Known plans: {', '.join(_known_plans())}\n"
-        f"Known QoS profiles: {', '.join(_known_qos())}\n"
-        f"Known markets: {', '.join(_known_markets())}\n\n"
-        "Return ONLY valid JSON, no prose, with this schema:\n"
-        "{\n"
-        '  "scenario_type": "qos_change" | "policy_change" | "subscriber_shift" | "other",\n'
-        '  "change_set": {\n'
-        '    "plan_id": string | null,\n'
-        '    "old_qos_profile_id": string | null,\n'
-        '    "new_qos_profile_id": string | null,\n'
-        '    "apn_change": { "from": string, "to": string } | null,\n'
-        '    "pcrf_template_change": { "from": string, "to": string } | null,\n'
-        '    "roaming_enable": string[] | null      // country codes\n'
-        "  },\n"
-        '  "scope": {\n'
-        '    "markets": string[],          // subset of known markets, [] = all\n'
-        '    "time_windows": string[]      // e.g. ["Saturday_20_23"], [] = all known\n'
-        "  },\n"
-        '  "summary": string                // one short sentence\n'
-        "}\n\n"
-        "Use null/[] for fields not mentioned. Do not invent plan or market ids "
-        "outside the known lists. If a user says '7.2 to 20 Mbps', map to "
-        "qos_prepaid_7_2 and qos_prepaid_20 if those exist. Prefer 'Saturday_20_23' "
-        "when the user mentions Saturday evening/night."
-    )
-    resp = openai_client.chat.completions.create(
-        model=PARSE_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-        response_format={"type": "json_object"},
-    )
-    return json.loads(resp.choices[0].message.content)
+def _resolve_qos_hint(hint: str) -> tuple[str | None, str]:
+    """Resolve a QoS hint to a profile id. Accepts exact ids, name
+    fragments, and numeric rates ('19', '19 Mbps'). When a numeric rate
+    has no exact profile, the nearest one is substituted and an explicit
+    note is returned — silently rounding '19 Mbps' down to an 18 Mbps
+    profile is the kind of dishonest UX that makes users think the
+    system is broken. Returns (qos_id_or_passthrough, substitution_note)."""
+    if not hint:
+        return None, ""
+    if qos_profiles.find_one({"_id": hint}):
+        return hint, ""
+    doc = qos_profiles.find_one(
+        {"name": {"$regex": re.escape(hint), "$options": "i"}})
+    if doc:
+        return doc["_id"], ""
+    m = re.search(r"(\d+(?:\.\d+)?)", str(hint))
+    if m:
+        rate = float(m.group(1))
+        exact = qos_profiles.find_one({"max_downlink_mbps": rate})
+        if exact:
+            return exact["_id"], ""
+        candidates = [p for p in qos_profiles.find(
+            {"max_downlink_mbps": {"$exists": True, "$ne": None}})]
+        if candidates:
+            nearest = min(candidates,
+                          key=lambda p: abs(p["max_downlink_mbps"] - rate))
+            available = sorted(p["max_downlink_mbps"] for p in candidates)
+            note = (
+                f"⚠️ Requested **{rate:g} Mbps** has no exact QoS profile "
+                f"— using nearest match `{nearest['_id']}` "
+                f"(**{nearest['max_downlink_mbps']:g} Mbps**). Available "
+                f"tiers: {', '.join(f'{r:g}' for r in available)} Mbps."
+            )
+            return nearest["_id"], note
+    return hint, ""  # passthrough — keeps the hint visible downstream
 
 
 def _format_scenario_card(s: dict) -> str:
@@ -210,29 +206,64 @@ def _format_scenario_card(s: dict) -> str:
 # ─── Tools ─────────────────────────────────────────────────────────────────
 
 @mcp.tool()
-def create_scenario(text: str) -> str:
+def create_scenario(raw_text: str, scenario_type: str,
+                    plan: str = None, old_qos: str = None,
+                    new_qos: str = None,
+                    apn_from: str = None, apn_to: str = None,
+                    pcrf_from: str = None, pcrf_to: str = None,
+                    roaming_enable: list[str] = None,
+                    markets: list[str] = None,
+                    time_windows: list[str] = None,
+                    summary: str = None) -> str:
     """
-    Submit a new natural-language what-if scenario. The service parses the
-    request via LLM, extracts change_set (plan, QoS old→new, APN/roaming
-    changes) and scope (markets, time windows), and stores it in
-    dtw_scenarios with status='submitted'.
+    Submit a new what-if scenario with STRUCTURED fields. The calling
+    agent extracts the fields from the user's natural-language request
+    (Phase 4: parsing lives in the domain agent, not here); this service
+    resolves plan/QoS/market hints against the twin's catalog (numeric
+    rates like '19 Mbps' map to the nearest profile with an explicit
+    substitution note) and stores the scenario with status='submitted'.
 
     Next step: call simulate_qos_change (or simulate_roaming_change) from
-    the simulation service with the returned scenario_id.
+    the simulation service once the user confirms the parameters.
 
     Args:
-        text: The user's natural-language what-if request.
+        raw_text:       The user's what-if request VERBATIM (stored for audit).
+        scenario_type:  'qos_change' | 'policy_change' | 'subscriber_shift'
+                        | 'other'.
+        plan:           Plan id or name hint, e.g. 'plan_ACME_M' or 'ACME M'.
+        old_qos:        Current QoS profile — id, name, or rate ('7.2').
+        new_qos:        Target QoS profile — id, name, or rate ('20 Mbps').
+        apn_from:       Current APN (policy changes).
+        apn_to:         Target APN (policy changes).
+        pcrf_from:      Current PCRF template ref (policy changes).
+        pcrf_to:        Target PCRF template ref (policy changes).
+        roaming_enable: Country codes/names to enable roaming in.
+        markets:        Market hints, e.g. ['NYC', 'LA'] — resolved to
+                        canonical ids. Empty = all markets.
+        time_windows:   Window ids, e.g. ['Saturday_20_23'] for Saturday
+                        evening. Empty = all known windows.
+        summary:        One short sentence describing the what-if.
+                        Omit anything the user did not mention; never
+                        invent values.
     """
-    parsed = _parse_natural_language(text)
-
-    # Light id-normalization in case the LLM produced near-misses
-    cs = parsed.get("change_set") or {}
-    cs["plan_id"]             = _resolve_plan_id(cs.get("plan_id") or "")  or cs.get("plan_id")
-    cs["old_qos_profile_id"]  = _resolve_qos_id (cs.get("old_qos_profile_id") or "")  or cs.get("old_qos_profile_id")
-    cs["new_qos_profile_id"]  = _resolve_qos_id (cs.get("new_qos_profile_id") or "")  or cs.get("new_qos_profile_id")
-    sc = parsed.get("scope") or {}
-    sc["markets"] = [m for m in (sc.get("markets") or []) if _resolve_market_id(m)] \
-                    or (sc.get("markets") or [])
+    old_qos_id, note_old = _resolve_qos_hint(old_qos or "")
+    new_qos_id, note_new = _resolve_qos_hint(new_qos or "")
+    cs = {
+        "plan_id":            _resolve_plan_id(plan or "") or plan,
+        "old_qos_profile_id": old_qos_id,
+        "new_qos_profile_id": new_qos_id,
+        "apn_change": ({"from": apn_from, "to": apn_to}
+                       if (apn_from or apn_to) else None),
+        "pcrf_template_change": ({"from": pcrf_from, "to": pcrf_to}
+                                 if (pcrf_from or pcrf_to) else None),
+        "roaming_enable": roaming_enable or None,
+    }
+    sc = {
+        "markets": ([_resolve_market_id(m) or m for m in (markets or [])]),
+        "time_windows": time_windows or [],
+    }
+    substitution_note = " ".join(n for n in (note_old, note_new) if n)
+    parsed = {"scenario_type": scenario_type, "summary": summary}
 
     # Reject inputs that don't actually describe a what-if change.
     # Without this guard, imperative commands ("run simulation", "show me
@@ -258,15 +289,15 @@ def create_scenario(text: str) -> str:
     sid = _next_scenario_id()
     doc = {
         "_id":            sid,
-        "description":    parsed.get("summary") or text[:120],
+        "description":    parsed.get("summary") or raw_text[:120],
         "scenario_type":  parsed.get("scenario_type") or "other",
-        "raw_text":       text,
+        "raw_text":       raw_text,
         "change_set":     cs,
         "scope":          sc,
         "status":         "submitted",
         "submitted_at":   datetime.datetime.now(),
         "history":        [{"ts": datetime.datetime.now(), "event": "submitted",
-                            "note": "parsed from natural language"}],
+                            "note": "structured submit by domain agent"}],
         "results":        None,
     }
     scenarios.insert_one(doc)
@@ -296,6 +327,8 @@ def create_scenario(text: str) -> str:
         lines.append(f"- Markets: {', '.join(sc['markets'])}")
     if sc.get("time_windows"):
         lines.append(f"- Time windows: {', '.join(sc['time_windows'])}")
+    if substitution_note:
+        lines += ["", substitution_note]
     lines += [
         f"",
         f"If the parameters look correct, say **'run the simulation'**.",
@@ -306,22 +339,49 @@ def create_scenario(text: str) -> str:
 
 
 @mcp.tool()
-def update_scenario(modification: str, scenario_id: str = None) -> str:
+def update_scenario(modification: str, scenario_id: str = None,
+                    plan: str = None, old_qos: str = None,
+                    new_qos: str = None,
+                    apn_from: str = None, apn_to: str = None,
+                    pcrf_from: str = None, pcrf_to: str = None,
+                    roaming_enable: list[str] = None,
+                    markets: list[str] = None,
+                    time_windows: list[str] = None,
+                    summary: str = None) -> str:
     """
-    Apply a natural-language modification to an existing submitted scenario
-    before running the simulation. Re-parses the original request with the
-    change applied and updates change_set + scope in place.
+    Apply a modification to an existing submitted scenario before
+    running the simulation. The calling agent computes the UPDATED field
+    values itself (Phase 4: amendment reasoning lives in the domain
+    agent, which also has the conversation context) and passes ONLY the
+    fields that change — each provided field REPLACES the stored value
+    wholesale (e.g. to add LA when markets is ['NYC_Metro'], pass
+    markets=['NYC_Metro', 'LA_Metro']). Unspecified fields stay
+    untouched.
 
-    If scenario_id is omitted, targets the most-recently submitted scenario
-    (i.e. 'the last one', 'the current scenario').
+    If scenario_id is omitted, targets the most-recently submitted
+    scenario (i.e. 'the last one', 'the current scenario').
 
     Args:
-        modification: What to change, in plain language — e.g.
-                      "raise downlink to 50 Mbps", "NYC only",
-                      "change time window to Sunday morning",
-                      "add LA to the scope".
-        scenario_id:  Scenario to update. Defaults to the most recent
-                      submitted (not yet simulated) scenario.
+        modification:   The user's amendment in plain language — recorded
+                        in the scenario history, e.g. "raise downlink to
+                        50 Mbps", "NYC only".
+        scenario_id:    Scenario to update. Defaults to the most recent
+                        submitted (not yet simulated) scenario.
+        plan:           New plan id/name hint, only if it changes.
+        old_qos:        New value for the current-QoS field — id, name,
+                        or rate ('7.2').
+        new_qos:        New value for the target-QoS field — id, name, or
+                        rate ('15 Mbps'). Rates without an exact profile
+                        map to the nearest one with an explicit
+                        substitution note.
+        apn_from:       New source APN, only if it changes.
+        apn_to:         New target APN, only if it changes.
+        pcrf_from:      New source PCRF template ref, only if it changes.
+        pcrf_to:        New target PCRF template ref, only if it changes.
+        roaming_enable: COMPLETE new country list, if it changes.
+        markets:        COMPLETE new market list, if it changes.
+        time_windows:   COMPLETE new window list, if it changes.
+        summary:        Updated one-sentence description, if it changes.
     """
     if scenario_id:
         s = scenarios.find_one({"_id": scenario_id})
@@ -337,106 +397,34 @@ def update_scenario(modification: str, scenario_id: str = None) -> str:
         return (f"❌ Scenario {s['_id']} is already '{s.get('status')}' "
                 f"and cannot be modified. Submit a new scenario instead.")
 
-    # Focused amendment LLM: give it the EXISTING scenario as JSON and the
-    # user's modification, ask for the updated JSON. This is much more
-    # reliable than re-parsing "original + amendment" as one block, which
-    # the LLM tended to anchor on the original (e.g. keeping new_qos =
-    # qos_prepaid_20 even when the user said "change to 15 Mbps").
-    original_cs = s.get("change_set") or {}
-    original_sc = s.get("scope") or {}
-    amend_prompt = (
-        "You are amending an existing what-if scenario on a telecom digital "
-        "twin. Apply the user's modification to the EXISTING change_set and "
-        "scope, leaving fields untouched when the modification is silent on "
-        "them. Return ONLY the COMPLETE updated JSON — same schema as the "
-        "input, every field included.\n\n"
-        f"Known plans: {', '.join(_known_plans())}\n"
-        f"Known QoS profiles: {', '.join(_known_qos())}\n"
-        f"Known markets: {', '.join(_known_markets())}\n\n"
-        f"Existing change_set: {json.dumps(original_cs)}\n"
-        f"Existing scope:      {json.dumps(original_sc)}\n\n"
-        f"User modification: {modification!r}\n\n"
-        "Schema:\n"
-        "{\n"
-        '  "change_set": {\n'
-        '    "plan_id": string | null,\n'
-        '    "old_qos_profile_id": string | null,\n'
-        '    "new_qos_profile_id": string | null,\n'
-        '    "apn_change": { "from": string, "to": string } | null,\n'
-        '    "pcrf_template_change": { "from": string, "to": string } | null,\n'
-        '    "roaming_enable": string[] | null\n'
-        "  },\n"
-        '  "scope": {\n'
-        '    "markets": string[],\n'
-        '    "time_windows": string[]\n'
-        "  },\n"
-        '  "summary": string\n'
-        "}\n\n"
-        "Examples of correct amendments:\n"
-        "- modification 'change to 15 Mbps' + existing new_qos_profile_id "
-        "'qos_prepaid_20' → new_qos_profile_id 'qos_prepaid_15'.\n"
-        "- modification 'NYC only' + existing scope.markets "
-        "['NYC_Metro','LA_Metro'] → scope.markets ['NYC_Metro'].\n"
-        "- modification 'add Chicago' + existing scope.markets "
-        "['NYC_Metro'] → scope.markets ['NYC_Metro','Chicago_Metro'].\n"
-        "- modification 'change to Sunday morning' + existing "
-        "scope.time_windows ['Saturday_20_23'] → "
-        "scope.time_windows ['Sunday_06_12']."
-    )
-    resp = openai_client.chat.completions.create(
-        model=PARSE_MODEL,
-        messages=[{"role": "user", "content": amend_prompt}],
-        temperature=0,
-        response_format={"type": "json_object"},
-    )
-    parsed = json.loads(resp.choices[0].message.content)
-
-    cs = parsed.get("change_set") or {}
-    cs["plan_id"]            = _resolve_plan_id(cs.get("plan_id") or "") or cs.get("plan_id")
-    cs["old_qos_profile_id"] = _resolve_qos_id(cs.get("old_qos_profile_id") or "") or cs.get("old_qos_profile_id")
-    cs["new_qos_profile_id"] = _resolve_qos_id(cs.get("new_qos_profile_id") or "") or cs.get("new_qos_profile_id")
-    # Belt-and-braces: if the amendment LLM dropped a field that the
-    # original had, restore it from the original.
-    for k, v in original_cs.items():
-        if cs.get(k) in (None, "", [], {}) and v not in (None, "", [], {}):
-            cs[k] = v
-
-    sc = parsed.get("scope") or {}
-    sc["markets"] = ([m for m in sc.get("markets", []) if _resolve_market_id(m)]
-                     or sc.get("markets") or [])
-    for k, v in original_sc.items():
-        if sc.get(k) in (None, "", [], {}) and v not in (None, "", [], {}):
-            sc[k] = v
-
-    # Substitution detection: when the user requested a specific Mbps value
-    # but the LLM mapped to the nearest available profile, surface the
-    # substitution explicitly. Silently rounding "change to 19 Mbps" down to
-    # qos_prepaid_18 (18 Mbps) is the kind of dishonest UX that makes users
-    # think the system is broken.
+    cs = dict(s.get("change_set") or {})
+    sc = dict(s.get("scope") or {})
     substitution_note = ""
-    # The TARGET rate in an amendment is the LAST Mbps mention — "change
-    # from 7.2 Mbps to 19 Mbps" must capture 19, not 7.2. Use findall and
-    # take the final match.
-    mbps_matches = re.findall(r"(\d+(?:\.\d+)?)\s*mbps", modification, re.I)
-    if mbps_matches and cs.get("new_qos_profile_id"):
-        requested_rate = float(mbps_matches[-1])
-        profile = qos_profiles.find_one({"_id": cs["new_qos_profile_id"]})
-        actual_rate = (profile or {}).get("max_downlink_mbps")
-        if actual_rate is not None and abs(requested_rate - actual_rate) > 0.05:
-            # Find all prepaid profiles for the available-tiers hint
-            available = sorted([
-                p.get("max_downlink_mbps")
-                for p in qos_profiles.find(
-                    {"_id": {"$regex": r"^qos_prepaid_"}},
-                    {"max_downlink_mbps": 1})
-                if p.get("max_downlink_mbps")
-            ])
-            substitution_note = (
-                f"⚠️ Requested **{requested_rate:g} Mbps** has no exact QoS "
-                f"profile — using nearest match `{cs['new_qos_profile_id']}` "
-                f"(**{actual_rate:g} Mbps**). Available prepaid tiers: "
-                f"{', '.join(f'{r:g}' for r in available)} Mbps."
-            )
+
+    if plan is not None:
+        cs["plan_id"] = _resolve_plan_id(plan) or plan
+    if old_qos is not None:
+        qid, note = _resolve_qos_hint(old_qos)
+        cs["old_qos_profile_id"] = qid
+        substitution_note = note or substitution_note
+    if new_qos is not None:
+        qid, note = _resolve_qos_hint(new_qos)
+        cs["new_qos_profile_id"] = qid
+        substitution_note = note or substitution_note
+    if apn_from is not None or apn_to is not None:
+        prev = cs.get("apn_change") or {}
+        cs["apn_change"] = {"from": apn_from or prev.get("from"),
+                            "to":   apn_to or prev.get("to")}
+    if pcrf_from is not None or pcrf_to is not None:
+        prev = cs.get("pcrf_template_change") or {}
+        cs["pcrf_template_change"] = {"from": pcrf_from or prev.get("from"),
+                                      "to":   pcrf_to or prev.get("to")}
+    if roaming_enable is not None:
+        cs["roaming_enable"] = roaming_enable or None
+    if markets is not None:
+        sc["markets"] = [_resolve_market_id(m) or m for m in markets]
+    if time_windows is not None:
+        sc["time_windows"] = time_windows
 
     scenarios.update_one(
         {"_id": s["_id"]},
@@ -444,7 +432,7 @@ def update_scenario(modification: str, scenario_id: str = None) -> str:
             "$set": {
                 "change_set":  cs,
                 "scope":       sc,
-                "description": parsed.get("summary") or s["description"],
+                "description": summary or s["description"],
             },
             "$push": {"history": {
                 "ts":    datetime.datetime.now(),
@@ -469,6 +457,8 @@ def update_scenario(modification: str, scenario_id: str = None) -> str:
         lines.append(f"- New QoS profile: `{cs['new_qos_profile_id']}`")
     if cs.get("apn_change"):
         lines.append(f"- APN: `{cs['apn_change'].get('from')}` → `{cs['apn_change'].get('to')}`")
+    if cs.get("pcrf_template_change"):
+        lines.append(f"- PCRF template: `{cs['pcrf_template_change'].get('from')}` → `{cs['pcrf_template_change'].get('to')}`")
     if cs.get("roaming_enable"):
         lines.append(f"- Roaming enable: {', '.join(cs['roaming_enable'])}")
     if sc.get("markets"):

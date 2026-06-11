@@ -181,7 +181,15 @@ main task.
   agent "any active compliance violations at sites in these markets during
   Saturday peak?" and the simulation narrative cites the answer.
 
-## Phase 4 — Thin the MCP servers
+## Phase 4 — Thin the MCP servers ✅ DONE 2026-06-11
+
+Completed — see the 2026-06-11 Phase 4 entry in CHANGES.md. Deviations
+from the sketch below: no deprecated text wrappers (the only callers
+are LLMs reading live schemas, so signatures changed in place), and no
+separate parse step exists in the agents either — the agent's own LLM
+extracts fields as part of tool-argument generation, which is cheaper
+than the old dedicated gpt-4o parse call. The AGENT_MODE default also
+flipped to `all` here (the deferred Phase 2 post-soak step).
 
 Move the three embedded LLM calls up into the agents:
 

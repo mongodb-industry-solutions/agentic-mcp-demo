@@ -132,18 +132,19 @@ class OrchestratorAgent(BroadcastMixin, RegistryMixin, RouterMixin,
         self.session_locks: Dict[str, asyncio.Lock] = {}
         # DomainAgent instances, built from agents/catalog at __aenter__.
         self.domain_agents: Dict[str, object] = {}
-        # AGENT_MODE feature flag gates which domains dispatch to a
-        # DomainAgent instead of the legacy routing path:
-        #   unset/'0'/'off'  → legacy only (default)
-        #   '1'/'true'/'ibn' → the IBN agent only
-        #   'all'            → every catalog agent
-        #   'ibn,dtw'        → explicit domain list
-        mode = os.environ.get("AGENT_MODE", "").strip().lower()
-        if mode in ("", "0", "false", "off"):
+        # AGENT_MODE flag gates which domains dispatch to a DomainAgent
+        # instead of the legacy routing path. Default flipped to 'all'
+        # after the Phase 2 soak (post-soak cleanup):
+        #   unset/'all'        → every catalog agent (default)
+        #   '0'/'off'/'legacy' → legacy routing only (opt-out)
+        #   '1'/'ibn'          → the IBN agent only
+        #   'ibn,dtw'          → explicit domain list
+        mode = os.environ.get("AGENT_MODE", "all").strip().lower()
+        if mode in ("0", "false", "off", "legacy"):
             self._agent_domains_enabled: set | None = set()
         elif mode in ("1", "true", "on", "ibn"):
             self._agent_domains_enabled = {"ibn"}
-        elif mode == "all":
+        elif mode in ("", "all"):
             self._agent_domains_enabled = None  # None = all registered
         else:
             self._agent_domains_enabled = {

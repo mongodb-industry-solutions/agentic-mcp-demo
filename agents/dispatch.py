@@ -203,7 +203,13 @@ class AgentDispatchMixin:
                     "('raise X to Y in Z', 'what if we change plan X'), always "
                     "call create_scenario to parse and record it as a new "
                     "scenario — do not reuse a scenario ID from the workstream "
-                    "context for a new simulation request."
+                    "context for a new simulation request.\n"
+                    "CRITICAL: When the user describes a NEW customer intent "
+                    "('I'm opening a new store at X', 'new branch', 'we need "
+                    "connectivity at Y'), always call submit_intent to capture "
+                    "it as a NEW intent — do not reuse an existing intent ID "
+                    "from the workstream context, even when the site or "
+                    "wording looks similar."
                 )
                 bcast_parts = [ws_doc.get("title", "(untitled)")]
                 if ents:
