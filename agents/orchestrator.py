@@ -54,11 +54,13 @@ from .memory import (MemoryMixin, MEMORY_PROMOTE_THRESHOLD,
 from .workstreams import WorkstreamMixin
 from .mcp_pool import McpPoolMixin
 from .react import ReactMixin, _SYSTEM_PROMPT
+from .dispatch import AgentDispatchMixin
+from .catalog import build_agents
 
 
 class OrchestratorAgent(BroadcastMixin, RegistryMixin, RouterMixin,
                         MemoryMixin, WorkstreamMixin, McpPoolMixin,
-                        ReactMixin):
+                        ReactMixin, AgentDispatchMixin):
 
     def __init__(self, server_dir: str = "mcp_servers", local_broadcast=None):
         self.server_dir = Path(server_dir)
@@ -123,8 +125,36 @@ class OrchestratorAgent(BroadcastMixin, RegistryMixin, RouterMixin,
         self.temp_dir = Path(tempfile.mkdtemp(prefix="mcp_cloud_"))
         self._watcher_task: asyncio.Task | None = None
 
+        # ── Phase 1 (MULTI_AGENT_PLAN.md): domain agents ──────────────
+        # Per-server stdio session locks — required once domain agents
+        # can run concurrently against the shared session pool. Created
+        # lazily by _call_tool_locked.
+        self.session_locks: Dict[str, asyncio.Lock] = {}
+        # DomainAgent instances, built from agents/catalog at __aenter__.
+        self.domain_agents: Dict[str, object] = {}
+        # AGENT_MODE feature flag gates which domains dispatch to a
+        # DomainAgent instead of the legacy routing path:
+        #   unset/'0'/'off'  → legacy only (default)
+        #   '1'/'true'/'ibn' → the IBN agent only
+        #   'all'            → every catalog agent
+        #   'ibn,dtw'        → explicit domain list
+        mode = os.environ.get("AGENT_MODE", "").strip().lower()
+        if mode in ("", "0", "false", "off"):
+            self._agent_domains_enabled: set | None = set()
+        elif mode in ("1", "true", "on", "ibn"):
+            self._agent_domains_enabled = {"ibn"}
+        elif mode == "all":
+            self._agent_domains_enabled = None  # None = all registered
+        else:
+            self._agent_domains_enabled = {
+                d.strip() for d in mode.split(",") if d.strip()}
+
     async def __aenter__(self):
         await self._sync_registry()
+        # Phase 1: build domain agents from the catalog and publish their
+        # agent cards (the vector-indexed discovery surface) to Atlas.
+        self.domain_agents = build_agents(self)
+        await self._sync_agent_cards()
         await self._ensure_workstream_indexes()
         await self._ensure_memory_indexes()
         await self._ensure_routing_decision_indexes()
@@ -333,6 +363,18 @@ class OrchestratorAgent(BroadcastMixin, RegistryMixin, RouterMixin,
         if replay_source_id:
             replay_recipe = await self._build_replay_recipe(
                 replay_source_id, target_workstream_id=ws_id)
+
+        # ── Phase 1 agent dispatch (MULTI_AGENT_PLAN.md) ──────────────────
+        # When AGENT_MODE enables a DomainAgent for the resolved domain,
+        # hand the whole turn to it: the agent runs its own ReAct loop
+        # over its domain's MCP tools, and _dispatch_to_agent mirrors the
+        # legacy post-processing. Everything else falls through to the
+        # legacy single-loop path below.
+        if not is_meta_query:
+            _agent = self._select_domain_agent(stage1_domains, ws_domain)
+            if _agent is not None:
+                return await self._dispatch_to_agent(
+                    _agent, user_input, replay_recipe, turn_t0)
 
         # ── Stage 2 — vector search within precomputed Stage 1 domains ────
         # Follow-up detection and Stage 1 already ran upfront (in

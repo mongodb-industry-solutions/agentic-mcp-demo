@@ -63,7 +63,8 @@ TITLE_COLORS = {
     "ROUTING":    Colors.RESET,
     "ACTION":     Colors.RESET,
     "RESULT":     Colors.BRIGHT_GREEN,
-    "ERROR":      Colors.BRIGHT_RED
+    "ERROR":      Colors.BRIGHT_RED,
+    "DISPATCH":   Colors.BRIGHT_MAGENTA,
 }
 
 

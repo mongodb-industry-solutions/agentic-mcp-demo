@@ -79,7 +79,14 @@ surface (`process_query`, `list_servers_info`, context manager), so
 Acceptance: run both demos end-to-end (IBN violation flow, DTW Flow A);
 live feed and dashboards behave identically.
 
-## Phase 1 — Introduce `DomainAgent`
+## Phase 1 — Introduce `DomainAgent` ✅ DONE 2026-06-11
+
+Completed — see the 2026-06-11 Phase 1 entry in CHANGES.md. Deviations
+from the sketch below: agent specs are plain dicts in `agents/catalog/`
+(not YAML); both IBN and DTW agents are registered (the `AGENT_MODE`
+flag defaults to IBN-only dispatch, `all` enables both); `AgentResult`
+carries `status` but the NEEDS_INPUT protocol is deferred to Phase 2;
+per-session locks went in as planned (lazy, in `_call_tool_locked`).
 
 New `agents/domain_agent.py`:
 

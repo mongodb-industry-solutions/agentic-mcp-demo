@@ -2,6 +2,54 @@
 
 ## 2026-06-11
 
+### Phase 1 of the multi-agent refactor — DomainAgent + agent cards (`agents/domain_agent.py`, `agents/catalog/`, `agents/dispatch.py`)
+
+First step from *one orchestrator → N MCP servers* toward *shell → domain
+agents → thin MCP servers*. New pieces:
+
+- **`DomainAgent`** (`agents/domain_agent.py`) — a domain-scoped
+  specialist with its own system prompt and its own ReAct loop over only
+  its domain's MCP tools. Loop semantics deliberately mirror the legacy
+  loop (5/8 iterations, `parallel_tool_calls=False`, VERBATIM
+  short-circuit, forced final answer). Context (workstream block,
+  recalled memories, preferences, replay recipe) is prepared by the shell
+  and injected via `AgentContext`; the tool-call audit flows back via
+  `AgentResult`.
+- **Agent catalog** (`agents/catalog/{base,ibn,dtw}.py`) — declarative
+  specs `{name, domain, description, system_prompt}`. The per-service
+  "use this when…" docstring guidance is folded into each agent's prompt;
+  the DTW prompt encodes the scenario-before-simulation discipline.
+- **Agent cards in Atlas** (`agents/dispatch.py`) — every catalog agent
+  is published to `agent_registry.agent_cards` `{_id, description,
+  domain, tools_claimed, last_seen}`; the `agent_cards_index` (autoEmbed
+  voyage-4 on `description`, `domain` filter, quantization float) is
+  created programmatically. Agent discovery becomes an Atlas vector
+  search — used by the Phase 2 coordinator; Phase 1 selects by exact
+  domain match.
+- **Dispatch** (`AgentDispatchMixin`) — gated by the `AGENT_MODE` env
+  flag (unset → legacy only; `1` → IBN agent; `all` → every catalog
+  agent; or a domain list `ibn,dtw`). Conservative selection: dispatch
+  only when the domain is unambiguous (`ws_domain` from the workstream
+  classifier, or a single Stage 1 domain). The dispatcher mirrors all
+  legacy post-processing: per-call workstream attachment + meta-tool
+  filtering, stickiness, conversation history, background summary task,
+  and the routing-decision record (now with `dispatched_agent`,
+  `outcome.agent_services_used`, `outcome.agent_status`).
+- **Concurrency prerequisite** — `McpPoolMixin._call_tool_locked` adds
+  lazy per-session `asyncio.Lock`s so two agents can share the stdio
+  session pool; `_resolve_server_paths` extracts the path-resolution
+  logic for reuse. New `DISPATCH` broadcast tag (bright magenta) shows
+  the hand-off in the live feed; agent-internal lines are prefixed
+  `[ibn_agent]`.
+
+Verified: cards + vector index created on live Atlas; `AGENT_MODE`
+unset bootstraps with dispatch disabled; `AGENT_MODE=1` end-to-end IBN
+turn dispatches to `ibn_agent` (1 tool call via `ibn_assurance_service`,
+attached to the open IBN workstream, analytics record correct). A fresh-
+session "show all intents" fell through to legacy by design — Stage 1
+classified it billing/customer/todo, a pre-existing taxonomy ambiguity
+unrelated to dispatch.
+
 ### Phase 0 of the multi-agent refactor — decompose the orchestrator monolith (`agents/`)
 
 `agents/orchestrator.py` (3,395 lines, six concerns in one class) is split
