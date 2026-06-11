@@ -2,6 +2,47 @@
 
 ## 2026-06-11
 
+### Phase 3 of the multi-agent refactor — agent-to-agent consultation (`agents/domain_agent.py`, `agents/dispatch.py`)
+
+Domain agents can now ask each other questions mid-turn:
+
+- **`consult_agent` tool** — injected into a DomainAgent's toolset only
+  at depth 0 (a user turn) when other agents are registered. It is not
+  an MCP tool: the run loop special-cases it before the `srv__tool`
+  split and hands it to the shell. The matching prompt guidance
+  (`CONSULT_GUIDANCE`) is appended to the system prompt only when the
+  tool is actually offered, so consulted agents never see instructions
+  for a tool they lack.
+- **Shell mediation** (`_consult_agent`) — resolves the target by name
+  or domain, runs it at `depth=1` (no consult tool → recursion is
+  structurally impossible) with `max_iterations=3` (the single-turn
+  budget) and a bare `AgentContext` — the question must be
+  self-contained. The asking agent has a `CONSULT_BUDGET` of 2 per
+  turn; exhaustion returns an instructive error instead of failing.
+- **Audit trail** — every exchange is persisted to
+  `agent_registry.agent_conversations` `{ts, workstream_id, from_agent,
+  to_agent, question, answer, status, tool_calls, services_used,
+  duration_ms}`, indexed by recency and workstream — Change-Stream-able
+  for a future dashboard panel. Consultations are deliberately NOT
+  attached to the workstream tool-call trail (that would pollute
+  service-level stickiness); `agent_conversations` is their home.
+  Analytics gain `outcome.agent_consults` (single dispatch) and
+  per-agent `consults` (multi dispatch).
+- **anyio coverage** — multi-dispatch now pre-activates ALL registered
+  agents' servers (not just the active ones) because any agent can be
+  consulted from a gather child task.
+- **DTW demo beat** — the DTW prompt gains a cross-domain check: after
+  simulation results, when the user asked about overall operational
+  risk, it may consult `ibn_agent` once for active retail compliance
+  violations and cite the answer.
+
+Verified on live Atlas: direct consult (dtw_agent → ibn_agent, depth-1
+run used `ibn_assurance_service`, answer attributed "Per the IBN
+agent…", conversation doc persisted with timings) and full-pipeline
+e2e with `AGENT_MODE=dtw` — the turn routed to dtw_agent alone, which
+listed scenarios with its own tool and consulted ibn_agent mid-turn
+(`outcome: tool_calls 1, consults 1`).
+
 ### Phase 2 of the multi-agent refactor — coordinator shell, card-ranked selection, parallel dispatch + synthesis (`agents/dispatch.py`, `agents/domain_agent.py`)
 
 The shell is now a coordinator over DomainAgents:

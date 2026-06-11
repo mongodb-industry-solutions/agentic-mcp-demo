@@ -160,7 +160,15 @@ Acceptance: cross-domain query works end-to-end, e.g. *"We're planning the
 QoS uplift in NYC — and check whether any IBN intents are currently
 violated."* — both agents run concurrently, shell synthesizes one answer.
 
-## Phase 3 — Agent-to-agent consultation
+## Phase 3 — Agent-to-agent consultation ✅ DONE 2026-06-11
+
+Completed — see the 2026-06-11 Phase 3 entry in CHANGES.md. As
+sketched: depth=1 enforcement, single-turn budget (max_iterations=3,
+2 consults per asking turn), agent_conversations audit collection, and
+the DTW→IBN demo beat in the DTW prompt. Addition beyond the sketch:
+multi-dispatch pre-activates all registered agents' servers so a
+consult from a gather child task never enters stdio sessions off the
+main task.
 
 - Each `DomainAgent` gets one extra tool: `consult_agent(agent, question)`.
   The shell mediates the call (it owns the agent instances), enforces

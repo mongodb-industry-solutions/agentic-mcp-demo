@@ -355,6 +355,7 @@ class AgentDispatchMixin:
             had_replay_recipe=bool(replay_recipe),
             agent_services_used=result.services_used,
             agent_status=result.status,
+            agent_consults=result.consults,
             duration_ms=int((time.monotonic() - turn_t0) * 1000))
 
         return final_answer
@@ -417,15 +418,17 @@ class AgentDispatchMixin:
 
         self.last_domain = active[0].domain  # best-ranked agent's domain
 
-        # Pre-activate every agent's domain servers from THIS task before
-        # fanning out. MCP stdio sessions are anyio-scoped: the context
-        # managers entered on the shared AsyncExitStack must be entered in
-        # the same task that exits the stack at shutdown. The gather()
-        # below runs agents in child tasks — activating there crashes
-        # aclose() with "Attempted to exit cancel scope in a different
-        # task". Inside run(), _activate_domain_servers sees the sessions
-        # already present and skips.
-        for a in active:
+        # Pre-activate ALL registered agents' domain servers from THIS
+        # task before fanning out. MCP stdio sessions are anyio-scoped:
+        # the context managers entered on the shared AsyncExitStack must
+        # be entered in the same task that exits the stack at shutdown.
+        # The gather() below runs agents in child tasks — activating
+        # there crashes aclose() with "Attempted to exit cancel scope in
+        # a different task". All agents (not just the active ones) are
+        # covered because any registered agent can be consulted mid-turn
+        # from a child task (Phase 3). Inside run(),
+        # _activate_domain_servers sees the sessions present and skips.
+        for a in self.domain_agents.values():
             names = await a.servers_in_domain()
             await self._activate_servers(self._resolve_server_paths(names))
 
@@ -507,6 +510,7 @@ class AgentDispatchMixin:
                 "status":        r.status,
                 "subtask":       subtasks[a.domain],
                 "tool_calls":    r.tool_calls_count,
+                "consults":      r.consults,
                 "services_used": r.services_used,
                 "verbatim":      r.verbatim,
             } for a, r in sections},
@@ -514,6 +518,72 @@ class AgentDispatchMixin:
             duration_ms=int((time.monotonic() - turn_t0) * 1000))
 
         return final_answer
+
+    async def _consult_agent(self, from_agent: DomainAgent,
+                             to_name: str, question: str) -> str:
+        """Shell-mediated agent-to-agent consultation (Phase 3 of
+        MULTI_AGENT_PLAN.md). The consulted agent runs at depth=1 (no
+        consult tool — recursion is structurally impossible) with a
+        smaller single-turn iteration budget and a bare context: the
+        question must be self-contained. Every exchange is persisted to
+        agent_registry.agent_conversations as the audit trail."""
+        target = next(
+            (a for a in self.domain_agents.values()
+             if a.name == to_name or a.domain == to_name), None)
+        if target is None or target is from_agent:
+            available = ", ".join(
+                a.name for a in self.domain_agents.values()
+                if a is not from_agent)
+            return (f"❌ No such agent: {to_name!r}. "
+                    f"Available: {available or '(none)'}")
+
+        await self._broadcast("DISPATCH",
+            f"↔ {from_agent.name} consults {target.name}: {question[:140]}")
+        t0 = time.monotonic()
+        try:
+            result = await target.run(question, AgentContext(),
+                                      depth=1, max_iterations=3)
+            answer = result.answer
+            status = result.status
+        except Exception as e:
+            print(f"⚠️ consultation {from_agent.name}→{target.name} "
+                  f"failed: {e}")
+            answer = (f"❌ Consultation failed: {type(e).__name__}: {e}")
+            result = None
+            status = "error"
+
+        try:
+            await self.db["agent_conversations"].insert_one({
+                "ts":            datetime.datetime.now(),
+                "workstream_id": self.current_workstream_id,
+                "from_agent":    from_agent.name,
+                "to_agent":      target.name,
+                "question":      question,
+                "answer":        answer,
+                "status":        status,
+                "tool_calls":    result.tool_calls_count if result else 0,
+                "services_used": result.services_used if result else [],
+                "duration_ms":   int((time.monotonic() - t0) * 1000),
+            })
+        except Exception as e:
+            print(f"⚠️ agent_conversations persist failed (non-fatal): {e}")
+
+        await self._broadcast("DISPATCH",
+            f"↩ {target.name} → {from_agent.name}: "
+            + self._format_result_preview(answer))
+        return answer
+
+    async def _ensure_agent_conversation_indexes(self):
+        """agent_conversations is queried by recency (live feed,
+        analytics) and by workstream (audit trail per thread)."""
+        try:
+            conv = self.db["agent_conversations"]
+            await conv.create_index([("ts", -1)], name="conv_recency")
+            await conv.create_index([("workstream_id", 1)],
+                                    name="conv_workstream")
+        except Exception as e:
+            print(f"⚠️ agent_conversations index ensure failed "
+                  f"(non-fatal): {e}")
 
     async def _sync_agent_cards(self):
         """Publish every catalog agent's card to agent_registry.agent_cards

@@ -155,6 +155,8 @@ class OrchestratorAgent(BroadcastMixin, RegistryMixin, RouterMixin,
         # agent cards (the vector-indexed discovery surface) to Atlas.
         self.domain_agents = build_agents(self)
         await self._sync_agent_cards()
+        # Phase 3: agent-to-agent consultation audit trail.
+        await self._ensure_agent_conversation_indexes()
         await self._ensure_workstream_indexes()
         await self._ensure_memory_indexes()
         await self._ensure_routing_decision_indexes()

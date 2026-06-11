@@ -54,7 +54,13 @@ _SYSTEM_PROMPT = (
     "call simulate_qos_change / simulate_roaming_change WITHOUT the "
     "text argument — passing text would create a stale duplicate.\n"
     "- Scenario IDs look like DTW-SCN-003 — use them exactly as "
-    "returned; never invent IDs.\n"
+    "returned; never invent IDs.\n\n"
+    "🤝 CROSS-DOMAIN CHECK:\n"
+    "After presenting simulation results, if the consult_agent tool is "
+    "available and the user asked about overall operational risk, you "
+    "may consult ibn_agent ONCE for active retail-network compliance "
+    "violations and cite its answer in the summary. Skip this when the "
+    "user asked a narrow data question.\n"
 )
 
 AGENT = {
