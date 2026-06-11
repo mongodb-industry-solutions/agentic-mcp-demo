@@ -2,6 +2,31 @@
 
 ## 2026-06-11
 
+### Market resolution: 'LA' resolved to Dallas_Metro (`dtw_scenario_service`, `dtw_topology_service`)
+
+Live-demo find after Phase 4: "raise ACME M downlink in NYC and LA" was
+created with scope `[NYC_Metro, Dallas_Metro]` — the simulation then
+faithfully reported Dallas bottlenecks. Root cause: both market
+resolvers ran an UNANCHORED case-insensitive name regex before id
+matching, and 'LA' substring-matches 'Da-LLA-s-Fort Worth' while
+'Los Angeles Metro' doesn't even contain the substring 'la'. The bug
+was latent pre-Phase 4 because the old parse LLM was handed the
+known-market list and returned canonical ids itself; once the agent
+started passing city hints, the resolver became the deciding factor.
+
+Fix in both `_resolve_market_id` (scenario service) and
+`_resolve_market` (topology service): id matching (exact, then prefix —
+'LA' → 'LA_Metro') runs BEFORE any name matching, and the name regex is
+anchored at a word boundary with the hint escaped ('New York' →
+NYC_Metro, 'Fort Worth' → Dallas_Metro). The DTW agent prompt now also
+suggests passing canonical ids when known. Verified with an 8-case
+resolution matrix across both services.
+
+Note for existing data: scenarios created while the bug was live (e.g.
+DTW-SCN-002 from the 2026-06-11 demo session) retain Dallas_Metro in
+their stored scope — amend conversationally ("change markets to NYC and
+LA") and re-run, or delete and recreate.
+
 ### Phase 4 of the multi-agent refactor — thin the MCP servers; AGENT_MODE default flipped (`mcp_servers/`, `agents/`)
 
 The three embedded OpenAI calls moved up into the domain agents. The

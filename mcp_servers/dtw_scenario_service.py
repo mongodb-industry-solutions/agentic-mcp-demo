@@ -115,17 +115,28 @@ def _resolve_qos_id(hint: str) -> str | None:
 
 
 def _resolve_market_id(hint: str) -> str | None:
+    """Resolve a market hint to a canonical id. Id matching (exact, then
+    prefix) runs BEFORE any name matching, and the name regex is anchored
+    at a word boundary — an unanchored substring match sent 'LA' to
+    'Da-LLA-s-Fort Worth' instead of LA_Metro ('Los Angeles Metro'
+    doesn't even contain the substring 'la')."""
     if not hint:
         return None
     if markets_coll.find_one({"_id": hint}):
         return hint
-    doc = markets_coll.find_one({"name": {"$regex": hint, "$options": "i"}})
-    if doc:
-        return doc["_id"]
     h = hint.lower()
-    for m in _known_markets():
+    known = _known_markets()
+    for m in known:                       # case-insensitive exact id
+        if m.lower() == h:
+            return m
+    for m in known:                       # id prefix: 'LA' → 'LA_Metro'
         if m.lower().startswith(h):
             return m
+    doc = markets_coll.find_one(          # word-anchored name match:
+        {"name": {"$regex": rf"\b{re.escape(hint)}",  # 'New York' → NYC_Metro
+                  "$options": "i"}})
+    if doc:
+        return doc["_id"]
     return None
 
 

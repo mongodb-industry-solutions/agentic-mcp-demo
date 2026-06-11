@@ -39,6 +39,7 @@ reference one of those id shapes, this service is the wrong tool.
 
 import logging
 import os
+import re
 from pymongo import MongoClient, ASCENDING
 from mcp.server.fastmcp import FastMCP
 
@@ -55,22 +56,26 @@ markets_coll  = db["dtw_markets"]
 
 
 def _resolve_market(hint: str) -> str | None:
-    """Map loose market hints to canonical market ids."""
+    """Map loose market hints to canonical market ids. Id matching
+    (exact, then prefix) runs BEFORE any name matching, and the name
+    regex is anchored at a word boundary — an unanchored substring
+    match sent 'LA' to 'Da-LLA-s-Fort Worth' instead of LA_Metro."""
     if not hint:
         return None
     h = hint.lower().replace("-", "_").replace(" ", "_")
-    direct = markets_coll.find_one({"_id": {"$regex": f"^{hint}$", "$options": "i"}})
+    direct = markets_coll.find_one({"_id": {"$regex": f"^{re.escape(hint)}$", "$options": "i"}})
     if direct:
         return direct["_id"]
-    # Fuzzy match against names
-    by_name = markets_coll.find_one({"name": {"$regex": hint, "$options": "i"}})
-    if by_name:
-        return by_name["_id"]
-    # Match prefix
+    # Id prefix: 'LA' → 'LA_Metro'
     candidates = [m["_id"] for m in markets_coll.find({})]
     for c in candidates:
         if c.lower().startswith(h):
             return c
+    # Word-anchored name match: 'New York' → NYC_Metro
+    by_name = markets_coll.find_one(
+        {"name": {"$regex": rf"\b{re.escape(hint)}", "$options": "i"}})
+    if by_name:
+        return by_name["_id"]
     return None
 
 
