@@ -48,7 +48,6 @@ import json
 import logging
 import os
 
-from openai import OpenAI
 from pymongo import MongoClient, DESCENDING
 from mcp.server.fastmcp import FastMCP
 
@@ -69,70 +68,6 @@ subscribers        = db["dtw_subscribers"]
 knowledge_chunks   = db["dtw_knowledge_chunks"]
 markets_coll       = db["dtw_markets"]
 
-openai_client      = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-PARSE_MODEL        = os.environ.get("OPENAI_MODEL", "gpt-4o")
-
-
-def _next_scenario_id() -> str:
-    last = scenarios.find_one(
-        {"_id": {"$regex": r"^DTW-SCN-\d+$"}},
-        sort=[("_id", DESCENDING)],
-    )
-    return "DTW-SCN-001" if not last else f"DTW-SCN-{int(last['_id'].split('-')[-1]) + 1:03d}"
-
-
-def _create_scenario_inline(text: str) -> str:
-    """Parse a natural-language what-if request and persist it as a scenario.
-    Returns the new scenario_id."""
-    known_plans   = [p["_id"] for p in plans.find({}, {"_id": 1})]
-    known_qos     = [q["_id"] for q in qos_profiles.find({}, {"_id": 1})]
-    known_markets = [m["_id"] for m in markets_coll.find({}, {"_id": 1})]
-
-    prompt = (
-        f"You are a parser for telecom what-if scenarios on a digital twin. "
-        f"Today is {datetime.date.today().isoformat()}.\n\n"
-        f"Extract structured fields from this request:\n\n{text!r}\n\n"
-        f"Known plans: {', '.join(known_plans)}\n"
-        f"Known QoS profiles: {', '.join(known_qos)}\n"
-        f"Known markets: {', '.join(known_markets)}\n\n"
-        "Return ONLY valid JSON with this schema:\n"
-        '{\n  "scenario_type": "qos_change"|"policy_change"|"other",\n'
-        '  "change_set": {\n'
-        '    "plan_id": string|null, "old_qos_profile_id": string|null,\n'
-        '    "new_qos_profile_id": string|null,\n'
-        '    "apn_change": {"from":string,"to":string}|null,\n'
-        '    "pcrf_template_change": {"from":string,"to":string}|null,\n'
-        '    "roaming_enable": string[]|null\n  },\n'
-        '  "scope": {"markets": string[], "time_windows": string[]},\n'
-        '  "summary": string\n}'
-    )
-    resp = openai_client.chat.completions.create(
-        model=PARSE_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-    )
-    raw = resp.choices[0].message.content.strip()
-    raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    parsed = json.loads(raw)
-
-    sid = _next_scenario_id()
-    cs  = parsed.get("change_set") or {}
-    sc  = parsed.get("scope") or {}
-    scenarios.insert_one({
-        "_id":           sid,
-        "description":   parsed.get("summary") or text[:120],
-        "scenario_type": parsed.get("scenario_type") or "other",
-        "raw_text":      text,
-        "change_set":    cs,
-        "scope":         sc,
-        "status":        "submitted",
-        "submitted_at":  datetime.datetime.now(),
-        "history":       [{"ts": datetime.datetime.now(), "event": "submitted",
-                           "note": "inline-created by simulation service"}],
-        "results":       None,
-    })
-    logger.info(f"Inline-created scenario {sid}")
-    return sid
 
 
 # ─── Thresholds (per DTW-POL-002 in seed data) ─────────────────────────────
@@ -472,7 +407,7 @@ def _hybrid_knowledge_search(fingerprint: str, scenario: dict) -> tuple[list, li
 # ─── Public tools ─────────────────────────────────────────────────────────
 
 @mcp.tool()
-def simulate_qos_change(scenario_id: str = None, text: str = None) -> str:
+def simulate_qos_change(scenario_id: str = None) -> str:
     """
     Run a QoS-uplift simulation (Flow A) on an EXISTING submitted scenario.
 
@@ -487,37 +422,27 @@ def simulate_qos_change(scenario_id: str = None, text: str = None) -> str:
       • If scenario_id is given, use it.
       • Otherwise, use the MOST-RECENTLY SUBMITTED scenario (the usual
         demo flow: create_scenario → optional update_scenario → "run").
-      • Only if NO submitted scenario exists at all do we accept text= as
-        a fallback and create one inline. Do NOT pass text= when an
-        existing scenario was just created by dtw_scenario_service —
-        that would create a duplicate scenario with potentially stale
-        parameters (e.g. ignoring the user's most recent amendment).
+      • If no submitted scenario exists, this tool returns an error —
+        create one first via dtw_scenario_service.create_scenario.
+        (Phase 4: scenario creation always goes through the scenario
+        service; the inline-creation fallback is gone.)
 
     Args:
         scenario_id: Existing scenario id, e.g. 'DTW-SCN-003'. Usually
                      unnecessary — the tool defaults to the most-recent
                      submitted scenario.
-        text:        ONE-SHOT FALLBACK ONLY. Free-text what-if used to
-                     create a scenario inline when NO submitted scenario
-                     exists. Ignored if any submitted scenario is present.
     """
     if not scenario_id:
-        # Always prefer an existing submitted scenario. text= is only used
-        # when the collection is empty (true one-shot). This guards against
-        # the agent passing the original query as text when an existing
-        # scenario is already in workstream context — which would create a
-        # duplicate scenario with the original (pre-amendment) parameters.
         latest = scenarios.find_one(
             {"status": "submitted"},
             sort=[("submitted_at", DESCENDING)],
         )
         if latest:
             scenario_id = latest["_id"]
-        elif text:
-            scenario_id = _create_scenario_inline(text)
         else:
-            return ("❌ No submitted scenario found. Submit a what-if first "
-                    "(e.g. 'Raise ACME M downlink to 20 Mbps in NYC').")
+            return ("❌ No submitted scenario found. Create one first via "
+                    "dtw_scenario_service.create_scenario (e.g. 'Raise "
+                    "ACME M downlink to 20 Mbps in NYC').")
 
     s = scenarios.find_one({"_id": scenario_id})
     if not s:
@@ -699,25 +624,20 @@ def simulate_qos_change(scenario_id: str = None, text: str = None) -> str:
 
 
 @mcp.tool()
-def simulate_roaming_change(scenario_id: str = None, text: str = None) -> str:
+def simulate_roaming_change(scenario_id: str = None) -> str:
     """
     Run a control-plane simulation for an APN / PCRF / roaming-enable
-    scenario (Flow B). Projects HSS query-rate and attach-rate impact and
-    surfaces analogous past scenarios via the hybrid vector search.
+    scenario (Flow B) on an EXISTING submitted scenario. Projects HSS
+    query-rate and attach-rate impact and surfaces analogous past
+    scenarios via the hybrid vector search.
 
-    Pass either scenario_id (pre-created) or text (free-form description of
-    the change — the scenario is created inline). You do not need to call
-    dtw_scenario_service first.
+    Defaults to the most-recently submitted scenario when scenario_id is
+    omitted. If no submitted scenario exists, this tool returns an
+    error — create one first via dtw_scenario_service.create_scenario.
 
     Args:
         scenario_id: Pre-existing scenario id (DTW-SCN-###), if available.
-        text:        Natural-language description of the APN/PCRF/roaming
-                     change (e.g. "Migrate ACME M to new APN, update PCRF
-                     template, enable Canada roaming"). Used when no
-                     scenario_id is provided.
     """
-    # Always prefer an existing submitted scenario over creating inline from
-    # text — see simulate_qos_change docstring for the full rationale.
     if not scenario_id:
         latest = scenarios.find_one(
             {"status": "submitted"},
@@ -725,11 +645,10 @@ def simulate_roaming_change(scenario_id: str = None, text: str = None) -> str:
         )
         if latest:
             scenario_id = latest["_id"]
-        elif text:
-            scenario_id = _create_scenario_inline(text)
         else:
-            return ("❌ No submitted scenario found. Submit one first "
-                    "(e.g. 'Migrate ACME M to new APN, enable Canada roaming').")
+            return ("❌ No submitted scenario found. Create one first via "
+                    "dtw_scenario_service.create_scenario (e.g. 'Migrate "
+                    "ACME M to a new APN, enable Canada roaming').")
 
     s = scenarios.find_one({"_id": scenario_id})
     if not s:

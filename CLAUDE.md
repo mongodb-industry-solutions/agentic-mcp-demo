@@ -35,7 +35,8 @@ There is no test suite or linter configured — this is a prototype/demo project
 
 ### Entry Points
 - `main.py` — Interactive CLI loop; supports `status`, `memory`, `exit`, or natural language queries
-- `agents/orchestrator.py` — `OrchestratorAgent` class; the core brain
+- `agents/orchestrator.py` — `OrchestratorAgent` class; the core brain. Composition root over eight mixin modules in `agents/` (Phases 0–1 of `MULTI_AGENT_PLAN.md`): `broadcast.py`, `registry.py`, `router.py`, `memory.py`, `workstreams.py`, `mcp_pool.py`, `react.py`, `dispatch.py`. The legacy behavior is unchanged — the sections below describe methods that now physically live in those modules
+- `agents/domain_agent.py` + `agents/catalog/` — `DomainAgent` (Phases 1–3): domain-scoped specialists (`ibn_agent`, `dtw_agent`) with their own system prompts and ReAct loops over only their domain's MCP tools; each agent runs its own in-domain Stage 2 server selection. Gated by the `AGENT_MODE` env flag (unset/`all` → every catalog agent, the default; `off`/`0`/`legacy` → legacy routing only; `1`/`ibn` → IBN agent only; or `ibn,dtw` list). The agents own NL field extraction (Phase 4) — `mcp_servers/` IBN/DTW services contain no `openai` imports. Agent cards are synced to the vector-indexed `agent_registry.agent_cards` collection at startup; when a turn spans two or more agent domains, the shell ranks agents by `$vectorSearch` over the cards, splits the request into per-agent sub-tasks (gpt-4o-mini), runs the agents concurrently, and synthesizes one answer (gpt-4o). Agents can also consult each other mid-turn via the shell-mediated `consult_agent` tool (depth-limited to 1, budget 2 per turn); every exchange is persisted to `agent_registry.agent_conversations`
 - `mcp_servers/*.py` — Pluggable FastMCP service modules
 - `web/portfolio_dashboard.py` — FastAPI + WebSocket dashboard for the portfolio service, driven by MongoDB Change Streams (run separately on `localhost:8050`)
 - `web/ibn_dashboard.py` — FastAPI + WebSocket dashboard for the Intent-Based Networking demo, driven by Change Streams across `ibn_intents`, `ibn_compliance_events`, `ibn_telemetry`, `ibn_policy_snapshots` (run separately on `localhost:8060`; supports `?mode=eng` and `?mode=exec`)
@@ -78,7 +79,7 @@ Create a new `.py` file in `mcp_servers/` using the FastMCP framework. The orche
 
 A 5-service flow demonstrating Atlas as the operational memory + decision layer between customer intent, network reality, and automated assurance. The five services live alongside the others in `mcp_servers/`:
 
-- `ibn_intent_service` — NL → structured intent (`gpt-4o`), lifecycle management (submit / list / get / cancel)
+- `ibn_intent_service` — intent lifecycle management (submit / list / get / cancel); `submit_intent` takes structured fields — NL extraction happens in the IBN domain agent (Phase 4)
 - `ibn_inventory_service` — sites, resources, topology; geospatial `find_nearby_spare` via 2dsphere
 - `ibn_feasibility_service` — match intent against inventory (`check_feasibility`, `propose_plan`, `activate_plan`)
 - `ibn_assurance_service` — compliance computation + the **hybrid vector diagnose query** (`diagnose_violation`); also `apply_runbook` and `update_template_version`
@@ -104,7 +105,7 @@ The five services live alongside the others in `mcp_servers/`:
 - `dtw_plan_service` — plans, QoS profiles, subscriber samples (`describe_plan`, `get_qos_profile`, `list_plans`, `compare_qos_profiles`, `subscribers_for_plan`)
 - `dtw_topology_service` — RAN + core inventory and dependency graph; wraps `$graphLookup` over `dtw_topology_edges` (`get_network_element`, `find_cells_in_market`, `traverse_dependencies`, `find_path_between`, `list_markets`)
 - `dtw_traffic_service` — per-cell traffic models and load estimation by time window (`get_traffic_model`, `estimate_cell_load`, `list_time_windows`, `peak_hours_for_market`)
-- `dtw_scenario_service` — NL → structured what-if scenario (`gpt-4o`); lifecycle (`create_scenario`, `list_scenarios`, `get_scenario`, `cancel_scenario`)
+- `dtw_scenario_service` — what-if scenario lifecycle (`create_scenario`, `update_scenario`, `list_scenarios`, `get_scenario`, `cancel_scenario`); takes structured fields — NL extraction happens in the DTW domain agent (Phase 4), the service resolves plan/QoS/market hints (numeric rates map to the nearest profile with an explicit substitution note)
 - `dtw_simulation_service` — the **hero**. `simulate_qos_change` runs `$graphLookup` for scope + per-cell load projection from `dtw_traffic_models` + hybrid `$vectorSearch` against `dtw_knowledge_chunks` for analogous past scenarios — in one tool call. `simulate_roaming_change` does the Flow B control-plane variant. Also `diff_scenarios`, `get_simulation_result`
 
 **The WOW combo** in `dtw_simulation_service.simulate_qos_change`: $graphLookup walks the dependency tree from `plan_ACME_M` downstream through QoS → cells → eNBs → SGW → PGW, while a hybrid `$vectorSearch` against `dtw_knowledge_chunks.text` (with structured pre-filters on `segment`, `market`, `kind`) surfaces semantically similar past incidents and their mitigation runbooks. Graph for *operational structure*, vector for *institutional memory* — both in one Atlas store, both invoked at simulate-time.

@@ -7,10 +7,13 @@
 IBN Intent Service — Customer Intent Lifecycle Management
 
 The customer-facing surface of the Intent-Based Networking demo. Owns the
-ibn_intents collection. Captures natural-language business intents for retail
+ibn_intents collection. Records customer business intents for retail
 network services (POS priority, guest segmentation, availability targets,
-deadlines), parses them into structured form via gpt-4o, and tracks lifecycle
-state (submitted → feasible → planned → active → violated → closed).
+deadlines) and tracks lifecycle state (submitted → feasible → planned →
+active → violated → closed). Field extraction from natural language is
+performed by the calling domain agent (Phase 4 of MULTI_AGENT_PLAN.md) —
+this service receives structured fields plus the verbatim raw text and
+performs only data operations (site resolution, persistence).
 
 Use this service when users say:
 - Submit:   "I'm opening a new <store> at <location>", "new branch", "submit intent",
@@ -25,12 +28,10 @@ inventory, compute compliance, or simulate telemetry — those belong to the
 feasibility, inventory, assurance, and telemetry services respectively.
 """
 
-import json
 import logging
 import os
 import datetime
 from pymongo import MongoClient, ASCENDING, DESCENDING
-from openai import OpenAI
 from mcp.server.fastmcp import FastMCP
 
 logging.disable(logging.WARNING)
@@ -43,9 +44,6 @@ db           = mongo_client["agent_registry"]
 intents      = db["ibn_intents"]
 sites        = db["ibn_sites"]
 customers    = db["ibn_customers"]
-
-openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-PARSE_MODEL   = os.environ.get("OPENAI_MODEL", "gpt-4o")
 
 
 def _next_intent_id() -> str:
@@ -94,49 +92,14 @@ def _resolve_site(site_hint: str) -> dict | None:
     )
 
 
-def _parse_natural_language(text: str) -> dict:
-    """Use gpt-4o to extract structured intent fields from natural language."""
-    today = datetime.date.today().isoformat()
-    prompt = (
-        f"You are an Intent-Based Networking parser. Today's date is {today}.\n\n"
-        f"Extract structured fields from this customer request:\n\n"
-        f"{text!r}\n\n"
-        f"Return ONLY valid JSON, no prose, with this schema:\n"
-        "{\n"
-        '  "site_name":   string  // full site name: district + city, e.g. "Munich Marienplatz". Always include both city and district/neighbourhood if mentioned, in the form "<city> <district>".\n'
-        '  "customer":    string  // company name if mentioned, else null\n'
-        '  "services":    string[]  // subset of ["pos","guest_wifi","camera_uplink","kiosk","voip"]\n'
-        '  "targets": {\n'
-        '    "pos_latency_ms":    number|null,\n'
-        '    "availability_pct":  number|null,\n'
-        '    "segmentation":      "strict"|"relaxed"|null,\n'
-        '    "kiosk_count":       number|null\n'
-        "  },\n"
-        '  "deadline":    string|null  // ISO datetime; resolve relative phrases against today\n'
-        "}\n\n"
-        "Resolve relative deadlines (e.g. 'by 18:00', 'by tomorrow') against today's date.\n"
-        "Use null for fields not mentioned. Do not invent values."
-    )
-
-    resp = openai_client.chat.completions.create(
-        model=PARSE_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-        response_format={"type": "json_object"},
-    )
-    raw = resp.choices[0].message.content
-    parsed = json.loads(raw)
-
-    # Coerce deadline string to datetime if present
-    if parsed.get("deadline"):
-        try:
-            parsed["deadline"] = datetime.datetime.fromisoformat(
-                parsed["deadline"].replace("Z", "+00:00")
-            )
-        except Exception:
-            parsed["deadline"] = None
-
-    return parsed
+def _coerce_deadline(deadline: str | None) -> datetime.datetime | None:
+    """Coerce an ISO deadline string to datetime; None on failure."""
+    if not deadline:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+    except Exception:
+        return None
 
 
 def _format_intent_card(intent: dict) -> str:
@@ -195,29 +158,61 @@ def _format_intent_card(intent: dict) -> str:
 # ─── Tools ─────────────────────────────────────────────────────────────────
 
 @mcp.tool()
-def submit_intent(text: str) -> str:
+def submit_intent(raw_text: str, site_name: str, customer: str = None,
+                  services: list[str] = None,
+                  pos_latency_ms: float = None,
+                  availability_pct: float = None,
+                  segmentation: str = None,
+                  kiosk_count: int = None,
+                  deadline: str = None) -> str:
     """
-    Submit a new natural-language customer intent. The service parses the
-    request via LLM, stores both the raw text and the structured fields,
-    resolves the target site, and returns the new intent ID with a parsed
-    summary. Status is set to 'submitted' — call check_feasibility next.
+    Submit a new customer intent with STRUCTURED fields. The calling
+    agent extracts the fields from the user's natural-language request
+    (Phase 4: parsing lives in the domain agent, not here); this service
+    resolves the target site, stores both the verbatim text and the
+    structured form, and returns the new intent ID with a summary.
+    Status is set to 'submitted' — call check_feasibility next.
 
     Use this when the user says something like:
       "I'm opening a new <store> at <location>. POS priority, guest WiFi
        strict, camera uplink, max <N>ms POS latency, <X>% availability."
 
     Args:
-        text: The customer's natural-language request (full sentence).
+        raw_text:         The customer's request VERBATIM (stored for audit).
+        site_name:        Full site name as '<City> <District>',
+                          e.g. 'Munich Marienplatz'.
+        customer:         Company name if mentioned.
+        services:         Subset of ['pos', 'guest_wifi', 'camera_uplink',
+                          'kiosk', 'voip'] — only services the user named.
+        pos_latency_ms:   POS latency target in ms, if stated.
+        availability_pct: Availability target in percent, if stated.
+        segmentation:     'strict' or 'relaxed', if stated.
+        kiosk_count:      Number of kiosks, if stated.
+        deadline:         ISO datetime — resolve relative phrases ('by
+                          tomorrow 18:00') against today before calling.
+                          Omit anything the user did not mention; never
+                          invent values.
     """
-    parsed = _parse_natural_language(text)
-    site = _resolve_site(parsed.get("site_name", ""))
+    parsed = {
+        "site_name": site_name,
+        "customer":  customer,
+        "services":  services or [],
+        "targets": {
+            "pos_latency_ms":   pos_latency_ms,
+            "availability_pct": availability_pct,
+            "segmentation":     segmentation,
+            "kiosk_count":      kiosk_count,
+        },
+        "deadline": _coerce_deadline(deadline),
+    }
+    site = _resolve_site(site_name or "")
 
     intent_id = _next_intent_id()
     doc = {
         "_id":          intent_id,
         "customer_id":  "cust-alpenmarkt",  # demo single-customer
         "site_id":      site["_id"] if site else None,
-        "raw_text":     text,
+        "raw_text":     raw_text,
         "parsed":       parsed,
         "status":       "submitted",
         "submitted_at": datetime.datetime.now(),

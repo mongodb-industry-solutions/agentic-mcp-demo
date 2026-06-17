@@ -1,5 +1,254 @@
 # CHANGES.md
 
+## 2026-06-11
+
+### Market resolution: 'LA' resolved to Dallas_Metro (`dtw_scenario_service`, `dtw_topology_service`)
+
+Live-demo find after Phase 4: "raise ACME M downlink in NYC and LA" was
+created with scope `[NYC_Metro, Dallas_Metro]` — the simulation then
+faithfully reported Dallas bottlenecks. Root cause: both market
+resolvers ran an UNANCHORED case-insensitive name regex before id
+matching, and 'LA' substring-matches 'Da-LLA-s-Fort Worth' while
+'Los Angeles Metro' doesn't even contain the substring 'la'. The bug
+was latent pre-Phase 4 because the old parse LLM was handed the
+known-market list and returned canonical ids itself; once the agent
+started passing city hints, the resolver became the deciding factor.
+
+Fix in both `_resolve_market_id` (scenario service) and
+`_resolve_market` (topology service): id matching (exact, then prefix —
+'LA' → 'LA_Metro') runs BEFORE any name matching, and the name regex is
+anchored at a word boundary with the hint escaped ('New York' →
+NYC_Metro, 'Fort Worth' → Dallas_Metro). The DTW agent prompt now also
+suggests passing canonical ids when known. Verified with an 8-case
+resolution matrix across both services.
+
+Note for existing data: scenarios created while the bug was live (e.g.
+DTW-SCN-002 from the 2026-06-11 demo session) retain Dallas_Metro in
+their stored scope — amend conversationally ("change markets to NYC and
+LA") and re-run, or delete and recreate.
+
+### Phase 4 of the multi-agent refactor — thin the MCP servers; AGENT_MODE default flipped (`mcp_servers/`, `agents/`)
+
+The three embedded OpenAI calls moved up into the domain agents. The
+rule is now enforced for the IBN/DTW domains: **servers contain zero
+`openai` imports** — reasoning lives in agents, execution lives in
+servers. (The remaining `openai` imports under `mcp_servers/` are
+`acc_proof_point_service`, `portfolio_service`, `preferences_service` —
+other domains, candidates for when they get agents.)
+
+- **`ibn_intent_service.submit_intent`** now takes structured fields
+  (`raw_text`, `site_name`, `services`, `pos_latency_ms`, …, `deadline`
+  as ISO). The agent's own LLM performs extraction as part of
+  tool-argument generation — no separate parse call exists anywhere.
+  Deviation from the plan sketch: no deprecated text wrapper — the only
+  callers are LLMs reading live schemas, so the signature changed in
+  place.
+- **`dtw_scenario_service`** — `create_scenario` and `update_scenario`
+  take structured fields; the amendment LLM is gone (the agent computes
+  updated values itself, with conversation context — strictly better
+  than the old blind re-parse). Hint resolution stays server-side as a
+  data operation: new `_resolve_qos_hint` accepts ids, names, and
+  numeric rates; a rate with no exact profile maps to the nearest one
+  with an explicit substitution note (verified: '47 Mbps' →
+  `qos_postpaid_standard` 50 Mbps + warning). update_scenario semantics:
+  each provided field REPLACES the stored value wholesale.
+- **`dtw_simulation_service`** — `_create_scenario_inline` and the
+  `text=` fallback params are gone; simulation never creates scenarios.
+- **Agents** — `DomainAgent.run` injects today's date into the system
+  prompt (relative-deadline resolution moved agent-side; verified: 'by
+  tomorrow 18:00' → 2026-06-12T18:00). IBN/DTW catalog prompts gain
+  extraction guidance sections.
+- **AGENT_MODE default flipped to `all`** (the deferred Phase 2
+  post-soak cleanup): agents are on by default;
+  `AGENT_MODE=off|0|legacy` opts out to legacy routing.
+- **Workstream-context fix** — testing surfaced that the entity-reuse
+  guidance in the workstream block made the agent reuse the existing
+  IBN-005 intent (running check_feasibility on it) instead of
+  submitting a new one for a "I'm opening a new store at X" request.
+  Both copies of the block (react.py legacy + dispatch.py) gain a
+  CRITICAL rule: a NEW intent description always goes through
+  submit_intent, never reuses an intent ID from context. ⚠ During that
+  test the live IBN-005 document was accidentally deleted; it was
+  reconstructed from `PLAN-IBN-005-20260602172308` + the workstream
+  audit trail (status active, runbook history preserved, an explicit
+  'restored' history entry added).
+
+Verified on live Atlas: e2e IBN submission (new IBN-006, site resolved
+to site-ham-alt, targets 35ms/99.9%/strict, deadline resolved, test doc
+removed afterwards), e2e DTW scenario creation ('7.2 to 19 Mbps in NYC
+Saturday evening' → correct change_set/scope), substitution-note unit
+test, and `py_compile` across all touched files.
+
+### Phase 3 of the multi-agent refactor — agent-to-agent consultation (`agents/domain_agent.py`, `agents/dispatch.py`)
+
+Domain agents can now ask each other questions mid-turn:
+
+- **`consult_agent` tool** — injected into a DomainAgent's toolset only
+  at depth 0 (a user turn) when other agents are registered. It is not
+  an MCP tool: the run loop special-cases it before the `srv__tool`
+  split and hands it to the shell. The matching prompt guidance
+  (`CONSULT_GUIDANCE`) is appended to the system prompt only when the
+  tool is actually offered, so consulted agents never see instructions
+  for a tool they lack.
+- **Shell mediation** (`_consult_agent`) — resolves the target by name
+  or domain, runs it at `depth=1` (no consult tool → recursion is
+  structurally impossible) with `max_iterations=3` (the single-turn
+  budget) and a bare `AgentContext` — the question must be
+  self-contained. The asking agent has a `CONSULT_BUDGET` of 2 per
+  turn; exhaustion returns an instructive error instead of failing.
+- **Audit trail** — every exchange is persisted to
+  `agent_registry.agent_conversations` `{ts, workstream_id, from_agent,
+  to_agent, question, answer, status, tool_calls, services_used,
+  duration_ms}`, indexed by recency and workstream — Change-Stream-able
+  for a future dashboard panel. Consultations are deliberately NOT
+  attached to the workstream tool-call trail (that would pollute
+  service-level stickiness); `agent_conversations` is their home.
+  Analytics gain `outcome.agent_consults` (single dispatch) and
+  per-agent `consults` (multi dispatch).
+- **anyio coverage** — multi-dispatch now pre-activates ALL registered
+  agents' servers (not just the active ones) because any agent can be
+  consulted from a gather child task.
+- **DTW demo beat** — the DTW prompt gains a cross-domain check: after
+  simulation results, when the user asked about overall operational
+  risk, it may consult `ibn_agent` once for active retail compliance
+  violations and cite the answer.
+
+Verified on live Atlas: direct consult (dtw_agent → ibn_agent, depth-1
+run used `ibn_assurance_service`, answer attributed "Per the IBN
+agent…", conversation doc persisted with timings) and full-pipeline
+e2e with `AGENT_MODE=dtw` — the turn routed to dtw_agent alone, which
+listed scenarios with its own tool and consulted ibn_agent mid-turn
+(`outcome: tool_calls 1, consults 1`).
+
+### Phase 2 of the multi-agent refactor — coordinator shell, card-ranked selection, parallel dispatch + synthesis (`agents/dispatch.py`, `agents/domain_agent.py`)
+
+The shell is now a coordinator over DomainAgents:
+
+- **Agent selection via agent cards** — `_select_agents_for_turn`
+  resolves Stage 1's domain verdict to agents. When two or more
+  agent-enabled domains are in scope, candidates are ranked by
+  `$vectorSearch` over `agent_cards.description` (with `domain` filter) —
+  agent discovery is itself an Atlas vector search, recorded in the
+  routing-decision under `agent_cards.ranked` with real scores.
+  Precedence: multi-domain fan-out beats workstream continuity beats
+  single Stage 1 domain (cross-domain questions are inherently
+  cross-workstream). `_select_domain_agent` (Phase 1) is removed.
+- **Stage 2 moved inside the agent** — `DomainAgent._select_servers`
+  narrows large domains per-task via `_semantic_search` pre-filtered to
+  the agent's domain; domains at or under `MAX_SERVERS_PER_TASK` (5 —
+  today's IBN/DTW) activate everything. The shell no longer runs Stage 2
+  for agent turns.
+- **Parallel multi-domain dispatch** — `_dispatch_multi`: gpt-4o-mini
+  splits the request into per-agent sub-tasks (failure degrades to
+  every agent getting the full query), agents run concurrently via
+  `asyncio.gather` sharing one context build, and a gpt-4o synthesis
+  pass combines the answers (skipped — labelled sections instead — when
+  any agent returned VERBATIM content). Analytics gain
+  `dispatched_agents`, per-agent `outcome.agents.{status, subtask,
+  tool_calls, services_used}`, `multi.subtasks`, and `synthesis_ms`.
+- **anyio task-affinity fix** — MCP stdio context managers entered on
+  the shared `AsyncExitStack` must be entered in the task that later
+  closes the stack. Multi-dispatch therefore pre-activates every
+  agent's servers from the dispatcher's task before `gather()`; agents
+  find the sessions present and skip activation. Without this,
+  shutdown crashed with "Attempted to exit cancel scope in a different
+  task than it was entered in".
+
+The legacy direct-to-server path is NOT deleted — it remains the
+shell's own tool surface for the 15 domains without an agent, exactly
+as the target architecture sketches ("singletons stay direct tools of
+the shell"). `AGENT_MODE` default stays off pending soak; flipping the
+default is the post-soak step.
+
+Verified on live Atlas: cross-domain turn ("IBN fleet compliance + DTW
+scenarios") with Stage 1 [ibn, dtw], card ranking (dtw 0.685 / ibn
+0.629), correct per-domain sub-tasks, both agents concurrent (1 tool
+call each), coherent synthesis, clean shutdown; single-dispatch and
+legacy-fallthrough regressions pass.
+
+### Phase 1 of the multi-agent refactor — DomainAgent + agent cards (`agents/domain_agent.py`, `agents/catalog/`, `agents/dispatch.py`)
+
+First step from *one orchestrator → N MCP servers* toward *shell → domain
+agents → thin MCP servers*. New pieces:
+
+- **`DomainAgent`** (`agents/domain_agent.py`) — a domain-scoped
+  specialist with its own system prompt and its own ReAct loop over only
+  its domain's MCP tools. Loop semantics deliberately mirror the legacy
+  loop (5/8 iterations, `parallel_tool_calls=False`, VERBATIM
+  short-circuit, forced final answer). Context (workstream block,
+  recalled memories, preferences, replay recipe) is prepared by the shell
+  and injected via `AgentContext`; the tool-call audit flows back via
+  `AgentResult`.
+- **Agent catalog** (`agents/catalog/{base,ibn,dtw}.py`) — declarative
+  specs `{name, domain, description, system_prompt}`. The per-service
+  "use this when…" docstring guidance is folded into each agent's prompt;
+  the DTW prompt encodes the scenario-before-simulation discipline.
+- **Agent cards in Atlas** (`agents/dispatch.py`) — every catalog agent
+  is published to `agent_registry.agent_cards` `{_id, description,
+  domain, tools_claimed, last_seen}`; the `agent_cards_index` (autoEmbed
+  voyage-4 on `description`, `domain` filter, quantization float) is
+  created programmatically. Agent discovery becomes an Atlas vector
+  search — used by the Phase 2 coordinator; Phase 1 selects by exact
+  domain match.
+- **Dispatch** (`AgentDispatchMixin`) — gated by the `AGENT_MODE` env
+  flag (unset → legacy only; `1` → IBN agent; `all` → every catalog
+  agent; or a domain list `ibn,dtw`). Conservative selection: dispatch
+  only when the domain is unambiguous (`ws_domain` from the workstream
+  classifier, or a single Stage 1 domain). The dispatcher mirrors all
+  legacy post-processing: per-call workstream attachment + meta-tool
+  filtering, stickiness, conversation history, background summary task,
+  and the routing-decision record (now with `dispatched_agent`,
+  `outcome.agent_services_used`, `outcome.agent_status`).
+- **Concurrency prerequisite** — `McpPoolMixin._call_tool_locked` adds
+  lazy per-session `asyncio.Lock`s so two agents can share the stdio
+  session pool; `_resolve_server_paths` extracts the path-resolution
+  logic for reuse. New `DISPATCH` broadcast tag (bright magenta) shows
+  the hand-off in the live feed; agent-internal lines are prefixed
+  `[ibn_agent]`.
+
+Verified: cards + vector index created on live Atlas; `AGENT_MODE`
+unset bootstraps with dispatch disabled; `AGENT_MODE=1` end-to-end IBN
+turn dispatches to `ibn_agent` (1 tool call via `ibn_assurance_service`,
+attached to the open IBN workstream, analytics record correct). A fresh-
+session "show all intents" fell through to legacy by design — Stage 1
+classified it billing/customer/todo, a pre-existing taxonomy ambiguity
+unrelated to dispatch.
+
+### Phase 0 of the multi-agent refactor — decompose the orchestrator monolith (`agents/`)
+
+`agents/orchestrator.py` (3,395 lines, six concerns in one class) is split
+into mixin modules with **byte-identical method bodies** — verified by
+extracting every member block from `HEAD` and asserting exact-substring
+presence in the new files. Zero behavior change; this is the prerequisite
+for the multi-agent architecture (see `MULTI_AGENT_PLAN.md`).
+
+New layout: `broadcast.py` (ANSI palette + live-feed POST), `registry.py`
+(service discovery / hash sync), `router.py` (two-stage routing + the
+routing-decision analytics helpers), `memory.py` (extract / recall /
+promote / decay + knobs), `workstreams.py` (short-term working memory),
+`mcp_pool.py` (stdio session pool), `react.py` (`_SYSTEM_PROMPT` + the
+ReAct loop). `orchestrator.py` remains the composition root —
+`OrchestratorAgent` now inherits the seven mixins and keeps only
+`__init__`, the context-manager lifecycle, and `process_query`.
+
+The only authored change is the ReAct seam: the tool-collection + context
+assembly + tool-iteration section of `process_query` became
+`ReactMixin._run_react`, which returns
+`{answer, verbatim, iteration, max_iterations, tool_calls_count}`. The
+VERBATIM short-circuit persists its routing-decision record inside
+`_run_react` (as before) and signals `verbatim=True` so `process_query`
+returns immediately, skipping history/summary/persist — identical control
+flow to the inline original.
+
+Public surface unchanged: `main.py` and `web/shell.py` keep importing
+`OrchestratorAgent` / `BROADCAST_RECEIVE_URL` from `agents.orchestrator`,
+which re-exports all former module-level constants for compatibility.
+
+Verified: `py_compile` on all modules; full bootstrap against live Atlas
+(26 services synced, 17 domains, open workstream resumed); one end-to-end
+query through routing → activation → ReAct → analytics
+(`outcome.tool_calls_count=1, iterations_used=2` persisted correctly).
+
 ## 2026-05-27
 
 ### Asymmetric voyage-4 retrieval — replaces Atlas autoEmbed for Stage 2 routing (`agents/orchestrator.py`, MongoDB `vector_index`)
