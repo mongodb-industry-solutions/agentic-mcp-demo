@@ -16,6 +16,8 @@ export VOYAGE_API_KEY="<your voyage api token>"   # used by restaurant_guide ser
 export OPENAI_MODEL="gpt-4o"  # optional, defaults to gpt-4o
 ```
 
+**Web shell auth (optional):** the browser shell (`web/shell.py`) is gated by a single shared HTTP Basic Auth credential, default `mdb` / `mdbagentic2026`. Override with `SHELL_AUTH_USER` / `SHELL_AUTH_PASS`, or set `SHELL_AUTH_DISABLE=1` to turn the gate off (e.g. local dev). The terminal CLI (`main.py`) and the dashboards are unaffected.
+
 **Install and run:**
 ```bash
 python -m venv <dir>
