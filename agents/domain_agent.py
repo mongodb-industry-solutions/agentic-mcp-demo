@@ -127,35 +127,6 @@ class DomainAgent:
                   f"activating all domain servers: {e}")
         return names
 
-    async def _activate_domain_servers(self, task: str) -> List[str]:
-        """Activate the servers selected for this task. Returns the
-        active names."""
-        names = await self._select_servers(task)
-        matches = self.host._resolve_server_paths(names)
-        if matches:
-            await self.host._broadcast("ROUTING",
-                f"[{self.name}] domain servers: "
-                + ", ".join(m["server_name"] for m in matches))
-        await self.host._activate_servers(matches)
-        return [m["server_name"] for m in matches
-                if m["server_name"] in self.host.sessions]
-
-    async def _tools_for(self, name: str) -> List[Dict]:
-        """OpenAI tool dicts for one server, via the host's shared cache
-        (same prefixing scheme as the legacy loop)."""
-        host = self.host
-        if name not in host.tool_cache:
-            t_list = await host.sessions[name].list_tools()
-            host.tool_cache[name] = [
-                {"type": "function", "function": {
-                    "name": f"{name}__{t.name}",
-                    "description": t.description,
-                    "parameters": t.inputSchema,
-                }}
-                for t in t_list.tools
-            ]
-        return host.tool_cache[name]
-
     def _consult_tool_spec(self, others: List["DomainAgent"]) -> Dict:
         """OpenAI tool dict for the shell-mediated consult_agent tool."""
         agent_lines = "; ".join(
@@ -205,16 +176,23 @@ class DomainAgent:
         """
         host = self.host
 
-        active = await self._activate_domain_servers(task)
-        if not active:
+        # Decide which of the domain's servers to PRESENT to the LLM, then
+        # show their tool schemas WITHOUT spawning them. Subprocesses are
+        # launched lazily, only when a tool is actually called (below), so
+        # a one-step turn doesn't boot the whole domain. (See
+        # McpPoolMixin.tool_schemas_for / ensure_active.)
+        names = await self._select_servers(task)
+        openai_tools: List[Dict] = []
+        for name in names:
+            openai_tools.extend(await host.tool_schemas_for(name))
+        if not openai_tools:
             return AgentResult(
-                answer=(f"I couldn't activate any services for the "
+                answer=(f"I couldn't load any tools for the "
                         f"'{self.domain}' domain right now."),
                 status="error")
-
-        openai_tools: List[Dict] = []
-        for name in active:
-            openai_tools.extend(await self._tools_for(name))
+        await host._broadcast("ROUTING",
+            f"[{self.name}] {len(names)} domain server(s) available; "
+            f"each activates on first tool call")
 
         others = [a for a in host.domain_agents.values() if a is not self]
         consult_enabled = depth == 0 and bool(others)
@@ -297,7 +275,8 @@ class DomainAgent:
                 srv, tool = fname.split("__", 1)
                 await host._broadcast("ACTION",
                     f"  [{self.name}] {srv} → {tool}")
-                if srv in host.sessions:
+                # Lazily spawn this server's subprocess on first use.
+                if await host.ensure_active(srv):
                     r = await host._call_tool_locked(srv, tool, args)
                     res_txt = r.content[0].text
                     tool_calls_count += 1

@@ -2,6 +2,32 @@
 
 ## 2026-06-19
 
+### Perf: lazy MCP server activation — a turn only spawns the servers it uses (`agents/mcp_pool.py`, `agents/domain_agent.py`)
+
+A domain agent used to activate every server in its domain up front
+(all 5 IBN servers for a one-line "submit intent", etc.) just to present
+their tool schemas to the LLM — wasteful subprocesses. Now:
+
+- Tool schemas are cached process-wide (`_TOOL_SCHEMA_CACHE`).
+  `tool_schemas_for(name)` returns the cache, or harvests it by spawning
+  the server TRANSIENTLY (spawn → list_tools → shut down) the first time
+  it's seen in the process. So the LLM is still shown the whole domain's
+  toolset (it can plan any step), without keeping those subprocesses
+  alive.
+- `ensure_active(name)` spawns a server into the persistent pool only
+  when one of its tools is actually called. The ReAct loop calls it right
+  before each tool invocation.
+- Net: a one-step turn keeps exactly one server alive instead of the
+  whole domain; multi-step flows spawn each server once, on first use,
+  and reuse it. Verified — the "open a new store" intent submission
+  leaves only `ibn_intent_service` running (was all 5).
+
+`DomainAgent._activate_domain_servers` / `_tools_for` are removed.
+Multi-agent (cross-domain) dispatch still pre-activates eagerly in the
+parent task — required by anyio (child-task agents must not enter stdio
+scopes the shutdown task will close); single-agent turns, the common
+case, are now lazy.
+
 ### Fix: Basic Auth gate rejected the WebSocket (web shell wouldn't connect) (`web/auth.py`)
 
 The auth gate was gating the websocket scope too, but browsers don't

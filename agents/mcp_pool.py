@@ -32,7 +32,87 @@ from mcp.client.stdio import stdio_client
 from openai import AsyncOpenAI
 
 
+# Tool schemas are identical across browser sessions and across runs, so
+# cache them process-wide once learned. This lets an agent PRESENT a whole
+# domain's tools to the LLM without keeping every server's subprocess
+# alive — a server is only spawned persistently when one of its tools is
+# actually called (see ensure_active). Keyed by server name → list of
+# OpenAI tool dicts.
+_TOOL_SCHEMA_CACHE: Dict[str, List[Dict]] = {}
+
+
 class McpPoolMixin:
+
+    def _child_env(self) -> dict:
+        """Env for a launched MCP server — carries this orchestrator's
+        demo_prefix so the server's mutable collections land in the right
+        per-session namespace (empty → shared lane)."""
+        env = os.environ.copy()
+        env["DEMO_PREFIX"] = getattr(self, "demo_prefix", "")
+        return env
+
+    @staticmethod
+    def _schemas_from(name: str, t_list) -> List[Dict]:
+        return [
+            {"type": "function", "function": {
+                "name": f"{name}__{t.name}",
+                "description": t.description,
+                "parameters": t.inputSchema,
+            }}
+            for t in t_list.tools
+        ]
+
+    async def tool_schemas_for(self, name: str) -> List[Dict]:
+        """OpenAI tool schemas for one server, cached process-wide.
+
+        If the server is already running here, read from its live session.
+        Otherwise spawn it TRANSIENTLY (spawn → list_tools → shut down)
+        purely to learn the schemas — no persistent subprocess is kept.
+        This is what lets a domain agent show all of its tools to the LLM
+        while only the servers it actually invokes get activated."""
+        cached = _TOOL_SCHEMA_CACHE.get(name)
+        if cached is not None:
+            return cached
+
+        if name in self.sessions:
+            try:
+                t_list = await self.sessions[name].list_tools()
+                _TOOL_SCHEMA_CACHE[name] = self._schemas_from(name, t_list)
+                return _TOOL_SCHEMA_CACHE[name]
+            except Exception:
+                pass
+
+        matches = self._resolve_server_paths([name])
+        if not matches:
+            _TOOL_SCHEMA_CACHE[name] = []
+            return []
+        params = StdioServerParameters(
+            command="uv", args=["run", matches[0]["path"]],
+            env=self._child_env())
+        schemas: List[Dict] = []
+        try:
+            # Transient: entered and exited within this call (same task),
+            # so no long-lived subprocess and no cross-task anyio scope.
+            async with AsyncExitStack() as stack:
+                read, write = await stack.enter_async_context(stdio_client(params))
+                session = await stack.enter_async_context(ClientSession(read, write))
+                await session.initialize()
+                t_list = await session.list_tools()
+                schemas = self._schemas_from(name, t_list)
+        except Exception as e:
+            print(f"⚠️ schema harvest for {name} failed: {e}")
+        _TOOL_SCHEMA_CACHE[name] = schemas
+        return schemas
+
+    async def ensure_active(self, name: str) -> bool:
+        """Lazily spawn one server into this orchestrator's persistent
+        pool if it isn't already running. Returns True if usable. Called
+        right before a tool on that server is invoked, so subprocesses
+        only exist for servers the agent actually uses this session."""
+        if name in self.sessions:
+            return True
+        await self._activate_servers(self._resolve_server_paths([name]))
+        return name in self.sessions
 
     async def _activate_servers(self, servers: List[Dict]):
         for srv in servers:
@@ -43,15 +123,10 @@ class McpPoolMixin:
             path = srv["path"]
 
             try:
-                # Phase B: hand this orchestrator's demo_prefix to the
-                # MCP server process so its mutable collections land in
-                # the right per-session namespace (empty → shared lane).
-                child_env = os.environ.copy()
-                child_env["DEMO_PREFIX"] = getattr(self, "demo_prefix", "")
                 params = StdioServerParameters(
                     command="uv",
                     args=["run", path],
-                    env=child_env
+                    env=self._child_env()
                 )
                 read, write = await self.exit_stack.enter_async_context(stdio_client(params))
                 session = await self.exit_stack.enter_async_context(ClientSession(read, write))

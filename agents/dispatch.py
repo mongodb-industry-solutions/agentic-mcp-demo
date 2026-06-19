@@ -428,12 +428,15 @@ class AgentDispatchMixin:
         # task before fanning out. MCP stdio sessions are anyio-scoped:
         # the context managers entered on the shared AsyncExitStack must
         # be entered in the same task that exits the stack at shutdown.
-        # The gather() below runs agents in child tasks — activating
-        # there crashes aclose() with "Attempted to exit cancel scope in
-        # a different task". All agents (not just the active ones) are
-        # covered because any registered agent can be consulted mid-turn
-        # from a child task (Phase 3). Inside run(),
-        # _activate_domain_servers sees the sessions present and skips.
+        # The gather() below runs agents in child tasks, and lazy
+        # activation there would enter a stdio scope in a child task →
+        # crashes aclose() with "Attempted to exit cancel scope in a
+        # different task". Pre-activating here means each agent's
+        # ensure_active() finds its servers already live and never spawns
+        # from a child task. All agents (not just the dispatched ones) are
+        # covered because any of them can be consulted mid-turn (Phase 3).
+        # NOTE: this is the one path that still activates a whole domain
+        # eagerly; single-agent turns (the common case) activate lazily.
         for a in self.domain_agents.values():
             names = await a.servers_in_domain()
             await self._activate_servers(self._resolve_server_paths(names))
