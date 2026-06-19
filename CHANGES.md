@@ -2,6 +2,55 @@
 
 ## 2026-06-19
 
+### Web shell: per-browser-session isolation (Phase B of MULTI_SESSION_PLAN.md) (`web/shell.py`, `web/seed_runner.py`, `agents/`, `mcp_servers/`)
+
+Each browser session now gets its own isolated demo data, so concurrent
+users — and their Reset — never touch each other. No login.
+
+- **Per-session collection prefix.** The 5 mutable demo collections
+  (`ibn_intents`, `ibn_telemetry`, `ibn_compliance_events`,
+  `ibn_policy_snapshots`, `dtw_scenarios`) plus `agent_workstreams` and
+  `agent_memories` are namespaced `s_<token>_<base>`. Read-only reference
+  data, `mcp_services`/`agent_cards`/`routing_decisions`/
+  `user_preferences`, and **both `*_knowledge_chunks` collections with
+  their Atlas vector indexes** stay shared — so per-session cost is a
+  handful of small collections, not duplicate vector indexes. Chosen over
+  per-session *databases* because the Atlas credential can drop
+  collections but not databases (Phase-A finding).
+- **MCP servers** (the 6 mutating ones) resolve mutable collections via
+  `db[os.environ.get("DEMO_PREFIX","") + base]`; reference collections
+  stay bare. Empty prefix = byte-identical to before, so the CLI /
+  terminal shell are unchanged. `McpPoolMixin._activate_servers` passes
+  the orchestrator's `demo_prefix` to each child via `DEMO_PREFIX`.
+- **OrchestratorAgent** gains `demo_prefix` + `shared_bootstrap` args.
+  `shared_bootstrap=False` skips the one-time global work (registry sync,
+  agent-card sync, filesystem watcher); `demo_prefix` namespaces its
+  workstream/memory collections and is handed to child servers.
+- **Web shell** keeps a `{token: Session}` map (each Session = its own
+  orchestrator + lock + connected tabs), capped `DEMO_MAX_SESSIONS`
+  (default 6) and reaped after `DEMO_SESSION_TTL_SEC` (default 1800s)
+  idle. A shared bootstrap orchestrator does global init. The browser
+  stores its token in `localStorage` and sends it in an `init` handshake
+  so refresh/reconnect resumes the same lane. Per-session lock replaces
+  the global query lock.
+- **`seed_runner`** gains `reset_session(prefix)` (drop + re-seed only a
+  session's mutable collections) and `ensure_session_seeded(prefix)`
+  (seed a lane on first use). Reset is now scoped to the calling session.
+- The global workstream change-stream watcher was removed (couldn't be
+  session-scoped); the server pings `workstream_update` to the
+  originating tab after each turn instead.
+
+Verified on live Atlas (LLM-free isolation test + a live per-session
+query): two lanes seed independently (4 intents each, shared `ibn_sites`
+untouched); diverging or resetting one leaves the other intact; a server
+launched with `DEMO_PREFIX` reads its own lane; a per-session
+orchestrator boots with prefixed collections and its data stays
+independent of the shared lane.
+
+Notes: fresh deployments still run the CLI seeders once to create the
+shared reference data + vector indexes (per-session lanes only copy the
+mutable set). The standalone dashboards still observe the default lane.
+
 ### Web shell: browser-driven demo reset (Phase A of MULTI_SESSION_PLAN.md) (`web/shell.py`, `web/seed_runner.py`, `web/shell.html`)
 
 A **Reset demo data** button in the web shell banner re-runs the

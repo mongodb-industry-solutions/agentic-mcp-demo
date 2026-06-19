@@ -46,7 +46,58 @@ can CRUD and drop *collections*, but cannot drop *databases*. Therefore:
 > never cleanly reap them. Phase B must isolate sessions by
 > **collection name within `agent_registry`**, which we *can* drop.
 
-## Phase B — session isolation by collection prefix
+## Phase B — session isolation by collection prefix ✅ DONE 2026-06-19
+
+Implemented as designed below. Summary of what shipped and deviations:
+
+- **Per-session `OrchestratorAgent` instances**, keyed by browser
+  `session_token`, capped at `DEMO_MAX_SESSIONS` (default 6) and reaped
+  after `DEMO_SESSION_TTL_SEC` (default 1800s) idle with no connected
+  tabs. A single shared **bootstrap** orchestrator (`prefix=""`,
+  `shared_bootstrap=True`) does the one-time global work (registry sync,
+  agent-card sync, filesystem watcher) and owns the shared catalogue;
+  per-session orchestrators run with `shared_bootstrap=False`.
+- **Namespaced collections** (prefix `s_<token>_`): the 5 mutable demo
+  collections + `agent_workstreams` + `agent_memories`. Everything else
+  — `mcp_services`, `agent_cards`, `routing_decisions`,
+  `user_preferences`, `agent_history`, `agent_conversations`, all
+  read-only reference data, and **both `*_knowledge_chunks` collections
+  with their vector indexes** — stays shared. `ibn_knowledge_chunks`
+  shared despite `update_template_version` (option (a) below).
+- **MCP servers**: each of the 6 mutating servers resolves its mutable
+  collections through `db[os.environ.get("DEMO_PREFIX","") + base]`;
+  reference collections stay bare. Empty prefix = byte-identical to
+  before (CLI / terminal unchanged). `mcp_pool` passes the orchestrator's
+  `demo_prefix` to each child via the `DEMO_PREFIX` env var.
+- **Session identity**: browser stores the token in `localStorage` and
+  sends it in an `init` message on connect; the server reuses it (after
+  `^[a-z0-9]{8,32}$` sanitisation) or mints a fresh one and replies with
+  `hello`. Refresh / reconnect resumes the same lane.
+- **Reset** is now per-session: `seed_runner.reset_session(prefix)` drops
+  and re-seeds only that session's mutable collections; shared reference
+  + vector indexes are never touched, so other sessions are unaffected.
+- **Per-session lock** replaces the global `_query_lock`; a global guard
+  serialises only session create/reap.
+
+Deviations / notes:
+- The global `agent_workstreams` change-stream watcher was **removed** —
+  it couldn't be cheaply session-scoped. Replaced by a `workstream_update`
+  ping the server sends to the originating tab after each query/reset, so
+  the Workstreams panel refreshes from its own (prefixed) collection.
+- **Fresh deployments still seed the shared reference data + vector
+  indexes once** via the CLI (`python seed/ibn_seed.py && python
+  seed/dtw_seed.py`). Per-session lanes only copy the small mutable set;
+  they rely on the shared reference data + indexes already existing.
+- The standalone **dashboards** (`web/ibn_dashboard.py`,
+  `web/dtw_dashboard.py`) still observe the bare/default lane, not a
+  browser session's prefixed data — wiring a dashboard to a session is
+  out of scope.
+- Resource ceiling is bounded by `DEMO_MAX_SESSIONS` (orchestrators ×
+  MCP subprocesses × Mongo connections). Tune down on small clusters.
+
+The original design follows.
+
+
 
 ### Session identity
 - The server already issues `session_token` per WS connection. Make it

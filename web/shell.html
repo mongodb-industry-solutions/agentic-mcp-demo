@@ -460,11 +460,21 @@ let ws;
 function connect() {
   ws = new WebSocket(`ws://${location.host}/ws`);
 
+  // Phase B: open the session handshake. Send our stored token (if any)
+  // so a refresh / reconnect resumes the same per-session demo data; the
+  // server mints a fresh one if we have none or it's unknown.
+  ws.onopen = () => {
+    let stored = null;
+    try { stored = localStorage.getItem('demo_session'); } catch (_) {}
+    ws.send(JSON.stringify({type: 'init', token: stored}));
+  };
+
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
 
     if (msg.type === 'hello') {
       sessionToken = msg.session || null;
+      try { if (sessionToken) localStorage.setItem('demo_session', sessionToken); } catch (_) {}
       document.getElementById('bannerHost').textContent    = msg.host || '—';
       document.getElementById('bannerIndexes').textContent = msg.indexes.join(', ') || 'none';
       if (msg.servers.length)

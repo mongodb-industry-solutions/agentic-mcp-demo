@@ -43,10 +43,15 @@ class McpPoolMixin:
             path = srv["path"]
 
             try:
+                # Phase B: hand this orchestrator's demo_prefix to the
+                # MCP server process so its mutable collections land in
+                # the right per-session namespace (empty → shared lane).
+                child_env = os.environ.copy()
+                child_env["DEMO_PREFIX"] = getattr(self, "demo_prefix", "")
                 params = StdioServerParameters(
                     command="uv",
                     args=["run", path],
-                    env=os.environ.copy()
+                    env=child_env
                 )
                 read, write = await self.exit_stack.enter_async_context(stdio_client(params))
                 session = await self.exit_stack.enter_async_context(ClientSession(read, write))

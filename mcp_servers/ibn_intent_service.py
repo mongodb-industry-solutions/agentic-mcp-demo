@@ -41,9 +41,14 @@ logger = logging.getLogger("ibn_intent_service")
 
 mongo_client = MongoClient(os.environ["MONGODB_URI"])
 db           = mongo_client["agent_registry"]
-intents      = db["ibn_intents"]
-sites        = db["ibn_sites"]
-customers    = db["ibn_customers"]
+# Per-browser-session data isolation (Phase B of MULTI_SESSION_PLAN.md):
+# mutable collections are prefixed with DEMO_PREFIX (empty in the CLI and
+# the default lane → bare names, byte-identical to before); read-only
+# reference collections (sites, customers, …) stay shared/unprefixed.
+_PFX         = os.environ.get("DEMO_PREFIX", "")
+intents      = db[_PFX + "ibn_intents"]   # mutable → session-scoped
+sites        = db["ibn_sites"]            # reference → shared
+customers    = db["ibn_customers"]        # reference → shared
 
 
 def _next_intent_id() -> str:

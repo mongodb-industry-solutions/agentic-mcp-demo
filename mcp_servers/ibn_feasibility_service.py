@@ -38,11 +38,14 @@ logger = logging.getLogger("ibn_feasibility_service")
 
 mongo_client = MongoClient(os.environ["MONGODB_URI"])
 db                = mongo_client["agent_registry"]
-intents           = db["ibn_intents"]
-sites             = db["ibn_sites"]
-resources         = db["ibn_resources"]
-policy_snapshots  = db["ibn_policy_snapshots"]
-telemetry         = db["ibn_telemetry"]
+# Per-session isolation (Phase B): mutable collections prefixed with
+# DEMO_PREFIX (empty → bare names); reference collections stay shared.
+_PFX              = os.environ.get("DEMO_PREFIX", "")
+intents           = db[_PFX + "ibn_intents"]          # mutable
+sites             = db["ibn_sites"]                   # reference
+resources         = db["ibn_resources"]               # reference
+policy_snapshots  = db[_PFX + "ibn_policy_snapshots"] # mutable
+telemetry         = db[_PFX + "ibn_telemetry"]        # mutable
 
 DEFAULT_TEMPLATE = "strict-retail-v3"  # the latently-broken template — sets up the WOW
 

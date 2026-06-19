@@ -58,7 +58,11 @@ logger             = logging.getLogger("dtw_simulation_service")
 
 mongo_client       = MongoClient(os.environ["MONGODB_URI"])
 db                 = mongo_client["agent_registry"]
-scenarios          = db["dtw_scenarios"]
+# Per-session isolation (Phase B): dtw_scenarios is mutable → prefixed
+# with DEMO_PREFIX (empty → bare name); everything else is read-only
+# reference data and stays shared.
+_PFX               = os.environ.get("DEMO_PREFIX", "")
+scenarios          = db[_PFX + "dtw_scenarios"]
 plans              = db["dtw_plans"]
 qos_profiles       = db["dtw_qos_profiles"]
 elements           = db["dtw_network_elements"]
