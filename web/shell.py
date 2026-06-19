@@ -12,9 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import asyncio
-import base64
 import datetime
-import hmac
 import json
 import logging
 import os
@@ -32,6 +30,7 @@ from pymongo import MongoClient
 from agents.orchestrator import OrchestratorAgent
 from agents import history as shell_history
 from web import seed_runner
+from web.auth import install_basic_auth
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 log = logging.getLogger("shell")
@@ -234,57 +233,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-
-# ── Global HTTP Basic Auth gate ──────────────────────────────────────────
-# One shared credential protects the whole shell — the HTML page AND the
-# WebSocket (browsers replay cached Basic-Auth creds on same-origin WS
-# upgrades, so one prompt covers both). This is a demo doorkeeper, not
-# real auth: it keeps a public URL from being wide open. Override with
-# SHELL_AUTH_USER / SHELL_AUTH_PASS; disable with SHELL_AUTH_DISABLE=1.
-SHELL_AUTH_USER  = os.environ.get("SHELL_AUTH_USER", "mdb")
-SHELL_AUTH_PASS  = os.environ.get("SHELL_AUTH_PASS", "mdbagentic2026")
-SHELL_AUTH_REALM = "Agentic AI Demo"
-
-
-class BasicAuthMiddleware:
-    """Pure-ASGI Basic-Auth gate over both http and websocket scopes."""
-
-    def __init__(self, app, username: str, password: str, realm: str):
-        self.app = app
-        self._expected = "Basic " + base64.b64encode(
-            f"{username}:{password}".encode()).decode()
-        self.realm = realm
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] in ("http", "websocket"):
-            headers = dict(scope.get("headers") or [])
-            provided = headers.get(b"authorization", b"").decode()
-            # constant-time compare so a wrong password can't be timed out
-            if not hmac.compare_digest(provided, self._expected):
-                if scope["type"] == "http":
-                    await send({
-                        "type": "http.response.start", "status": 401,
-                        "headers": [
-                            (b"www-authenticate",
-                             f'Basic realm="{self.realm}"'.encode()),
-                            (b"content-type", b"text/plain; charset=utf-8"),
-                        ],
-                    })
-                    await send({"type": "http.response.body",
-                                "body": b"Authentication required."})
-                else:  # websocket: reject the upgrade (1008 = policy violation)
-                    await send({"type": "websocket.close", "code": 1008})
-                return
-        await self.app(scope, receive, send)
-
-
-if os.environ.get("SHELL_AUTH_DISABLE"):
-    log.warning("SHELL_AUTH_DISABLE set — web shell is UNAUTHENTICATED")
-else:
-    app.add_middleware(BasicAuthMiddleware,
-                       username=SHELL_AUTH_USER,
-                       password=SHELL_AUTH_PASS,
-                       realm=SHELL_AUTH_REALM)
+# Global Basic-Auth gate (HTML + WebSocket) — see web/auth.py.
+install_basic_auth(app, realm="Agentic AI Demo")
 
 HTML_PATH = Path(__file__).parent / "shell.html"
 

@@ -2,23 +2,32 @@
 
 ## 2026-06-19
 
-### Web shell: global HTTP Basic Auth gate (`web/shell.py`)
+### Global HTTP Basic Auth gate + one-shot launcher (`web/auth.py`, `web/shell.py`, `web/ibn_dashboard.py`, `web/dtw_dashboard.py`, `start_demo.sh`)
 
-A single shared credential now protects the whole web shell so the
-public URL isn't wide open. `BasicAuthMiddleware` is a pure-ASGI
-middleware covering BOTH the HTML page and the WebSocket — browsers
-replay cached Basic-Auth creds on same-origin WS upgrades, so one prompt
-covers everything. Default credential `mdb` / `mdbagentic2026`,
-overridable via `SHELL_AUTH_USER` / `SHELL_AUTH_PASS`; set
-`SHELL_AUTH_DISABLE=1` to turn it off for local dev. Constant-time
-credential compare (`hmac.compare_digest`). This is a demo doorkeeper,
-not per-user auth — it's orthogonal to the Phase-B per-browser-session
-isolation (which still keys off the `localStorage` session token). The
-terminal CLI and the dashboards are unaffected.
+A single shared credential now protects all three browser apps — the
+web shell AND both dashboards — so the public URLs aren't wide open.
+`web/auth.py` holds a pure-ASGI `BasicAuthMiddleware` (+ an
+`install_basic_auth(app, realm)` helper) covering BOTH the HTML page and
+the WebSocket; browsers replay cached Basic-Auth creds on same-origin WS
+upgrades, so one prompt covers everything. Default `mdb` /
+`mdbagentic2026`, overridable via `SHELL_AUTH_USER` / `SHELL_AUTH_PASS`;
+`SHELL_AUTH_DISABLE=1` turns it off for local dev. Constant-time compare
+(`hmac.compare_digest`); ASCII-only realm strings (header-safe). A demo
+doorkeeper, not per-user auth — orthogonal to the Phase-B per-session
+isolation (still keyed off the `localStorage` session token). The
+terminal CLI is unaffected. (The dashboards live on separate ports /
+origins, so the browser prompts once per dashboard the first time it's
+opened, with the same credential.)
 
-Verified: HTTP returns 401 + `WWW-Authenticate: Basic` with no/bad
-credentials and 200 with the right ones; the WebSocket upgrade is
-rejected without credentials and connects with them.
+`start_demo.sh` launches all three (shell :8070, IBN dashboard :8060,
+DTW dashboard :8080) with logs under `./logs/`, fails fast if any
+service dies during startup, prints the URLs + login, and stops all
+three on Ctrl-C.
+
+Verified: HTTP 401 + `WWW-Authenticate: Basic` with no/bad credentials
+and 200 with the right ones on the shell and both dashboards; the
+WebSocket upgrade is rejected without credentials and connects with
+them.
 
 ### Web shell: per-browser-session isolation (Phase B of MULTI_SESSION_PLAN.md) (`web/shell.py`, `web/seed_runner.py`, `agents/`, `mcp_servers/`)
 

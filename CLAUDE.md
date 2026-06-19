@@ -16,15 +16,22 @@ export VOYAGE_API_KEY="<your voyage api token>"   # used by restaurant_guide ser
 export OPENAI_MODEL="gpt-4o"  # optional, defaults to gpt-4o
 ```
 
-**Web shell auth (optional):** the browser shell (`web/shell.py`) is gated by a single shared HTTP Basic Auth credential, default `mdb` / `mdbagentic2026`. Override with `SHELL_AUTH_USER` / `SHELL_AUTH_PASS`, or set `SHELL_AUTH_DISABLE=1` to turn the gate off (e.g. local dev). The terminal CLI (`main.py`) and the dashboards are unaffected.
+**Web app auth:** the browser shell and both dashboards are gated by a single shared HTTP Basic Auth credential (`web/auth.py`), default `mdb` / `mdbagentic2026`. Override with `SHELL_AUTH_USER` / `SHELL_AUTH_PASS`, or set `SHELL_AUTH_DISABLE=1` to turn the gate off (e.g. local dev). The terminal CLI (`main.py`) is unaffected.
 
-**Install and run:**
+**Install and run (terminal CLI):**
 ```bash
 python -m venv <dir>
 source <dir>/bin/activate
 pip install -r requirements.txt
 python main.py
 ```
+
+**Run the browser demo (web shell + both dashboards):**
+```bash
+source <dir>/bin/activate        # same venv
+./start_demo.sh                  # shell :8070, IBN dash :8060, DTW dash :8080
+```
+`start_demo.sh` launches all three behind the Basic-Auth gate, logs to `./logs/`, and stops everything on Ctrl-C. Open the shell, then use its banner's **📊 IBN/DTW dashboard** links — they carry your session token so the dashboards mirror your own isolated demo lane. First run on a fresh database still needs the one-time seeders (`python seed/ibn_seed.py && python seed/dtw_seed.py`) to create the shared reference data + Atlas vector indexes.
 
 **Watch live agent activity (separate terminal):**
 ```bash

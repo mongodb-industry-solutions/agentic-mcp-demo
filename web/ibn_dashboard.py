@@ -16,6 +16,10 @@
 #         exact lane the user is driving. No token → the shared/default
 #         lane, as before.)
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import asyncio
 import datetime
 import json
@@ -26,11 +30,12 @@ import re
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from pymongo import AsyncMongoClient
+
+from web.auth import install_basic_auth
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 log = logging.getLogger("ibn_dashboard")
@@ -347,6 +352,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+install_basic_auth(app, realm="Agentic AI Demo - IBN Dashboard")
 
 HTML_PATH = Path(__file__).parent / "ibn.html"
 
