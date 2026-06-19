@@ -2,6 +2,17 @@
 
 ## 2026-06-19
 
+### Fix: Basic Auth gate rejected the WebSocket (web shell wouldn't connect) (`web/auth.py`)
+
+The auth gate was gating the websocket scope too, but browsers don't
+replay cached Basic-Auth credentials on the WS handshake (Chrome sends
+the upgrade with no Authorization header), so every `/ws` connection got
+a `403` and the shell sat at "connecting… / Disconnected — reconnecting".
+`BasicAuthMiddleware` now gates **only the http scope** and passes the
+websocket through — the WS is reachable only from the already-gated page,
+so the doorkeeper still holds for normal browser use. Verified: HTTP
+401/200 unchanged; WS connects.
+
 ### Global HTTP Basic Auth gate + one-shot launcher (`web/auth.py`, `web/shell.py`, `web/ibn_dashboard.py`, `web/dtw_dashboard.py`, `start_demo.sh`)
 
 A single shared credential now protects all three browser apps — the

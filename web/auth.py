@@ -6,12 +6,16 @@
 """
 Global HTTP Basic Auth gate shared by the web shell and both dashboards.
 
-One shared credential protects each app — the HTML page AND the
-WebSocket (browsers replay cached Basic-Auth creds on same-origin WS
-upgrades, so one prompt covers both). This is a demo doorkeeper, not
-per-user auth: it keeps the public URLs from being wide open. It is
-orthogonal to the per-browser-session data isolation (MULTI_SESSION_PLAN),
-which keys off the localStorage session token behind this gate.
+One shared credential protects each app's HTML entry point. Only the
+http scope is gated — NOT the WebSocket upgrade: browsers do not reliably
+replay cached Basic-Auth credentials on the WS handshake (Chrome returns
+the upgrade with no Authorization header), so gating the ws scope rejected
+every connection with a 403. The WS is only reachable from the already
+gated page anyway (you can't load the client JS without authenticating),
+so the doorkeeper still holds for normal browser use. This is a demo
+doorkeeper, not per-user auth: it keeps the public URLs from being wide
+open. It is orthogonal to the per-browser-session data isolation
+(MULTI_SESSION_PLAN), which keys off the localStorage session token.
 
 Configure with SHELL_AUTH_USER / SHELL_AUTH_PASS (default
 mdb / mdbagentic2026); disable entirely with SHELL_AUTH_DISABLE=1.
@@ -30,7 +34,8 @@ AUTH_PASS = os.environ.get("SHELL_AUTH_PASS", "mdbagentic2026")
 
 
 class BasicAuthMiddleware:
-    """Pure-ASGI Basic-Auth gate over both http and websocket scopes."""
+    """Pure-ASGI Basic-Auth gate over the http scope. The websocket scope
+    is intentionally passed through (see module docstring)."""
 
     def __init__(self, app, username: str, password: str, realm: str):
         self.app = app
@@ -39,24 +44,21 @@ class BasicAuthMiddleware:
         self.realm = realm
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] in ("http", "websocket"):
+        if scope["type"] == "http":
             headers = dict(scope.get("headers") or [])
             provided = headers.get(b"authorization", b"").decode()
             # constant-time compare so a wrong password can't be timed out
             if not hmac.compare_digest(provided, self._expected):
-                if scope["type"] == "http":
-                    await send({
-                        "type": "http.response.start", "status": 401,
-                        "headers": [
-                            (b"www-authenticate",
-                             f'Basic realm="{self.realm}"'.encode()),
-                            (b"content-type", b"text/plain; charset=utf-8"),
-                        ],
-                    })
-                    await send({"type": "http.response.body",
-                                "body": b"Authentication required."})
-                else:  # websocket: reject the upgrade (1008 = policy violation)
-                    await send({"type": "websocket.close", "code": 1008})
+                await send({
+                    "type": "http.response.start", "status": 401,
+                    "headers": [
+                        (b"www-authenticate",
+                         f'Basic realm="{self.realm}"'.encode()),
+                        (b"content-type", b"text/plain; charset=utf-8"),
+                    ],
+                })
+                await send({"type": "http.response.body",
+                            "body": b"Authentication required."})
                 return
         await self.app(scope, receive, send)
 
