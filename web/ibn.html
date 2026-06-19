@@ -696,6 +696,11 @@ document.getElementById('modeBadge').textContent = mode;
 // prefixed data. Forwarded on the WS and snapshot requests; empty → default.
 const SESSION = params.get('session') || '';
 const SQ = SESSION ? ('session=' + encodeURIComponent(SESSION)) : '';
+// Mount prefix when served under a sub-path behind a reverse proxy
+// (e.g. /ibn at agentic.bjjl.dev); empty when served at the origin root
+// (direct uvicorn port). The page is always the mount root, so the path
+// IS the prefix. Prepended to /ws and /snapshot so they hit this app.
+const PREFIX = location.pathname.replace(/\/+$/, '');
 
 // ── State ──
 let state = {
@@ -999,7 +1004,7 @@ function renderTabs() {
 async function switchFocus(intentId) {
   if (state.focused && state.focused._id === intentId) return;
   try {
-    const resp = await fetch(`/snapshot/${encodeURIComponent(intentId)}${SQ ? '?' + SQ : ''}`);
+    const resp = await fetch(`${PREFIX}/snapshot/${encodeURIComponent(intentId)}${SQ ? '?' + SQ : ''}`);
     const data = await resp.json();
     state.focused  = data.intent;
     state.plan     = data.plan;
@@ -1162,7 +1167,7 @@ document.getElementById('closeDiagnosis').onclick = () => {
 let ws, reconnectDelay = 1000;
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws${SQ ? '?' + SQ : ''}`);
+  ws = new WebSocket(`${proto}://${location.host}${PREFIX}/ws${SQ ? '?' + SQ : ''}`);
 
   ws.onopen = () => {
     document.getElementById('statusDot').classList.remove('disconnected');

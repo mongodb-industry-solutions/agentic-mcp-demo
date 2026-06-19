@@ -33,6 +33,8 @@ source <dir>/bin/activate        # same venv
 ```
 `start_demo.sh` launches all three behind the Basic-Auth gate, logs to `./logs/`, and stops everything on Ctrl-C. Open the shell, then use its banner's **📊 IBN/DTW dashboard** links — they carry your session token so the dashboards mirror your own isolated demo lane. First run on a fresh database still needs the one-time seeders (`python seed/ibn_seed.py && python seed/dtw_seed.py`) to create the shared reference data + Atlas vector indexes.
 
+**Behind nginx (production, `agentic.bjjl.dev`):** `etc/nginx.conf` has a server block that path-routes one host to all three apps — shell at `/`, IBN dashboard at `/ibn/`, DTW dashboard at `/dtw/` — with WebSocket upgrade + long timeouts, reusing the `*.bjjl.dev` wildcard cert. Set `DEMO_BIND_HOST=127.0.0.1` so the uvicorn ports are reachable only through nginx (the apps' shared `Agentic AI Demo` Basic-Auth realm means one login covers all three). The shell/dashboards auto-detect the sub-path mount (WS uses `wss://`, dashboards derive their prefix from the URL).
+
 **Watch live agent activity (separate terminal):**
 ```bash
 curl -sN https://notify.bjjl.dev/receive | sed -n 's/^data: //p'

@@ -352,7 +352,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-install_basic_auth(app, realm="Agentic AI Demo - IBN Dashboard")
+# Shared realm with the shell + DTW dashboard so that behind the reverse
+# proxy (one origin, agentic.bjjl.dev) the browser authenticates once and
+# replays the credential to /ibn, /dtw, and / without re-prompting.
+install_basic_auth(app, realm="Agentic AI Demo")
 
 HTML_PATH = Path(__file__).parent / "ibn.html"
 
@@ -413,4 +416,5 @@ async def ws_endpoint(ws: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8060, log_level="info")
+    uvicorn.run(app, host=os.environ.get("DEMO_BIND_HOST", "0.0.0.0"),
+                port=8060, log_level="info")

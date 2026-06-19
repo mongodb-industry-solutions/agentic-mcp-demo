@@ -2,6 +2,32 @@
 
 ## 2026-06-19
 
+### Run behind nginx at agentic.bjjl.dev (`etc/nginx.conf`, `web/shell.html`, `web/ibn.html`, `web/dtw.html`, `web/*_dashboard.py`)
+
+One nginx host fronts all three demo apps via path routing: the web
+shell at `/`, the IBN dashboard at `/ibn/`, the DTW dashboard at
+`/dtw/` (each proxied to its uvicorn port 8070/8060/8080). The
+dashboard `proxy_pass` carries a trailing slash to strip the mount
+prefix, WebSocket upgrade headers are set on every location, and
+read/send timeouts are 86400s so idle live-feed sockets survive. Reuses
+the existing `*.bjjl.dev` wildcard cert.
+
+App adaptations for serving under a reverse proxy / sub-path:
+- The shell WebSocket now uses `wss://` when the page is `https://`
+  (the hardcoded `ws://` would be blocked as mixed content behind TLS).
+- The dashboards derive a mount `PREFIX` from `location.pathname` and
+  prepend it to their `/ws` and `/snapshot` URLs, so those hit the
+  right app under `/ibn` or `/dtw` (empty prefix at the origin root, so
+  direct-port dev is unchanged).
+- The shell's dashboard links are path-based (`/ibn/`, `/dtw/`) behind
+  the proxy and fall back to sibling ports (`:8060`, `:8080`) when the
+  shell is hit directly on `:8070` in dev.
+- All three apps now share the Basic-Auth realm `Agentic AI Demo`, so
+  the single agentic.bjjl.dev origin prompts for the login only once.
+- `DEMO_BIND_HOST` env (default `0.0.0.0`) lets the deploy bind the
+  uvicorn ports to `127.0.0.1` so they're only reachable through nginx
+  (and the auth gate can't be bypassed by hitting a port directly).
+
 ### Perf: lazy MCP server activation — a turn only spawns the servers it uses (`agents/mcp_pool.py`, `agents/domain_agent.py`)
 
 A domain agent used to activate every server in its domain up front

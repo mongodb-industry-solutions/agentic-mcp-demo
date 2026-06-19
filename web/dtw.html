@@ -157,6 +157,9 @@ document.getElementById("modePill").textContent = MODE;
 // Phase B: ?session=<token> ties this dashboard to one web-shell session.
 const SESSION = params.get("session") || "";
 const SQ = SESSION ? ("session=" + encodeURIComponent(SESSION)) : "";
+// Mount prefix when served under a sub-path behind a reverse proxy
+// (e.g. /dtw at agentic.bjjl.dev); empty at the origin root (dev port).
+const PREFIX = location.pathname.replace(/\/+$/, "");
 
 const state = { scenarios: [], focusedId: null };
 
@@ -390,7 +393,7 @@ function focusScenario(id) {
 let ws;
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/ws${SQ ? "?" + SQ : ""}`);
+  ws = new WebSocket(`${proto}://${location.host}${PREFIX}/ws${SQ ? "?" + SQ : ""}`);
   ws.onopen   = () => setLive(true);
   ws.onclose  = () => { setLive(false); setTimeout(connect, 2000); };
   ws.onerror  = () => { setLive(false); };

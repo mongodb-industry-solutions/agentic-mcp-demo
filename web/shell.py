@@ -496,4 +496,7 @@ async def ws_endpoint(ws: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8070, log_level="info")
+    # Behind nginx, set DEMO_BIND_HOST=127.0.0.1 so the port isn't
+    # directly reachable (and the Basic-Auth gate can't be bypassed).
+    uvicorn.run(app, host=os.environ.get("DEMO_BIND_HOST", "0.0.0.0"),
+                port=8070, log_level="info")
