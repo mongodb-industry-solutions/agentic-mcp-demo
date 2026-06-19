@@ -246,6 +246,13 @@
   }
   .reset-btn:hover { border-color: var(--yellow); }
   .reset-btn:disabled { opacity: 0.4; cursor: default; }
+  .dash-link {
+    margin-top: 8px; margin-left: 8px; padding: 3px 10px;
+    border: 1px solid #2a3f55; color: var(--cyan); border-radius: 4px;
+    font-size: 11px; cursor: pointer; text-decoration: none;
+    display: inline-block;
+  }
+  .dash-link:hover { border-color: var(--cyan); }
   .modal .warn { color: var(--yellow); font-size: 12px; line-height: 1.55; }
   .modal .warn b { color: var(--text); }
   .modal-result { font-size: 11px; padding: 4px 0; }
@@ -366,6 +373,10 @@
           title="Drop and re-seed the IBN + DTW demo data to a clean slate">
     ↺ Reset demo data
   </button>
+  <a class="dash-link" id="ibnDashLink" target="_blank" rel="noopener"
+     title="Open the IBN dashboard bound to this session">📊 IBN dashboard</a>
+  <a class="dash-link" id="dtwDashLink" target="_blank" rel="noopener"
+     title="Open the DTW dashboard bound to this session">📊 DTW dashboard</a>
 </div>
 
 <div class="columns">
@@ -475,6 +486,13 @@ function connect() {
     if (msg.type === 'hello') {
       sessionToken = msg.session || null;
       try { if (sessionToken) localStorage.setItem('demo_session', sessionToken); } catch (_) {}
+      // Point the dashboard links at this session so they mirror the
+      // exact per-session lane (default ports 8060 IBN / 8080 DTW).
+      if (sessionToken) {
+        const q = '/?session=' + encodeURIComponent(sessionToken);
+        document.getElementById('ibnDashLink').href = `http://${location.hostname}:8060${q}`;
+        document.getElementById('dtwDashLink').href = `http://${location.hostname}:8080${q}`;
+      }
       document.getElementById('bannerHost').textContent    = msg.host || '—';
       document.getElementById('bannerIndexes').textContent = msg.indexes.join(', ') || 'none';
       if (msg.servers.length)

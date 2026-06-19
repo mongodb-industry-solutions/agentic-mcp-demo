@@ -89,9 +89,13 @@ Deviations / notes:
   seed/dtw_seed.py`). Per-session lanes only copy the small mutable set;
   they rely on the shared reference data + indexes already existing.
 - The standalone **dashboards** (`web/ibn_dashboard.py`,
-  `web/dtw_dashboard.py`) still observe the bare/default lane, not a
-  browser session's prefixed data — wiring a dashboard to a session is
-  out of scope.
+  `web/dtw_dashboard.py`) are now **session-aware**: opened with
+  `?session=<token>` they watch that session's prefixed collections
+  (lazy per-session watcher set, broadcast scoped to that session's
+  tabs, idle-reaped after 120s with no tabs); no token → the shared
+  default lane. The web shell hands out per-session dashboard links
+  (banner, `http://<host>:8060|8080/?session=<token>`). Reference data
+  (`ibn_sites`, `dtw_markets`) still resolves from shared collections.
 - Resource ceiling is bounded by `DEMO_MAX_SESSIONS` (orchestrators ×
   MCP subprocesses × Mongo connections). Tune down on small clusters.
 

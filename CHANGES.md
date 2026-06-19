@@ -49,7 +49,32 @@ independent of the shared lane.
 
 Notes: fresh deployments still run the CLI seeders once to create the
 shared reference data + vector indexes (per-session lanes only copy the
-mutable set). The standalone dashboards still observe the default lane.
+mutable set).
+
+### Dashboards: session-aware (`web/ibn_dashboard.py`, `web/dtw_dashboard.py`, `web/ibn.html`, `web/dtw.html`, `web/shell.html`)
+
+The live dashboards now mirror the exact per-session lane the user is
+driving, instead of only the shared default lane. Each dashboard is
+refactored to a per-session model keyed by collection prefix: a browser
+opens it with `?session=<token>`, the server resolves the prefix, and
+lazily starts that session's own watcher set (intents / compliance /
+plans change streams + telemetry poller + live telemetry writer for
+IBN; scenarios change stream for DTW), broadcasting only to that
+session's tabs. Watcher sets are idle-reaped 120s after the last tab
+leaves so abandoned sessions don't leak change streams. Reference data
+(`ibn_sites`, `dtw_markets`) still resolves from shared collections; no
+/ invalid token → the shared default lane (backward compatible).
+
+The session token crosses the port boundary (shell :8070 → dashboards
+:8060/:8080, separate origins so localStorage can't) via the URL: the
+shell banner now shows **📊 IBN dashboard** / **📊 DTW dashboard** links
+pointing at `http://<host>:8060|8080/?session=<token>`. The dashboard
+HTML forwards `?session=` on its WebSocket and `/snapshot` requests.
+
+Verified on live Atlas: two dashboard lanes built from prefixed
+collections are isolated (session A's cancelled intent shows only in
+A's snapshot; B unaffected), while shared reference data resolves for
+both.
 
 ### Web shell: browser-driven demo reset (Phase A of MULTI_SESSION_PLAN.md) (`web/shell.py`, `web/seed_runner.py`, `web/shell.html`)
 

@@ -11,13 +11,18 @@
 # Then: http://localhost:8080
 #       http://localhost:8080/?mode=exec   (executive view)
 #       http://localhost:8080/?mode=eng    (engineer view, default)
+#       http://localhost:8080/?session=<token>   (Phase B: watch one
+#         browser session's prefixed dtw_scenarios — the web shell hands
+#         out this link with its session token. No token → default lane.)
 
 import asyncio
-import datetime
 import json
 import logging
 import os
+import re
+import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -30,7 +35,27 @@ log = logging.getLogger("dtw_dashboard")
 MONGO_URI = os.environ["MONGODB_URI"]
 DB_NAME   = "agent_registry"
 
-clients: set[WebSocket] = set()
+# Phase B: dtw_scenarios is per-session (prefixed s_<token>_); dtw_markets
+# is reference data → shared. See MULTI_SESSION_PLAN.md.
+_TOKEN_RE = re.compile(r"^[a-z0-9]{8,32}$")
+SESSION_IDLE_TTL_SEC = 120
+
+
+def _prefix(token: str | None) -> str:
+    token = (token or "").strip().lower()
+    return f"s_{token}_" if _TOKEN_RE.match(token) else ""
+
+
+@dataclass
+class DashSession:
+    prefix: str
+    clients: set = field(default_factory=set)
+    tasks: list = field(default_factory=list)
+    last_activity: float = 0.0
+
+
+_sessions: dict[str, DashSession] = {}   # keyed by prefix ("" = default lane)
+_guard = asyncio.Lock()
 
 
 def _serializable(doc):
@@ -45,39 +70,33 @@ def _serializable(doc):
     return doc
 
 
-async def broadcast(msg: dict):
+async def broadcast(session: DashSession, msg: dict):
     data = json.dumps(_serializable(msg))
     dead = []
-    for ws in clients:
+    for ws in session.clients:
         try:
             await ws.send_text(data)
         except Exception:
             dead.append(ws)
     for ws in dead:
-        clients.discard(ws)
+        session.clients.discard(ws)
 
 
-# ─── State queries ─────────────────────────────────────────────────────────
+# ─── State queries (dtw_scenarios scoped by prefix; markets shared) ─────────
 
-async def all_scenarios(db):
-    cur = db["dtw_scenarios"].find({}).sort("submitted_at", -1)
+async def all_scenarios(db, pfx):
+    cur = db[pfx + "dtw_scenarios"].find({}).sort("submitted_at", -1)
     return [d async for d in cur]
-
-
-async def latest_scenario(db):
-    cur = db["dtw_scenarios"].find({}).sort("submitted_at", -1).limit(1)
-    docs = [d async for d in cur]
-    return docs[0] if docs else None
 
 
 async def all_markets(db):
-    cur = db["dtw_markets"].find({}).sort("_id", 1)
+    cur = db["dtw_markets"].find({}).sort("_id", 1)   # reference → shared
     return [d async for d in cur]
 
 
-async def build_snapshot(db):
+async def build_snapshot(db, pfx):
     """Full state package sent on WebSocket connect."""
-    scns    = await all_scenarios(db)
+    scns    = await all_scenarios(db, pfx)
     markets = await all_markets(db)
     focused = scns[0] if scns else None
     return {
@@ -88,11 +107,12 @@ async def build_snapshot(db):
     }
 
 
-# ─── Change-stream watcher ────────────────────────────────────────────────
+# ─── Change-stream watcher (one per session) ────────────────────────────────
 
-async def watch_scenarios(db):
-    log.info("scenario watcher started")
-    coll = db["dtw_scenarios"]
+async def watch_scenarios(db, session: DashSession):
+    pfx = session.prefix
+    log.info(f"scenario watcher started (prefix={pfx!r})")
+    coll = db[pfx + "dtw_scenarios"]
     while True:
         try:
             stream = await coll.watch(full_document="updateLookup")
@@ -101,11 +121,42 @@ async def watch_scenarios(db):
                     if change["operationType"] in ("insert", "update", "replace"):
                         doc = change.get("fullDocument")
                         if doc:
-                            await broadcast({"type": "scenario_update",
-                                             "doc": _serializable(doc)})
+                            await broadcast(session, {"type": "scenario_update",
+                                                      "doc": _serializable(doc)})
         except Exception as e:
             log.warning(f"scenario stream error ({e}); retrying in 2s")
             await asyncio.sleep(2)
+
+
+# ─── Session lifecycle ──────────────────────────────────────────────────────
+
+async def _get_or_start_session(db, prefix: str) -> DashSession:
+    async with _guard:
+        sess = _sessions.get(prefix)
+        if sess is None:
+            sess = DashSession(prefix=prefix, last_activity=time.monotonic())
+            sess.tasks = [asyncio.create_task(watch_scenarios(db, sess))]
+            _sessions[prefix] = sess
+            log.info(f"session lane started (prefix={prefix!r}, "
+                     f"{len(_sessions)} active)")
+        return sess
+
+
+async def _reaper_loop():
+    while True:
+        await asyncio.sleep(30)
+        now = time.monotonic()
+        async with _guard:
+            for prefix, sess in list(_sessions.items()):
+                if sess.clients:
+                    continue
+                if now - sess.last_activity < SESSION_IDLE_TTL_SEC:
+                    continue
+                for t in sess.tasks:
+                    t.cancel()
+                _sessions.pop(prefix, None)
+                log.info(f"session lane reaped (prefix={prefix!r}, "
+                         f"{len(_sessions)} remain)")
 
 
 # ─── FastAPI app ───────────────────────────────────────────────────────────
@@ -113,14 +164,17 @@ async def watch_scenarios(db):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     client = AsyncMongoClient(MONGO_URI)
-    db = client[DB_NAME]
     app.state.mongo = client
-    app.state.db    = db
-    tasks = [asyncio.create_task(watch_scenarios(db))]
+    app.state.db    = client[DB_NAME]
+    reaper = asyncio.create_task(_reaper_loop())
     log.info("Dashboard ready — http://localhost:8080")
     yield
-    for t in tasks:
-        t.cancel()
+    reaper.cancel()
+    async with _guard:
+        for sess in _sessions.values():
+            for t in sess.tasks:
+                t.cancel()
+        _sessions.clear()
     await client.close()
 
 
@@ -140,9 +194,10 @@ async def index():
 
 
 @app.get("/snapshot/{scenario_id}")
-async def scenario_snapshot(scenario_id: str):
-    db = app.state.db
-    doc = await db["dtw_scenarios"].find_one({"_id": scenario_id})
+async def scenario_snapshot(scenario_id: str, session: str = ""):
+    db  = app.state.db
+    pfx = _prefix(session)
+    doc = await db[pfx + "dtw_scenarios"].find_one({"_id": scenario_id})
     if not doc:
         return JSONResponse({"error": "not found"}, status_code=404)
     return JSONResponse(_serializable(doc))
@@ -151,10 +206,13 @@ async def scenario_snapshot(scenario_id: str):
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
-    clients.add(ws)
-    log.info(f"client connected ({len(clients)} total)")
+    pfx = _prefix(ws.query_params.get("session"))
+    session = await _get_or_start_session(app.state.db, pfx)
+    session.clients.add(ws)
+    session.last_activity = time.monotonic()
+    log.info(f"client connected (prefix={pfx!r}, {len(session.clients)} tab(s))")
     try:
-        snap = await build_snapshot(app.state.db)
+        snap = await build_snapshot(app.state.db, pfx)
         await ws.send_text(json.dumps(_serializable(snap)))
     except Exception as e:
         log.error(f"snapshot send failed: {e}")
@@ -164,8 +222,10 @@ async def ws_endpoint(ws: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        clients.discard(ws)
-        log.info(f"client disconnected ({len(clients)} total)")
+        session.clients.discard(ws)
+        session.last_activity = time.monotonic()
+        log.info(f"client disconnected (prefix={pfx!r}, "
+                 f"{len(session.clients)} tab(s) remain)")
 
 
 if __name__ == "__main__":

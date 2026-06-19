@@ -692,6 +692,10 @@ const params = new URLSearchParams(window.location.search);
 const mode = params.get('mode') === 'exec' ? 'exec' : 'eng';
 if (mode === 'exec') document.body.classList.add('exec-mode');
 document.getElementById('modeBadge').textContent = mode;
+// Phase B: ?session=<token> ties this dashboard to one web-shell session's
+// prefixed data. Forwarded on the WS and snapshot requests; empty → default.
+const SESSION = params.get('session') || '';
+const SQ = SESSION ? ('session=' + encodeURIComponent(SESSION)) : '';
 
 // ── State ──
 let state = {
@@ -995,7 +999,7 @@ function renderTabs() {
 async function switchFocus(intentId) {
   if (state.focused && state.focused._id === intentId) return;
   try {
-    const resp = await fetch(`/snapshot/${encodeURIComponent(intentId)}`);
+    const resp = await fetch(`/snapshot/${encodeURIComponent(intentId)}${SQ ? '?' + SQ : ''}`);
     const data = await resp.json();
     state.focused  = data.intent;
     state.plan     = data.plan;
@@ -1158,7 +1162,7 @@ document.getElementById('closeDiagnosis').onclick = () => {
 let ws, reconnectDelay = 1000;
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws = new WebSocket(`${proto}://${location.host}/ws${SQ ? '?' + SQ : ''}`);
 
   ws.onopen = () => {
     document.getElementById('statusDot').classList.remove('disconnected');
