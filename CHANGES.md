@@ -1,5 +1,48 @@
 # CHANGES.md
 
+## 2026-06-19
+
+### Web shell: browser-driven demo reset (Phase A of MULTI_SESSION_PLAN.md) (`web/shell.py`, `web/seed_runner.py`, `web/shell.html`)
+
+A **Reset demo data** button in the web shell banner re-runs the
+`seed/ibn_seed.py --reset` + `seed/dtw_seed.py --reset` pipeline from the
+browser, with live progress streamed to the Agent Log — so anyone can
+get a clean demo without shell access.
+
+- `web/seed_runner.py` — new. Drives the seeders' existing phase
+  functions (`reset`/`ensure_indexes`/`insert_all`/… each takes a `db`)
+  against a given `db_name`, redirecting their `print()` output
+  line-by-line to an async `emit` callback. The blocking work runs in a
+  worker thread; lines cross back to the event loop via
+  `loop.call_soon_threadsafe` → `asyncio.Queue` and stream to the
+  WebSocket as they're produced.
+- `web/shell.py` — `reset_demo` WS message, run under the existing
+  `_query_lock` so a reset can't interleave with a query mid-tool-call;
+  returns a fast "busy" message if the lock is held. On success the
+  agent's in-memory turn context (conversation tail, current workstream,
+  sticky domain/service) is cleared so the next query starts clean. Each
+  connection now also issues a `session_token` (echoed in `hello`), and
+  the reset routes through `_demo_db_for(session_token)` → the shared
+  `agent_registry` for now. These two are the Phase-B seams.
+- `web/shell.html` — banner button, a destructive-action confirm modal,
+  a `SEED`-tagged live progress stream, and a completion panel. The
+  modal/button lock out while a reset is in flight.
+
+Phase-A is single-user-safe (the process-wide `_query_lock` serialises
+everything); concurrent users still share one dataset, which Phase B
+fixes.
+
+**Phase-B finding, measured during testing** (recorded in
+MULTI_SESSION_PLAN.md): the seed pipeline was validated against a
+throwaway database `agent_registry__phaseA_smoketest` (passing a
+non-default `db_name` — which also exercises the Phase-B seam). All 15
+collections seeded correctly and 38 progress lines streamed. Cleanup
+revealed the Atlas credential can CRUD and drop *collections* but cannot
+`dropDatabase` on another database — so Phase-B session isolation must
+use per-session **collection prefixes within `agent_registry`**, not
+per-session databases. The real `agent_registry` demo data was never
+touched by the test.
+
 ## 2026-06-11
 
 ### Market resolution: 'LA' resolved to Dallas_Metro (`dtw_scenario_service`, `dtw_topology_service`)

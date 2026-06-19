@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
@@ -26,13 +27,30 @@ from pymongo import MongoClient
 
 from agents.orchestrator import OrchestratorAgent
 from agents import history as shell_history
+from web import seed_runner
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 log = logging.getLogger("shell")
 
 clients: set[WebSocket] = set()
 _agent: OrchestratorAgent | None = None
-_query_lock = asyncio.Lock()  # one query at a time, same as the CLI
+# One exclusive operation at a time. A query and a re-seed must never
+# overlap: the seed drops the very collections a tool call reads. The
+# CLI is implicitly single-user; this lock makes the web shell match it.
+_query_lock = asyncio.Lock()
+
+# Phase-A: a single shared demo database, exactly like the CLI seeders.
+# Phase-B (MULTI_SESSION_PLAN.md) replaces this with a per-browser-session
+# database name resolved from the connection's session token, so one
+# user's reset can't wipe another's demo. Centralised here so the reset
+# path already routes through a single indirection point.
+DEMO_DB = "agent_registry"
+
+
+def _demo_db_for(session_token: str | None) -> str:
+    """Resolve the demo database for a session. Phase-A ignores the token
+    and returns the shared DB; the signature is the Phase-B seam."""
+    return DEMO_DB
 
 
 async def _ws_broadcast(tag: str, msg: str):
@@ -133,7 +151,12 @@ async def index():
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
     clients.add(ws)
-    log.info(f"client connected ({len(clients)} total)")
+    # Per-connection session token. Phase-A only echoes it (and tags reset
+    # logs with it); Phase-B routes each session to its own demo database
+    # via _demo_db_for(session_token). Generated server-side now so the
+    # protocol and client already carry it.
+    session_token = uuid.uuid4().hex[:12]
+    log.info(f"client connected — session {session_token} ({len(clients)} total)")
 
     # Send initial info so the browser can render the banner. `history` is
     # pulled from the agent_history MongoDB collection — the same store
@@ -146,6 +169,7 @@ async def ws_endpoint(ws: WebSocket):
         "indexes": info["indexes"],
         "servers": list(_agent.sessions.keys()) if _agent else [],
         "history": shell_history.read_recent(),
+        "session": session_token,
     }))
 
     try:
@@ -183,6 +207,64 @@ async def ws_endpoint(ws: WebSocket):
                         await ws.send_text(json.dumps({"type": "error", "message": str(e)}))
                     finally:
                         await ws.send_text(json.dumps({"type": "thinking", "active": False}))
+
+            elif msg.get("type") == "reset_demo":
+                # Re-seed the demo data (IBN + DTW) to its pristine
+                # fixture state — the browser equivalent of running both
+                # seed scripts with --reset. Destructive: drops and
+                # rebuilds the ibn_*/dtw_* collections.
+                #
+                # Held under _query_lock so it cannot interleave with a
+                # query mid-tool-call (which would read half-dropped
+                # collections). Phase-A assumes a single user, so this
+                # lock is sufficient; Phase-B isolates per session DB.
+                if _query_lock.locked():
+                    await ws.send_text(json.dumps({
+                        "type": "reset_done", "ok": False,
+                        "message": "Busy — another query or reset is "
+                                   "running. Try again in a moment."}))
+                    continue
+
+                async def _emit(line: str):
+                    await ws.send_text(json.dumps(
+                        {"type": "reset_progress", "line": line}))
+
+                async with _query_lock:
+                    db_name = _demo_db_for(session_token)
+                    log.info(f"reset_demo — session {session_token} "
+                             f"→ db {db_name}")
+                    await ws.send_text(json.dumps(
+                        {"type": "reset_started"}))
+                    try:
+                        await seed_runner.reset_and_seed(db_name, _emit)
+                        # Fresh data means the agent's in-memory turn
+                        # context (conversation tail, current workstream,
+                        # sticky domain/service) now points at rows that
+                        # no longer exist — clear it so the next query
+                        # starts clean. The persisted agent_workstreams /
+                        # agent_memories collections are intentionally
+                        # left intact (seed --reset never touched them);
+                        # whether a reset should also clear those, and
+                        # per-session, is a Phase-B decision.
+                        if _agent is not None:
+                            _agent.conversation_history = []
+                            _agent.current_workstream_id = None
+                            _agent.last_domain = None
+                            _agent.last_service = None
+                        await ws.send_text(json.dumps({
+                            "type": "reset_done", "ok": True,
+                            "message": "Demo data reset to a clean "
+                                       "slate. Vector indexes rebuild in "
+                                       "~30–90s."}))
+                        await ws.send_text(json.dumps({
+                            "type":    "server_list",
+                            "servers": _agent.list_servers_info()
+                                       if _agent else []}))
+                    except Exception as e:
+                        log.exception("reset_demo failed")
+                        await ws.send_text(json.dumps({
+                            "type": "reset_done", "ok": False,
+                            "message": f"Reset failed: {e}"}))
 
             elif msg.get("type") == "server_list":
                 servers = _agent.list_servers_info() if _agent else []
