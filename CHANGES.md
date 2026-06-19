@@ -9,8 +9,14 @@ shell at `/`, the IBN dashboard at `/ibn/`, the DTW dashboard at
 `/dtw/` (each proxied to its uvicorn port 8070/8060/8080). The
 dashboard `proxy_pass` carries a trailing slash to strip the mount
 prefix, WebSocket upgrade headers are set on every location, and
-read/send timeouts are 86400s so idle live-feed sockets survive. Reuses
-the existing `*.bjjl.dev` wildcard cert.
+read/send timeouts are 86400s so idle live-feed sockets survive.
+
+**Cert prerequisite (verified):** the `bjjl.dev` cert is NOT a wildcard
+— the live cert covers only `bjjl.dev` + `notify.bjjl.dev`. It must be
+reissued to add `agentic.bjjl.dev` as a SAN (e.g. dehydrated
+`domains.txt`: `bjjl.dev notify.bjjl.dev agentic.bjjl.dev`, then re-run
+dehydrated; the renewed cert stays in the same `bjjl.dev/` dir, so the
+nginx path is unchanged) before the 443 block validates.
 
 App adaptations for serving under a reverse proxy / sub-path:
 - The shell WebSocket now uses `wss://` when the page is `https://`
