@@ -140,6 +140,18 @@ def _seed_session_sync(db, prefix: str, emit) -> None:
                 pass
     emit("    dropped: " + ", ".join(P + b for b in SESSION_MUTABLE_BASES))
 
+    # Clear this session's conversation memory too, so a reset is a TRUE
+    # clean slate. Otherwise a surviving workstream ("Establish Alpenmarkt
+    # Marienplatz operations", summary saying the intent was submitted)
+    # keeps feeding the agent stale context and it answers "already
+    # submitted" instead of re-running the workflow. delete_many (not
+    # drop) so the orchestrator's live change-stream watcher isn't
+    # disturbed; empty no-op when seeding a brand-new lane.
+    emit(f"━━ session {prefix} · clear conversation memory ━━")
+    wiped_ws = db[P + "agent_workstreams"].delete_many({}).deleted_count
+    wiped_mem = db[P + "agent_memories"].delete_many({}).deleted_count
+    emit(f"    cleared {wiped_ws} workstream(s), {wiped_mem} memory/-ies")
+
     emit(f"━━ session {prefix} · telemetry timeseries ━━")
     db.create_collection(
         P + "ibn_telemetry",

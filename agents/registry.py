@@ -37,12 +37,27 @@ class RegistryMixin:
 
     async def _watch_servers(self):
         """Re-sync registry whenever a .py file in mcp_servers/ is added,
-        changed, or deleted. watchfiles debounces rapid saves automatically."""
+        changed, or deleted. watchfiles debounces rapid saves automatically.
+
+        Hot-reload is a dev convenience; disable it with
+        DEMO_DISABLE_FILE_WATCH=1. We force POLLING because watchfiles'
+        native backend (the Rust `notify` crate) has no NetBSD support and
+        busy-loops there — pegging the event loop at ~100% CPU and starving
+        every other coroutine (WS handling, change streams, sessions).
+        Polling a handful of files once a second costs ~nothing and behaves
+        identically on every platform."""
+        if os.environ.get("DEMO_DISABLE_FILE_WATCH"):
+            return
         try:
-            async for _ in awatch(self.server_dir, watch_filter=lambda _, p: p.endswith(".py")):
+            async for _ in awatch(self.server_dir,
+                                  watch_filter=lambda _, p: p.endswith(".py"),
+                                  force_polling=True, poll_delay_ms=1000):
                 await self._sync_registry()
         except asyncio.CancelledError:
             pass
+        except Exception as e:
+            # Never let a watcher failure spin or crash the app.
+            print(f"⚠️ file watcher disabled ({e})")
 
     def _extract_docstring(self, file_path: Path) -> str:
         try:

@@ -592,7 +592,13 @@ class WorkstreamMixin:
             "state":          "open",
             "opened_at":      now,
             "last_activity":  now,
-            "summary":        f"Started: {seed_query[:200]}",
+            # NB: a brand-new workstream has executed NOTHING yet. Phrase
+            # the seed summary so the agent doesn't misread it as "the
+            # action already happened" and skip the tool call — it used to
+            # be "Started: <request>", which made the agent reply "already
+            # submitted" without ever calling submit_intent.
+            "summary":        (f"New workstream — no actions executed yet. "
+                               f"Original request: {seed_query[:200]}"),
             "tool_calls":     [],
             "turn_count":     0,
         }

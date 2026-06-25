@@ -1,5 +1,44 @@
 # CHANGES.md
 
+## 2026-06-26
+
+### Fix: web shell pegged at 100% CPU on NetBSD + reset/session not a clean slate (`agents/registry.py`, `agents/workstreams.py`, `web/seed_runner.py`)
+
+Three linked bugs surfaced running the demo on NetBSD 10.1:
+
+1. **`web/shell.py` busy-looped at ~98% CPU.** `_watch_servers` uses
+   `watchfiles.awatch`, whose native backend (Rust `notify`) has no
+   NetBSD support and spins there. Only the bootstrap orchestrator runs
+   it, so only the shell process was affected. Worse, a coroutine
+   spinning at 100% **starves the asyncio event loop**, making WS/session
+   handling sluggish and erratic — the visible "goes crazy". Fix: force
+   `awatch` into polling mode (`force_polling=True, poll_delay_ms=1000`,
+   ~0 CPU on every platform), guard the loop against exceptions, and add
+   `DEMO_DISABLE_FILE_WATCH=1` to turn hot-reload off entirely.
+
+2. **A new workstream's summary read as "already done", so the agent
+   skipped the tool.** It was seeded `"Started: <your request>"`; the
+   IBN agent read that as the intent already being submitted and replied
+   "this intent has already been submitted…" WITHOUT ever calling
+   `submit_intent` (observed: zero servers activated, no write). Reseeded
+   as `"New workstream — no actions executed yet. Original request: …"`
+   so the agent acts instead of assuming.
+
+3. **Reset wasn't a clean slate — it left `agent_workstreams` /
+   `agent_memories` behind.** `reset_session` only wiped the 5 demo
+   collections, so the stale workstream (with its "submitted" summary)
+   survived and kept interfering with re-runs ("old artefacts from
+   earlier runs"). Reset now also clears the session's workstreams +
+   memories (via `delete_many`, so the live change-stream watcher isn't
+   disturbed). Sticky-resume on reconnect is unaffected — only an
+   explicit reset wipes them.
+
+Verified on live Atlas: forced-polling watcher consumes ~0.008s CPU over
+2.5s idle (was a full core); a fresh session's first "open a new store"
+turn now calls `submit_intent` (creates IBN-005); reset restores the
+seed fixtures AND drops the workstream; the redo cleanly reuses IBN-005
+with no interference.
+
 ## 2026-06-19
 
 ### Run behind nginx at agentic.bjjl.dev (`etc/nginx.conf`, `web/shell.html`, `web/ibn.html`, `web/dtw.html`, `web/*_dashboard.py`)
