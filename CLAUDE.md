@@ -16,13 +16,26 @@ export VOYAGE_API_KEY="<your voyage api token>"   # used by restaurant_guide ser
 export OPENAI_MODEL="gpt-4o"  # optional, defaults to gpt-4o
 ```
 
-**Install and run:**
+**Web app auth:** the browser shell and both dashboards are gated by a single shared HTTP Basic Auth credential (`web/auth.py`), default `mdb` / `mdbagentic2026`. Override with `SHELL_AUTH_USER` / `SHELL_AUTH_PASS`, or set `SHELL_AUTH_DISABLE=1` to turn the gate off (e.g. local dev). The terminal CLI (`main.py`) is unaffected.
+
+**Install and run (terminal CLI):**
 ```bash
 python -m venv <dir>
 source <dir>/bin/activate
 pip install -r requirements.txt
 python main.py
 ```
+
+**Run the browser demo (web shell + both dashboards):**
+```bash
+source <dir>/bin/activate        # same venv (or set PYTHON=<venv>/bin/python)
+bin/start.sh                     # start all 3 detached: shell :8070, IBN :8060, DTW :8080
+bin/stop.sh                      # stop all 3 (+ sweep orphaned MCP subprocesses)
+bin/restart.sh                   # stop then start (composes the other two)
+```
+`bin/start.sh` launches the three web-server processes detached (logs to `./logs/`, PIDs in `./run/`) behind the Basic-Auth gate; it's idempotent and fails fast if a service dies. `bin/stop.sh` kills them via pidfile (falling back to the script path) and sweeps any leftover MCP server subprocesses. Open the shell, then use its banner's **📊 IBN/DTW dashboard** links — they carry your session token so the dashboards mirror your own isolated demo lane. First run on a fresh database still needs the one-time seeders (`python seed/ibn_seed.py && python seed/dtw_seed.py`) to create the shared reference data + Atlas vector indexes.
+
+**Behind nginx (production, `agentic.bjjl.dev`):** `etc/nginx.conf` has a server block that path-routes one host to all three apps — shell at `/`, IBN dashboard at `/ibn/`, DTW dashboard at `/dtw/` — with WebSocket upgrade + long timeouts. Set `DEMO_BIND_HOST=127.0.0.1` so the uvicorn ports are reachable only through nginx (the apps' shared `Agentic AI Demo` Basic-Auth realm means one login covers all three). The shell/dashboards auto-detect the sub-path mount (WS uses `wss://`, dashboards derive their prefix from the URL). **Cert prerequisite:** `bjjl.dev` is NOT a wildcard cert (covers `bjjl.dev` + `notify.bjjl.dev` only) — reissue it with `agentic.bjjl.dev` added as a SAN (the renewed cert stays in the same `bjjl.dev/` dir) before the TLS block validates.
 
 **Watch live agent activity (separate terminal):**
 ```bash
@@ -38,9 +51,10 @@ There is no test suite or linter configured — this is a prototype/demo project
 - `agents/orchestrator.py` — `OrchestratorAgent` class; the core brain. Composition root over eight mixin modules in `agents/` (Phases 0–1 of `MULTI_AGENT_PLAN.md`): `broadcast.py`, `registry.py`, `router.py`, `memory.py`, `workstreams.py`, `mcp_pool.py`, `react.py`, `dispatch.py`. The legacy behavior is unchanged — the sections below describe methods that now physically live in those modules
 - `agents/domain_agent.py` + `agents/catalog/` — `DomainAgent` (Phases 1–3): domain-scoped specialists (`ibn_agent`, `dtw_agent`) with their own system prompts and ReAct loops over only their domain's MCP tools; each agent runs its own in-domain Stage 2 server selection. Gated by the `AGENT_MODE` env flag (unset/`all` → every catalog agent, the default; `off`/`0`/`legacy` → legacy routing only; `1`/`ibn` → IBN agent only; or `ibn,dtw` list). The agents own NL field extraction (Phase 4) — `mcp_servers/` IBN/DTW services contain no `openai` imports. Agent cards are synced to the vector-indexed `agent_registry.agent_cards` collection at startup; when a turn spans two or more agent domains, the shell ranks agents by `$vectorSearch` over the cards, splits the request into per-agent sub-tasks (gpt-4o-mini), runs the agents concurrently, and synthesizes one answer (gpt-4o). Agents can also consult each other mid-turn via the shell-mediated `consult_agent` tool (depth-limited to 1, budget 2 per turn); every exchange is persisted to `agent_registry.agent_conversations`
 - `mcp_servers/*.py` — Pluggable FastMCP service modules
+- `web/shell.py` + `web/shell.html` — Browser-based equivalent of `main.py` (FastAPI + WebSocket, `localhost:8070`). Per-browser-session isolation (`MULTI_SESSION_PLAN.md`): each session gets its own `OrchestratorAgent` with a `s_<token>_` collection prefix. **Everything user/session-specific is namespaced and wiped by the Reset button**: the 5 mutable demo collections (ibn_intents/telemetry/compliance_events/policy_snapshots, dtw_scenarios) plus all agent-state planes (agent_workstreams, agent_memories, user_preferences, agent_conversations, routing_decisions, agent_history). Only the service/agent catalogue (mcp_services, agent_cards) and read-only reference fixtures + their vector indexes are shared. Capped by `DEMO_MAX_SESSIONS`, idle-reaped via `DEMO_SESSION_TTL_SEC`. The per-session **Reset demo data** button (`web/seed_runner.py`) drops+reseeds the demo collections and `delete_many`-clears the agent-state planes, streaming progress live. The terminal CLI uses the unprefixed/shared lane (incl. cross-shell cursor-up history). Sessions persist via a `localStorage` token + `init` handshake. MCP servers read `DEMO_PREFIX` from their env (empty → shared/default lane, unchanged for the CLI)
 - `web/portfolio_dashboard.py` — FastAPI + WebSocket dashboard for the portfolio service, driven by MongoDB Change Streams (run separately on `localhost:8050`)
-- `web/ibn_dashboard.py` — FastAPI + WebSocket dashboard for the Intent-Based Networking demo, driven by Change Streams across `ibn_intents`, `ibn_compliance_events`, `ibn_telemetry`, `ibn_policy_snapshots` (run separately on `localhost:8060`; supports `?mode=eng` and `?mode=exec`)
-- `web/dtw_dashboard.py` — FastAPI + WebSocket dashboard for the Digital Twin (ACME what-if) demo, driven by Change Streams on `dtw_scenarios` (run separately on `localhost:8080`; supports `?mode=eng` and `?mode=exec`)
+- `web/ibn_dashboard.py` — FastAPI + WebSocket dashboard for the Intent-Based Networking demo, driven by Change Streams across `ibn_intents`, `ibn_compliance_events`, `ibn_telemetry`, `ibn_policy_snapshots` (run separately on `localhost:8060`; supports `?mode=eng` and `?mode=exec`). Per-session aware (`MULTI_SESSION_PLAN.md` Phase B): `?session=<token>` watches one web-shell session's prefixed collections (lazy per-session watcher set, idle-reaped); no token → shared default lane. The web shell links here with its own token
+- `web/dtw_dashboard.py` — FastAPI + WebSocket dashboard for the Digital Twin (ACME what-if) demo, driven by Change Streams on `dtw_scenarios` (run separately on `localhost:8080`; supports `?mode=eng` and `?mode=exec`). Per-session aware via `?session=<token>`, same as the IBN dashboard
 - `seed/ibn_seed.py` — One-shot loader for the IBN demo fixtures (sites, customers, resources, knowledge_chunks, intents). Run once before starting the demo; supports `--reset`
 - `seed/dtw_seed.py` — One-shot loader for the Digital Twin demo fixtures (plans, QoS profiles, network elements, topology edges, subscribers, traffic models, knowledge chunks, sample scenarios). Run once before starting the DTW demo; supports `--reset`
 

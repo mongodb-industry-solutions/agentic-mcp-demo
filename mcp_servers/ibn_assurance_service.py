@@ -50,12 +50,18 @@ logger = logging.getLogger("ibn_assurance_service")
 
 mongo_client = MongoClient(os.environ["MONGODB_URI"])
 db                  = mongo_client["agent_registry"]
-intents             = db["ibn_intents"]
-sites               = db["ibn_sites"]
-telemetry           = db["ibn_telemetry"]
-compliance_events   = db["ibn_compliance_events"]
-knowledge_chunks    = db["ibn_knowledge_chunks"]
-policy_snapshots    = db["ibn_policy_snapshots"]
+# Per-session isolation (Phase B): mutable collections prefixed with
+# DEMO_PREFIX (empty → bare names); reference collections stay shared.
+# ibn_knowledge_chunks stays SHARED even though update_template_version
+# inserts a policy doc into it — keeping it shared avoids a per-session
+# vector index; that write is rare and additive (see MULTI_SESSION_PLAN).
+_PFX                = os.environ.get("DEMO_PREFIX", "")
+intents             = db[_PFX + "ibn_intents"]            # mutable
+sites               = db["ibn_sites"]                     # reference
+telemetry           = db[_PFX + "ibn_telemetry"]          # mutable
+compliance_events   = db[_PFX + "ibn_compliance_events"]  # mutable
+knowledge_chunks    = db["ibn_knowledge_chunks"]          # shared (see above)
+policy_snapshots    = db[_PFX + "ibn_policy_snapshots"]   # mutable
 
 
 def _km_to_degrees(km: float, lat: float) -> tuple[float, float]:

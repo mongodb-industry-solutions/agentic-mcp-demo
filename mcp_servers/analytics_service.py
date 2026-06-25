@@ -47,7 +47,10 @@ logger        = logging.getLogger("analytics_service")
 
 mongo_client  = MongoClient(os.environ["MONGODB_URI"])
 db            = mongo_client["agent_registry"]
-decisions     = db["routing_decisions"]
+# Per-session isolation (Phase B): read this session's own routing
+# analytics (empty prefix → shared/default lane).
+_PFX          = os.environ.get("DEMO_PREFIX", "")
+decisions     = db[_PFX + "routing_decisions"]
 
 
 def _window(hours: int) -> dict:

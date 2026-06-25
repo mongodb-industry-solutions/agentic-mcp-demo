@@ -67,10 +67,13 @@ logger        = logging.getLogger("dtw_scenario_service")
 
 mongo_client  = MongoClient(os.environ["MONGODB_URI"])
 db            = mongo_client["agent_registry"]
-scenarios     = db["dtw_scenarios"]
-plans         = db["dtw_plans"]
-qos_profiles  = db["dtw_qos_profiles"]
-markets_coll  = db["dtw_markets"]
+# Per-session isolation (Phase B): mutable collections are prefixed with
+# DEMO_PREFIX (empty → bare names); reference collections stay shared.
+_PFX          = os.environ.get("DEMO_PREFIX", "")
+scenarios     = db[_PFX + "dtw_scenarios"]  # mutable → session-scoped
+plans         = db["dtw_plans"]             # reference → shared
+qos_profiles  = db["dtw_qos_profiles"]      # reference → shared
+markets_coll  = db["dtw_markets"]           # reference → shared
 
 
 def _next_scenario_id() -> str:

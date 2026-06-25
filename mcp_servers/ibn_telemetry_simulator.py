@@ -38,10 +38,13 @@ logger = logging.getLogger("ibn_telemetry_simulator")
 
 mongo_client = MongoClient(os.environ["MONGODB_URI"])
 db                  = mongo_client["agent_registry"]
-intents             = db["ibn_intents"]
-sites               = db["ibn_sites"]
-telemetry           = db["ibn_telemetry"]
-compliance_events   = db["ibn_compliance_events"]
+# Per-session isolation (Phase B): mutable collections prefixed with
+# DEMO_PREFIX (empty → bare names); sites stays shared/reference.
+_PFX                = os.environ.get("DEMO_PREFIX", "")
+intents             = db[_PFX + "ibn_intents"]           # mutable
+sites               = db["ibn_sites"]                    # reference
+telemetry           = db[_PFX + "ibn_telemetry"]         # mutable
+compliance_events   = db[_PFX + "ibn_compliance_events"] # mutable
 
 
 def _resolve_site(site_hint: str) -> dict | None:

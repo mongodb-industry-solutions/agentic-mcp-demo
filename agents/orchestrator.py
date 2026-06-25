@@ -62,7 +62,20 @@ class OrchestratorAgent(BroadcastMixin, RegistryMixin, RouterMixin,
                         MemoryMixin, WorkstreamMixin, McpPoolMixin,
                         ReactMixin, AgentDispatchMixin):
 
-    def __init__(self, server_dir: str = "mcp_servers", local_broadcast=None):
+    def __init__(self, server_dir: str = "mcp_servers", local_broadcast=None,
+                 demo_prefix: str = "", shared_bootstrap: bool = True):
+        # Phase B (MULTI_SESSION_PLAN.md): demo_prefix namespaces this
+        # orchestrator's mutable demo collections AND its workstream /
+        # memory collections, and is passed to child MCP servers via the
+        # DEMO_PREFIX env var so a browser session's data is isolated.
+        # Empty prefix = the shared/default lane (CLI, terminal shell) —
+        # byte-identical to before. shared_bootstrap=False skips the
+        # one-time global work (registry sync, agent-card sync, the
+        # filesystem watcher): a per-session orchestrator reuses the
+        # shared mcp_services / agent_cards a bootstrap orchestrator
+        # already populated.
+        self.demo_prefix = demo_prefix
+        self.shared_bootstrap = shared_bootstrap
         self.server_dir = Path(server_dir)
         self.sessions = {}
         self.exit_stack = AsyncExitStack()
@@ -91,7 +104,11 @@ class OrchestratorAgent(BroadcastMixin, RegistryMixin, RouterMixin,
         # which workstream a query belongs to determines its sticky domain
         # and the entities the agent has in context. State is persisted so
         # killing main.py mid-workstream and restarting resumes correctly.
-        self.workstreams = self.db["agent_workstreams"]
+        # Workstreams + memories are per-session (prefixed) so one
+        # browser session's conversation context can't bleed into
+        # another's; the service registry, agent cards, routing
+        # analytics, and user preferences stay shared (bare).
+        self.workstreams = self.db[demo_prefix + "agent_workstreams"]
         self.current_workstream_id: str | None = None
         self._ws_summary_tasks: set[asyncio.Task] = set()
         # Long-term memory layer. When a workstream closes, the orchestrator
@@ -99,20 +116,22 @@ class OrchestratorAgent(BroadcastMixin, RegistryMixin, RouterMixin,
         # persists them here, vector-indexed for cross-session recall. The
         # ReAct loop pulls top-K relevant memories into the agent's context
         # at the start of each turn so past lessons inform current work.
-        self.memories = self.db["agent_memories"]
+        self.memories = self.db[demo_prefix + "agent_memories"]
         # User-stated preferences plane — populated by
         # preferences_service.remember_fact. Auto-recalled into every
-        # turn's system prompt alongside agent_memories, so a fact the
-        # user told the agent once persists across sessions.
-        self.preferences = self.db["user_preferences"]
+        # turn's system prompt alongside agent_memories. Per-session
+        # (Phase B): one user's facts must not leak into another's, and a
+        # reset must clear them — so this is prefixed like the rest of the
+        # session state.
+        self.preferences = self.db[demo_prefix + "user_preferences"]
         self._memory_extract_tasks: set[asyncio.Task] = set()
         self._ws_closure_watcher: asyncio.Task | None = None
         self._memory_decay_task:   asyncio.Task | None = None
         # Routing analytics — every process_query call writes one document
         # capturing what Stage 1, Stage 2, memory, and the ReAct loop did.
-        # Powers offline analysis (LLM-tiebreak rate, slow stages, routing
-        # misses, service usage) via the analytics_service MCP tools.
-        self.routing_decisions = self.db["routing_decisions"]
+        # Per-session so the analytics view + a reset are scoped to the
+        # session that produced them.
+        self.routing_decisions = self.db[demo_prefix + "routing_decisions"]
         self._current_decision: dict | None = None
 
         if not os.environ.get("OPENAI_API_KEY"):
@@ -151,22 +170,31 @@ class OrchestratorAgent(BroadcastMixin, RegistryMixin, RouterMixin,
                 d.strip() for d in mode.split(",") if d.strip()}
 
     async def __aenter__(self):
-        await self._sync_registry()
-        # Phase 1: build domain agents from the catalog and publish their
-        # agent cards (the vector-indexed discovery surface) to Atlas.
+        # Shared, one-time global work — only the bootstrap orchestrator
+        # (prefix="") does it. Per-session orchestrators reuse the
+        # mcp_services / agent_cards it populated.
+        if self.shared_bootstrap:
+            await self._sync_registry()
+        # Build domain agents from the catalog (instantiation only — reads
+        # the shared mcp_services at dispatch time). Cards are published
+        # once by the bootstrap orchestrator.
         self.domain_agents = build_agents(self)
-        await self._sync_agent_cards()
-        # Phase 3: agent-to-agent consultation audit trail.
+        if self.shared_bootstrap:
+            await self._sync_agent_cards()
         await self._ensure_agent_conversation_indexes()
+        # Per-session (or shared) index ensure + workstream resume on this
+        # orchestrator's own (possibly prefixed) collections.
         await self._ensure_workstream_indexes()
         await self._ensure_memory_indexes()
         await self._ensure_routing_decision_indexes()
         await self._resume_open_workstreams()
-        # Background tasks:
-        #   • filesystem watcher (mcp_servers/ changes)
-        #   • workstream-closure watcher (triggers memory extraction)
-        #   • memory decay sweep (slow timer, ages out unrecalled facts)
-        self._watcher_task        = asyncio.create_task(self._watch_servers())
+        # Background tasks. The filesystem watcher (mcp_servers/ hot
+        # reload) is a global concern — bootstrap only. The
+        # workstream-closure watcher (drives memory extraction) and the
+        # decay sweep operate on this orchestrator's prefixed collections,
+        # so every session runs its own.
+        if self.shared_bootstrap:
+            self._watcher_task = asyncio.create_task(self._watch_servers())
         self._ws_closure_watcher  = asyncio.create_task(self._watch_workstream_closures())
         self._memory_decay_task   = asyncio.create_task(self._memory_decay_loop())
         # Catch-up: if any workstream was closed while the orchestrator

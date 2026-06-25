@@ -80,7 +80,11 @@ openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 mongo_client = MongoClient(os.environ["MONGODB_URI"])
 db = mongo_client["agent_registry"]
-collection = db["user_preferences"]
+# Per-session isolation (Phase B): user preferences are session-scoped so
+# one user's facts don't leak into another's and a reset clears them
+# (empty prefix → shared/default lane, unchanged for the CLI).
+_PFX = os.environ.get("DEMO_PREFIX", "")
+collection = db[_PFX + "user_preferences"]
 
 
 def _migrate_from_legacy_collection():
@@ -90,6 +94,11 @@ def _migrate_from_legacy_collection():
     empty. Then drop the legacy collection so the migration never
     repeats. Non-destructive on re-runs.
     """
+    # Only the shared/default lane owns the legacy migration — a
+    # per-session lane must never touch (or drop) the shared legacy
+    # collection.
+    if _PFX:
+        return
     legacy = db["episodic_memories"]
     if "episodic_memories" not in db.list_collection_names():
         return

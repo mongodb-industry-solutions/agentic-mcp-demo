@@ -43,16 +43,18 @@ _LEGACY_FILE = Path(os.path.expanduser("~/.agentic_demo_history"))
 # client + collection handle within a process. The Mongo driver pools
 # automatically, so single-collection-per-process is the right granularity.
 _client: MongoClient | None = None
-_coll = None
 _migration_attempted = False
 
 
-def _conn():
-    global _client, _coll
-    if _coll is None:
+def _conn(prefix: str = ""):
+    # Per-web-session cursor-up history (Phase B): the web shell passes its
+    # session prefix so one browser's typed-query recall is isolated and a
+    # reset clears it. The terminal CLI passes no prefix → the shared
+    # agent_history, preserving cross-terminal/cross-host recall.
+    global _client
+    if _client is None:
         _client = MongoClient(os.environ["MONGODB_URI"])
-        _coll = _client["agent_registry"]["agent_history"]
-    return _coll
+    return _client["agent_registry"][prefix + "agent_history"]
 
 
 def _maybe_migrate_from_file(coll) -> None:
@@ -110,10 +112,12 @@ def _maybe_migrate_from_file(coll) -> None:
           f"from {_LEGACY_FILE} → agent_registry.agent_history")
 
 
-def read_recent(limit: int = 500) -> list[str]:
+def read_recent(limit: int = 500, prefix: str = "") -> list[str]:
     """Return the most-recent `limit` entries, newest first."""
-    coll = _conn()
-    _maybe_migrate_from_file(coll)
+    coll = _conn(prefix)
+    # Only the shared/default lane owns the one-time file migration.
+    if not prefix:
+        _maybe_migrate_from_file(coll)
     try:
         cur = coll.find({}, {"_id": 0, "text": 1}).sort("_id", -1).limit(limit)
         return [d["text"] for d in cur if d.get("text")]
@@ -122,13 +126,13 @@ def read_recent(limit: int = 500) -> list[str]:
         return []
 
 
-def append(text: str, source: str = "unknown") -> None:
+def append(text: str, source: str = "unknown", prefix: str = "") -> None:
     """Append one entry. Skips back-to-back duplicates (same as readline's
     HIST_IGNOREDUPS)."""
     text = (text or "").strip()
     if not text:
         return
-    coll = _conn()
+    coll = _conn(prefix)
     try:
         last = coll.find_one({}, {"_id": 0, "text": 1}, sort=[("_id", -1)])
         if last and last.get("text") == text:

@@ -79,7 +79,10 @@
   #history {
     flex: 1;
     overflow-y: auto;
-    padding: 14px 16px;
+    /* Extra bottom padding so the last line (e.g. the "Thinking…"
+       indicator) clears the container edge when auto-scrolled to the
+       bottom, instead of being half-clipped against the input bar. */
+    padding: 14px 16px 40px;
     scroll-behavior: smooth;
   }
   #history::-webkit-scrollbar { width: 5px; }
@@ -233,6 +236,28 @@
   .btn-primary:hover { opacity: 0.85; }
   .btn-cancel  { background: none; color: var(--dim); }
   .btn-cancel:hover  { color: var(--text); border-color: #555; }
+  .btn-danger  { background: var(--red); color: #000; border-color: var(--red); font-weight: 700; }
+  .btn-danger:hover  { opacity: 0.85; }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+
+  /* Reset-demo control (banner) */
+  .reset-btn {
+    margin-top: 8px; padding: 3px 10px; background: none;
+    border: 1px solid #5a4a00; color: var(--yellow);
+    border-radius: 4px; font-size: 11px; cursor: pointer;
+    font-family: inherit;
+  }
+  .reset-btn:hover { border-color: var(--yellow); }
+  .reset-btn:disabled { opacity: 0.4; cursor: default; }
+  .dash-link {
+    margin-top: 8px; margin-left: 8px; padding: 3px 10px;
+    border: 1px solid #2a3f55; color: var(--cyan); border-radius: 4px;
+    font-size: 11px; cursor: pointer; text-decoration: none;
+    display: inline-block;
+  }
+  .dash-link:hover { border-color: var(--cyan); }
+  .modal .warn { color: var(--yellow); font-size: 12px; line-height: 1.55; }
+  .modal .warn b { color: var(--text); }
   .modal-result { font-size: 11px; padding: 4px 0; }
 
   .log-entry {
@@ -258,6 +283,7 @@
   .log-entry.tag-ERROR     { color: var(--c-error);     }
   .log-entry.tag-REACT     { color: var(--c-react);     }
   .log-entry.tag-INFO      { color: var(--dim);         }
+  .log-entry.tag-SEED      { color: var(--cyan);        }
   .log-entry .log-tag { font-weight: 700; }
 
   /* ── Chat history entries ── */
@@ -346,6 +372,14 @@
     🔍 Indexes: <span id="bannerIndexes">—</span> &nbsp;|&nbsp;
     Commands: <span style="color:var(--text)">status · preferences</span>
   </div>
+  <button class="reset-btn" id="resetBtn" onclick="openResetModal()"
+          title="Drop and re-seed the IBN + DTW demo data to a clean slate">
+    ↺ Reset demo data
+  </button>
+  <a class="dash-link" id="ibnDashLink" target="_blank" rel="noopener"
+     title="Open the IBN dashboard bound to this session">📊 IBN dashboard</a>
+  <a class="dash-link" id="dtwDashLink" target="_blank" rel="noopener"
+     title="Open the DTW dashboard bound to this session">📊 DTW dashboard</a>
 </div>
 
 <div class="columns">
@@ -374,6 +408,26 @@
     </div>
     <div id="workstreamsPanel" style="display:none; padding: 10px 14px; overflow-y: auto;">
       <!-- populated by renderWorkstreams() -->
+    </div>
+  </div>
+</div>
+
+<!-- ── Reset demo data modal ── -->
+<div class="modal-overlay" id="resetModal">
+  <div class="modal">
+    <h3>↺ Reset demo data</h3>
+    <div class="warn">
+      This drops and re-seeds the <b>IBN</b> and <b>DTW</b> demo
+      collections back to their original fixtures. Every intent,
+      scenario, and simulation created while playing with the demo is
+      removed.<br><br>
+      Atlas vector-search indexes rebuild automatically (~30–90s) before
+      diagnose / similar-scenario search work again.
+    </div>
+    <div class="modal-result" id="resetResult"></div>
+    <div class="modal-actions">
+      <button class="btn btn-cancel" id="resetCancelBtn" onclick="closeResetModal()">Cancel</button>
+      <button class="btn btn-danger"  id="resetConfirmBtn" onclick="confirmReset()">Reset now</button>
     </div>
   </div>
 </div>
@@ -407,6 +461,8 @@ const historyEl = document.getElementById('history');
 const logPanel  = document.getElementById('logPanel');
 const input     = document.getElementById('queryInput');
 let   thinking  = false;
+let   sessionToken = null;   // assigned on 'hello' (Phase-B routing key)
+let   resetting    = false;  // true while a demo re-seed is in flight
 
 // Input history (cursor up/down)
 const inputHistory = [];
@@ -416,12 +472,45 @@ let   savedDraft   = '';
 // ── WebSocket ──────────────────────────────────────────────────────────────
 let ws;
 function connect() {
-  ws = new WebSocket(`ws://${location.host}/ws`);
+  // wss when the page is served over TLS (e.g. behind nginx at
+  // https://agentic.bjjl.dev) — a hardcoded ws:// would be blocked as
+  // mixed content.
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  // Phase B: open the session handshake. Send our stored token (if any)
+  // so a refresh / reconnect resumes the same per-session demo data; the
+  // server mints a fresh one if we have none or it's unknown.
+  ws.onopen = () => {
+    let stored = null;
+    try { stored = localStorage.getItem('demo_session'); } catch (_) {}
+    ws.send(JSON.stringify({type: 'init', token: stored}));
+  };
 
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
 
     if (msg.type === 'hello') {
+      sessionToken = msg.session || null;
+      try { if (sessionToken) localStorage.setItem('demo_session', sessionToken); } catch (_) {}
+      // Point the dashboard links at this session so they mirror the
+      // exact per-session lane. Behind the reverse proxy the three apps
+      // share one origin (agentic.bjjl.dev) and the dashboards live under
+      // /ibn and /dtw; in local dev they run on their own uvicorn ports
+      // (8060 / 8080). Detect by the shell's own port: 8070 = direct dev.
+      if (sessionToken) {
+        const q = '?session=' + encodeURIComponent(sessionToken);
+        let ibn, dtw;
+        if (location.port === '8070') {                 // direct uvicorn (dev)
+          ibn = `${location.protocol}//${location.hostname}:8060/${q}`;
+          dtw = `${location.protocol}//${location.hostname}:8080/${q}`;
+        } else {                                         // behind reverse proxy
+          ibn = `/ibn/${q}`;
+          dtw = `/dtw/${q}`;
+        }
+        document.getElementById('ibnDashLink').href = ibn;
+        document.getElementById('dtwDashLink').href = dtw;
+      }
       document.getElementById('bannerHost').textContent    = msg.host || '—';
       document.getElementById('bannerIndexes').textContent = msg.indexes.join(', ') || 'none';
       if (msg.servers.length)
@@ -513,6 +602,38 @@ function connect() {
       el.textContent = '❌ ' + msg.message;
       historyEl.appendChild(el);
       scrollChat();
+      return;
+    }
+
+    if (msg.type === 'reset_started') {
+      appendLog('SEED', '↺ Reset started — re-seeding IBN + DTW demo data…');
+      return;
+    }
+
+    if (msg.type === 'reset_progress') {
+      appendLog('SEED', msg.line);
+      return;
+    }
+
+    if (msg.type === 'reset_done') {
+      resetting = false;
+      document.getElementById('resetBtn').disabled = false;
+      const resEl = document.getElementById('resetResult');
+      if (msg.ok) {
+        appendLog('SEED', '✓ ' + msg.message);
+        closeResetModalForce();
+        const panel = document.createElement('div');
+        panel.className = 'response-panel';
+        panel.innerHTML =
+          '<div class="response-panel-title">↺ Demo data reset</div>' +
+          `<div class="response-panel-body">${marked.parse(msg.message)}</div>`;
+        historyEl.appendChild(panel);
+        scrollChat();
+      } else {
+        appendLog('ERROR', msg.message);
+        resEl.style.color = 'var(--red)';
+        resEl.textContent = msg.message;
+      }
       return;
     }
 
@@ -978,6 +1099,37 @@ function submitAddServer() {
 // Close modal on overlay click
 document.getElementById('addModal').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) closeAddModal();
+});
+
+// ── Reset demo data modal ────────────────────────────────────────────────
+function openResetModal() {
+  if (resetting) return;
+  document.getElementById('resetResult').textContent = '';
+  document.getElementById('resetConfirmBtn').disabled = false;
+  document.getElementById('resetCancelBtn').disabled  = false;
+  document.getElementById('resetModal').classList.add('visible');
+}
+function closeResetModal() {
+  if (resetting) return;  // don't let the user dismiss mid-reset
+  document.getElementById('resetModal').classList.remove('visible');
+}
+function closeResetModalForce() {
+  document.getElementById('resetModal').classList.remove('visible');
+}
+function confirmReset() {
+  if (resetting) return;
+  resetting = true;
+  document.getElementById('resetConfirmBtn').disabled = true;
+  document.getElementById('resetCancelBtn').disabled  = true;
+  document.getElementById('resetBtn').disabled        = true;
+  const resEl = document.getElementById('resetResult');
+  resEl.style.color = 'var(--dim)';
+  resEl.textContent = 'Working… progress streams in the Agent Log →';
+  switchTab('log');
+  ws.send(JSON.stringify({type: 'reset_demo'}));
+}
+document.getElementById('resetModal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeResetModal();
 });
 
 connect();

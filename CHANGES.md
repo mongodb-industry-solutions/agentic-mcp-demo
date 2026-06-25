@@ -1,5 +1,315 @@
 # CHANGES.md
 
+## 2026-06-26
+
+### Proper start/stop/restart lifecycle scripts in `bin/` (replaces `start_demo.sh`)
+
+`start_demo.sh` (foreground, Ctrl-C only) is replaced by three daemon
+scripts that manage all the web-server processes:
+
+- `bin/start.sh` — starts the shell (:8070) + IBN (:8060) + DTW (:8080)
+  dashboards DETACHED (`nohup`), writes PIDs to `run/`, logs to `logs/`.
+  Idempotent (skips already-running services) and fails fast with the
+  tail of the log if one dies during startup.
+- `bin/stop.sh` — stops all three via pidfile (falling back to the exact
+  script path), SIGTERM-then-SIGKILL with a grace window, AND sweeps any
+  orphaned MCP server subprocesses (`uv run <repo>/mcp_servers/*.py`,
+  scoped strictly to this repo) left by a crash.
+- `bin/restart.sh` — composes stop then start.
+- `bin/_common.sh` — shared config (repo root, the service table, pid
+  helpers); sourced by the others.
+
+All portable bash (works on NetBSD's pkgsrc bash). `run/` is gitignored.
+Env: `PYTHON` (venv python), `DEMO_LOG_DIR`, `DEMO_RUN_DIR`, and the
+usual `DEMO_BIND_HOST`/`SHELL_AUTH_*` pass through. Mechanism verified
+(pidfile tracking, idempotent skip, graceful + forced kill, stale-pidfile
+handling).
+
+### Make ALL user/session data per-session and reset-clearable (`agents/`, `mcp_servers/preferences_service.py`, `mcp_servers/analytics_service.py`, `web/`)
+
+Closes the gaps where session data was still global and survived a
+reset. Previously only the 5 demo collections + workstreams + memories
+were per-session; `user_preferences`, `agent_conversations`,
+`routing_decisions`, and `agent_history` were SHARED and untouched by
+the Reset button — so e.g. a "remember I'm vegetarian" preference leaked
+across users and outlived a reset.
+
+Now everything user/session-specific is prefixed `s_<token>_` and wiped
+on reset:
+- `user_preferences` — orchestrator `self.preferences`,
+  `preferences_service` (DEMO_PREFIX-aware; legacy-collection migration
+  guarded to the default lane), and the shell's preferences view.
+- `routing_decisions` — orchestrator + `analytics_service` (reads its
+  own session's analytics).
+- `agent_conversations` — the agent-to-agent consult log.
+- `agent_history` — per-web-session cursor-up recall
+  (`history.py` gains an optional `prefix`); the terminal CLI keeps the
+  shared/default history (cross-shell recall preserved).
+
+`web/seed_runner.py` gains `SESSION_STATE_BASES` (workstreams, memories,
+preferences, conversations, routing_decisions, history) as the single
+source of truth; reset `delete_many`-clears them (no drop → live
+change-stream watchers undisturbed) and the idle-reaper drops them.
+Still shared by design (NOT user data): the service/agent catalogue
+(`mcp_services`, `agent_cards`) and the read-only reference fixtures +
+their vector indexes.
+
+Verified on live Atlas: preferences/analytics services resolve to the
+prefixed collections; a reset wipes a stray intent + every state plane
+(preferences, conversations, routing_decisions, workstreams, memories,
+history) back to empty/seed; per-session history isolates from the
+default lane and clears on reset.
+
+### Fix: web shell pegged at 100% CPU on NetBSD + reset/session not a clean slate (`agents/registry.py`, `agents/workstreams.py`, `web/seed_runner.py`)
+
+Three linked bugs surfaced running the demo on NetBSD 10.1:
+
+1. **`web/shell.py` busy-looped at ~98% CPU.** `_watch_servers` uses
+   `watchfiles.awatch`, whose native backend (Rust `notify`) has no
+   NetBSD support and spins there. Only the bootstrap orchestrator runs
+   it, so only the shell process was affected. Worse, a coroutine
+   spinning at 100% **starves the asyncio event loop**, making WS/session
+   handling sluggish and erratic — the visible "goes crazy". Fix: force
+   `awatch` into polling mode (`force_polling=True, poll_delay_ms=1000`,
+   ~0 CPU on every platform), guard the loop against exceptions, and add
+   `DEMO_DISABLE_FILE_WATCH=1` to turn hot-reload off entirely.
+
+2. **A new workstream's summary read as "already done", so the agent
+   skipped the tool.** It was seeded `"Started: <your request>"`; the
+   IBN agent read that as the intent already being submitted and replied
+   "this intent has already been submitted…" WITHOUT ever calling
+   `submit_intent` (observed: zero servers activated, no write). Reseeded
+   as `"New workstream — no actions executed yet. Original request: …"`
+   so the agent acts instead of assuming.
+
+3. **Reset wasn't a clean slate — it left `agent_workstreams` /
+   `agent_memories` behind.** `reset_session` only wiped the 5 demo
+   collections, so the stale workstream (with its "submitted" summary)
+   survived and kept interfering with re-runs ("old artefacts from
+   earlier runs"). Reset now also clears the session's workstreams +
+   memories (via `delete_many`, so the live change-stream watcher isn't
+   disturbed). Sticky-resume on reconnect is unaffected — only an
+   explicit reset wipes them.
+
+Verified on live Atlas: forced-polling watcher consumes ~0.008s CPU over
+2.5s idle (was a full core); a fresh session's first "open a new store"
+turn now calls `submit_intent` (creates IBN-005); reset restores the
+seed fixtures AND drops the workstream; the redo cleanly reuses IBN-005
+with no interference.
+
+## 2026-06-19
+
+### Run behind nginx at agentic.bjjl.dev (`etc/nginx.conf`, `web/shell.html`, `web/ibn.html`, `web/dtw.html`, `web/*_dashboard.py`)
+
+One nginx host fronts all three demo apps via path routing: the web
+shell at `/`, the IBN dashboard at `/ibn/`, the DTW dashboard at
+`/dtw/` (each proxied to its uvicorn port 8070/8060/8080). The
+dashboard `proxy_pass` carries a trailing slash to strip the mount
+prefix, WebSocket upgrade headers are set on every location, and
+read/send timeouts are 86400s so idle live-feed sockets survive.
+
+**Cert prerequisite (verified):** the `bjjl.dev` cert is NOT a wildcard
+— the live cert covers only `bjjl.dev` + `notify.bjjl.dev`. It must be
+reissued to add `agentic.bjjl.dev` as a SAN (e.g. dehydrated
+`domains.txt`: `bjjl.dev notify.bjjl.dev agentic.bjjl.dev`, then re-run
+dehydrated; the renewed cert stays in the same `bjjl.dev/` dir, so the
+nginx path is unchanged) before the 443 block validates.
+
+App adaptations for serving under a reverse proxy / sub-path:
+- The shell WebSocket now uses `wss://` when the page is `https://`
+  (the hardcoded `ws://` would be blocked as mixed content behind TLS).
+- The dashboards derive a mount `PREFIX` from `location.pathname` and
+  prepend it to their `/ws` and `/snapshot` URLs, so those hit the
+  right app under `/ibn` or `/dtw` (empty prefix at the origin root, so
+  direct-port dev is unchanged).
+- The shell's dashboard links are path-based (`/ibn/`, `/dtw/`) behind
+  the proxy and fall back to sibling ports (`:8060`, `:8080`) when the
+  shell is hit directly on `:8070` in dev.
+- All three apps now share the Basic-Auth realm `Agentic AI Demo`, so
+  the single agentic.bjjl.dev origin prompts for the login only once.
+- `DEMO_BIND_HOST` env (default `0.0.0.0`) lets the deploy bind the
+  uvicorn ports to `127.0.0.1` so they're only reachable through nginx
+  (and the auth gate can't be bypassed by hitting a port directly).
+
+### Perf: lazy MCP server activation — a turn only spawns the servers it uses (`agents/mcp_pool.py`, `agents/domain_agent.py`)
+
+A domain agent used to activate every server in its domain up front
+(all 5 IBN servers for a one-line "submit intent", etc.) just to present
+their tool schemas to the LLM — wasteful subprocesses. Now:
+
+- Tool schemas are cached process-wide (`_TOOL_SCHEMA_CACHE`).
+  `tool_schemas_for(name)` returns the cache, or harvests it by spawning
+  the server TRANSIENTLY (spawn → list_tools → shut down) the first time
+  it's seen in the process. So the LLM is still shown the whole domain's
+  toolset (it can plan any step), without keeping those subprocesses
+  alive.
+- `ensure_active(name)` spawns a server into the persistent pool only
+  when one of its tools is actually called. The ReAct loop calls it right
+  before each tool invocation.
+- Net: a one-step turn keeps exactly one server alive instead of the
+  whole domain; multi-step flows spawn each server once, on first use,
+  and reuse it. Verified — the "open a new store" intent submission
+  leaves only `ibn_intent_service` running (was all 5).
+
+`DomainAgent._activate_domain_servers` / `_tools_for` are removed.
+Multi-agent (cross-domain) dispatch still pre-activates eagerly in the
+parent task — required by anyio (child-task agents must not enter stdio
+scopes the shutdown task will close); single-agent turns, the common
+case, are now lazy.
+
+### Fix: Basic Auth gate rejected the WebSocket (web shell wouldn't connect) (`web/auth.py`)
+
+The auth gate was gating the websocket scope too, but browsers don't
+replay cached Basic-Auth credentials on the WS handshake (Chrome sends
+the upgrade with no Authorization header), so every `/ws` connection got
+a `403` and the shell sat at "connecting… / Disconnected — reconnecting".
+`BasicAuthMiddleware` now gates **only the http scope** and passes the
+websocket through — the WS is reachable only from the already-gated page,
+so the doorkeeper still holds for normal browser use. Verified: HTTP
+401/200 unchanged; WS connects.
+
+### Global HTTP Basic Auth gate + one-shot launcher (`web/auth.py`, `web/shell.py`, `web/ibn_dashboard.py`, `web/dtw_dashboard.py`, `start_demo.sh`)
+
+A single shared credential now protects all three browser apps — the
+web shell AND both dashboards — so the public URLs aren't wide open.
+`web/auth.py` holds a pure-ASGI `BasicAuthMiddleware` (+ an
+`install_basic_auth(app, realm)` helper) covering BOTH the HTML page and
+the WebSocket; browsers replay cached Basic-Auth creds on same-origin WS
+upgrades, so one prompt covers everything. Default `mdb` /
+`mdbagentic2026`, overridable via `SHELL_AUTH_USER` / `SHELL_AUTH_PASS`;
+`SHELL_AUTH_DISABLE=1` turns it off for local dev. Constant-time compare
+(`hmac.compare_digest`); ASCII-only realm strings (header-safe). A demo
+doorkeeper, not per-user auth — orthogonal to the Phase-B per-session
+isolation (still keyed off the `localStorage` session token). The
+terminal CLI is unaffected. (The dashboards live on separate ports /
+origins, so the browser prompts once per dashboard the first time it's
+opened, with the same credential.)
+
+`start_demo.sh` launches all three (shell :8070, IBN dashboard :8060,
+DTW dashboard :8080) with logs under `./logs/`, fails fast if any
+service dies during startup, prints the URLs + login, and stops all
+three on Ctrl-C.
+
+Verified: HTTP 401 + `WWW-Authenticate: Basic` with no/bad credentials
+and 200 with the right ones on the shell and both dashboards; the
+WebSocket upgrade is rejected without credentials and connects with
+them.
+
+### Web shell: per-browser-session isolation (Phase B of MULTI_SESSION_PLAN.md) (`web/shell.py`, `web/seed_runner.py`, `agents/`, `mcp_servers/`)
+
+Each browser session now gets its own isolated demo data, so concurrent
+users — and their Reset — never touch each other. No login.
+
+- **Per-session collection prefix.** The 5 mutable demo collections
+  (`ibn_intents`, `ibn_telemetry`, `ibn_compliance_events`,
+  `ibn_policy_snapshots`, `dtw_scenarios`) plus `agent_workstreams` and
+  `agent_memories` are namespaced `s_<token>_<base>`. Read-only reference
+  data, `mcp_services`/`agent_cards`/`routing_decisions`/
+  `user_preferences`, and **both `*_knowledge_chunks` collections with
+  their Atlas vector indexes** stay shared — so per-session cost is a
+  handful of small collections, not duplicate vector indexes. Chosen over
+  per-session *databases* because the Atlas credential can drop
+  collections but not databases (Phase-A finding).
+- **MCP servers** (the 6 mutating ones) resolve mutable collections via
+  `db[os.environ.get("DEMO_PREFIX","") + base]`; reference collections
+  stay bare. Empty prefix = byte-identical to before, so the CLI /
+  terminal shell are unchanged. `McpPoolMixin._activate_servers` passes
+  the orchestrator's `demo_prefix` to each child via `DEMO_PREFIX`.
+- **OrchestratorAgent** gains `demo_prefix` + `shared_bootstrap` args.
+  `shared_bootstrap=False` skips the one-time global work (registry sync,
+  agent-card sync, filesystem watcher); `demo_prefix` namespaces its
+  workstream/memory collections and is handed to child servers.
+- **Web shell** keeps a `{token: Session}` map (each Session = its own
+  orchestrator + lock + connected tabs), capped `DEMO_MAX_SESSIONS`
+  (default 6) and reaped after `DEMO_SESSION_TTL_SEC` (default 1800s)
+  idle. A shared bootstrap orchestrator does global init. The browser
+  stores its token in `localStorage` and sends it in an `init` handshake
+  so refresh/reconnect resumes the same lane. Per-session lock replaces
+  the global query lock.
+- **`seed_runner`** gains `reset_session(prefix)` (drop + re-seed only a
+  session's mutable collections) and `ensure_session_seeded(prefix)`
+  (seed a lane on first use). Reset is now scoped to the calling session.
+- The global workstream change-stream watcher was removed (couldn't be
+  session-scoped); the server pings `workstream_update` to the
+  originating tab after each turn instead.
+
+Verified on live Atlas (LLM-free isolation test + a live per-session
+query): two lanes seed independently (4 intents each, shared `ibn_sites`
+untouched); diverging or resetting one leaves the other intact; a server
+launched with `DEMO_PREFIX` reads its own lane; a per-session
+orchestrator boots with prefixed collections and its data stays
+independent of the shared lane.
+
+Notes: fresh deployments still run the CLI seeders once to create the
+shared reference data + vector indexes (per-session lanes only copy the
+mutable set).
+
+### Dashboards: session-aware (`web/ibn_dashboard.py`, `web/dtw_dashboard.py`, `web/ibn.html`, `web/dtw.html`, `web/shell.html`)
+
+The live dashboards now mirror the exact per-session lane the user is
+driving, instead of only the shared default lane. Each dashboard is
+refactored to a per-session model keyed by collection prefix: a browser
+opens it with `?session=<token>`, the server resolves the prefix, and
+lazily starts that session's own watcher set (intents / compliance /
+plans change streams + telemetry poller + live telemetry writer for
+IBN; scenarios change stream for DTW), broadcasting only to that
+session's tabs. Watcher sets are idle-reaped 120s after the last tab
+leaves so abandoned sessions don't leak change streams. Reference data
+(`ibn_sites`, `dtw_markets`) still resolves from shared collections; no
+/ invalid token → the shared default lane (backward compatible).
+
+The session token crosses the port boundary (shell :8070 → dashboards
+:8060/:8080, separate origins so localStorage can't) via the URL: the
+shell banner now shows **📊 IBN dashboard** / **📊 DTW dashboard** links
+pointing at `http://<host>:8060|8080/?session=<token>`. The dashboard
+HTML forwards `?session=` on its WebSocket and `/snapshot` requests.
+
+Verified on live Atlas: two dashboard lanes built from prefixed
+collections are isolated (session A's cancelled intent shows only in
+A's snapshot; B unaffected), while shared reference data resolves for
+both.
+
+### Web shell: browser-driven demo reset (Phase A of MULTI_SESSION_PLAN.md) (`web/shell.py`, `web/seed_runner.py`, `web/shell.html`)
+
+A **Reset demo data** button in the web shell banner re-runs the
+`seed/ibn_seed.py --reset` + `seed/dtw_seed.py --reset` pipeline from the
+browser, with live progress streamed to the Agent Log — so anyone can
+get a clean demo without shell access.
+
+- `web/seed_runner.py` — new. Drives the seeders' existing phase
+  functions (`reset`/`ensure_indexes`/`insert_all`/… each takes a `db`)
+  against a given `db_name`, redirecting their `print()` output
+  line-by-line to an async `emit` callback. The blocking work runs in a
+  worker thread; lines cross back to the event loop via
+  `loop.call_soon_threadsafe` → `asyncio.Queue` and stream to the
+  WebSocket as they're produced.
+- `web/shell.py` — `reset_demo` WS message, run under the existing
+  `_query_lock` so a reset can't interleave with a query mid-tool-call;
+  returns a fast "busy" message if the lock is held. On success the
+  agent's in-memory turn context (conversation tail, current workstream,
+  sticky domain/service) is cleared so the next query starts clean. Each
+  connection now also issues a `session_token` (echoed in `hello`), and
+  the reset routes through `_demo_db_for(session_token)` → the shared
+  `agent_registry` for now. These two are the Phase-B seams.
+- `web/shell.html` — banner button, a destructive-action confirm modal,
+  a `SEED`-tagged live progress stream, and a completion panel. The
+  modal/button lock out while a reset is in flight.
+
+Phase-A is single-user-safe (the process-wide `_query_lock` serialises
+everything); concurrent users still share one dataset, which Phase B
+fixes.
+
+**Phase-B finding, measured during testing** (recorded in
+MULTI_SESSION_PLAN.md): the seed pipeline was validated against a
+throwaway database `agent_registry__phaseA_smoketest` (passing a
+non-default `db_name` — which also exercises the Phase-B seam). All 15
+collections seeded correctly and 38 progress lines streamed. Cleanup
+revealed the Atlas credential can CRUD and drop *collections* but cannot
+`dropDatabase` on another database — so Phase-B session isolation must
+use per-session **collection prefixes within `agent_registry`**, not
+per-session databases. The real `agent_registry` demo data was never
+touched by the test.
+
 ## 2026-06-11
 
 ### Market resolution: 'LA' resolved to Dallas_Metro (`dtw_scenario_service`, `dtw_topology_service`)
