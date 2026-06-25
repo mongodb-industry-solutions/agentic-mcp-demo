@@ -28,10 +28,12 @@ python main.py
 
 **Run the browser demo (web shell + both dashboards):**
 ```bash
-source <dir>/bin/activate        # same venv
-./start_demo.sh                  # shell :8070, IBN dash :8060, DTW dash :8080
+source <dir>/bin/activate        # same venv (or set PYTHON=<venv>/bin/python)
+bin/start.sh                     # start all 3 detached: shell :8070, IBN :8060, DTW :8080
+bin/stop.sh                      # stop all 3 (+ sweep orphaned MCP subprocesses)
+bin/restart.sh                   # stop then start (composes the other two)
 ```
-`start_demo.sh` launches all three behind the Basic-Auth gate, logs to `./logs/`, and stops everything on Ctrl-C. Open the shell, then use its banner's **📊 IBN/DTW dashboard** links — they carry your session token so the dashboards mirror your own isolated demo lane. First run on a fresh database still needs the one-time seeders (`python seed/ibn_seed.py && python seed/dtw_seed.py`) to create the shared reference data + Atlas vector indexes.
+`bin/start.sh` launches the three web-server processes detached (logs to `./logs/`, PIDs in `./run/`) behind the Basic-Auth gate; it's idempotent and fails fast if a service dies. `bin/stop.sh` kills them via pidfile (falling back to the script path) and sweeps any leftover MCP server subprocesses. Open the shell, then use its banner's **📊 IBN/DTW dashboard** links — they carry your session token so the dashboards mirror your own isolated demo lane. First run on a fresh database still needs the one-time seeders (`python seed/ibn_seed.py && python seed/dtw_seed.py`) to create the shared reference data + Atlas vector indexes.
 
 **Behind nginx (production, `agentic.bjjl.dev`):** `etc/nginx.conf` has a server block that path-routes one host to all three apps — shell at `/`, IBN dashboard at `/ibn/`, DTW dashboard at `/dtw/` — with WebSocket upgrade + long timeouts. Set `DEMO_BIND_HOST=127.0.0.1` so the uvicorn ports are reachable only through nginx (the apps' shared `Agentic AI Demo` Basic-Auth realm means one login covers all three). The shell/dashboards auto-detect the sub-path mount (WS uses `wss://`, dashboards derive their prefix from the URL). **Cert prerequisite:** `bjjl.dev` is NOT a wildcard cert (covers `bjjl.dev` + `notify.bjjl.dev` only) — reissue it with `agentic.bjjl.dev` added as a SAN (the renewed cert stays in the same `bjjl.dev/` dir) before the TLS block validates.
 

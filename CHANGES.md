@@ -2,6 +2,29 @@
 
 ## 2026-06-26
 
+### Proper start/stop/restart lifecycle scripts in `bin/` (replaces `start_demo.sh`)
+
+`start_demo.sh` (foreground, Ctrl-C only) is replaced by three daemon
+scripts that manage all the web-server processes:
+
+- `bin/start.sh` — starts the shell (:8070) + IBN (:8060) + DTW (:8080)
+  dashboards DETACHED (`nohup`), writes PIDs to `run/`, logs to `logs/`.
+  Idempotent (skips already-running services) and fails fast with the
+  tail of the log if one dies during startup.
+- `bin/stop.sh` — stops all three via pidfile (falling back to the exact
+  script path), SIGTERM-then-SIGKILL with a grace window, AND sweeps any
+  orphaned MCP server subprocesses (`uv run <repo>/mcp_servers/*.py`,
+  scoped strictly to this repo) left by a crash.
+- `bin/restart.sh` — composes stop then start.
+- `bin/_common.sh` — shared config (repo root, the service table, pid
+  helpers); sourced by the others.
+
+All portable bash (works on NetBSD's pkgsrc bash). `run/` is gitignored.
+Env: `PYTHON` (venv python), `DEMO_LOG_DIR`, `DEMO_RUN_DIR`, and the
+usual `DEMO_BIND_HOST`/`SHELL_AUTH_*` pass through. Mechanism verified
+(pidfile tracking, idempotent skip, graceful + forced kill, stale-pidfile
+handling).
+
 ### Make ALL user/session data per-session and reset-clearable (`agents/`, `mcp_servers/preferences_service.py`, `mcp_servers/analytics_service.py`, `web/`)
 
 Closes the gaps where session data was still global and survived a
