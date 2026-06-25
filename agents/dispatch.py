@@ -562,7 +562,7 @@ class AgentDispatchMixin:
             status = "error"
 
         try:
-            await self.db["agent_conversations"].insert_one({
+            await self.db[self.demo_prefix + "agent_conversations"].insert_one({
                 "ts":            datetime.datetime.now(),
                 "workstream_id": self.current_workstream_id,
                 "from_agent":    from_agent.name,
@@ -586,7 +586,7 @@ class AgentDispatchMixin:
         """agent_conversations is queried by recency (live feed,
         analytics) and by workstream (audit trail per thread)."""
         try:
-            conv = self.db["agent_conversations"]
+            conv = self.db[self.demo_prefix + "agent_conversations"]
             await conv.create_index([("ts", -1)], name="conv_recency")
             await conv.create_index([("workstream_id", 1)],
                                     name="conv_workstream")

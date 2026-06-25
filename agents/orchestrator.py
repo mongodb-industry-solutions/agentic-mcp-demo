@@ -119,17 +119,19 @@ class OrchestratorAgent(BroadcastMixin, RegistryMixin, RouterMixin,
         self.memories = self.db[demo_prefix + "agent_memories"]
         # User-stated preferences plane — populated by
         # preferences_service.remember_fact. Auto-recalled into every
-        # turn's system prompt alongside agent_memories, so a fact the
-        # user told the agent once persists across sessions.
-        self.preferences = self.db["user_preferences"]
+        # turn's system prompt alongside agent_memories. Per-session
+        # (Phase B): one user's facts must not leak into another's, and a
+        # reset must clear them — so this is prefixed like the rest of the
+        # session state.
+        self.preferences = self.db[demo_prefix + "user_preferences"]
         self._memory_extract_tasks: set[asyncio.Task] = set()
         self._ws_closure_watcher: asyncio.Task | None = None
         self._memory_decay_task:   asyncio.Task | None = None
         # Routing analytics — every process_query call writes one document
         # capturing what Stage 1, Stage 2, memory, and the ReAct loop did.
-        # Powers offline analysis (LLM-tiebreak rate, slow stages, routing
-        # misses, service usage) via the analytics_service MCP tools.
-        self.routing_decisions = self.db["routing_decisions"]
+        # Per-session so the analytics view + a reset are scoped to the
+        # session that produced them.
+        self.routing_decisions = self.db[demo_prefix + "routing_decisions"]
         self._current_decision: dict | None = None
 
         if not os.environ.get("OPENAI_API_KEY"):

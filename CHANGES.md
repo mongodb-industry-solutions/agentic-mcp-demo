@@ -2,6 +2,41 @@
 
 ## 2026-06-26
 
+### Make ALL user/session data per-session and reset-clearable (`agents/`, `mcp_servers/preferences_service.py`, `mcp_servers/analytics_service.py`, `web/`)
+
+Closes the gaps where session data was still global and survived a
+reset. Previously only the 5 demo collections + workstreams + memories
+were per-session; `user_preferences`, `agent_conversations`,
+`routing_decisions`, and `agent_history` were SHARED and untouched by
+the Reset button — so e.g. a "remember I'm vegetarian" preference leaked
+across users and outlived a reset.
+
+Now everything user/session-specific is prefixed `s_<token>_` and wiped
+on reset:
+- `user_preferences` — orchestrator `self.preferences`,
+  `preferences_service` (DEMO_PREFIX-aware; legacy-collection migration
+  guarded to the default lane), and the shell's preferences view.
+- `routing_decisions` — orchestrator + `analytics_service` (reads its
+  own session's analytics).
+- `agent_conversations` — the agent-to-agent consult log.
+- `agent_history` — per-web-session cursor-up recall
+  (`history.py` gains an optional `prefix`); the terminal CLI keeps the
+  shared/default history (cross-shell recall preserved).
+
+`web/seed_runner.py` gains `SESSION_STATE_BASES` (workstreams, memories,
+preferences, conversations, routing_decisions, history) as the single
+source of truth; reset `delete_many`-clears them (no drop → live
+change-stream watchers undisturbed) and the idle-reaper drops them.
+Still shared by design (NOT user data): the service/agent catalogue
+(`mcp_services`, `agent_cards`) and the read-only reference fixtures +
+their vector indexes.
+
+Verified on live Atlas: preferences/analytics services resolve to the
+prefixed collections; a reset wipes a stray intent + every state plane
+(preferences, conversations, routing_decisions, workstreams, memories,
+history) back to empty/seed; per-session history isolates from the
+default lane and clears on reset.
+
 ### Fix: web shell pegged at 100% CPU on NetBSD + reset/session not a clean slate (`agents/registry.py`, `agents/workstreams.py`, `web/seed_runner.py`)
 
 Three linked bugs surfaced running the demo on NetBSD 10.1:

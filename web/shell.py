@@ -114,14 +114,15 @@ def _mongo_info() -> dict:
 
 def _drop_session_collections(prefix: str) -> None:
     """Drop every per-session collection for a prefix — the mutable demo
-    set plus this session's workstreams/memories. Collection drops within
-    agent_registry are authorised (database drops are not — see
-    MULTI_SESSION_PLAN.md), so this fully reaps a session's footprint."""
+    set plus all agent-state planes (workstreams, memories, preferences,
+    consult log, analytics). Collection drops within agent_registry are
+    authorised (database drops are not — see MULTI_SESSION_PLAN.md), so
+    this fully reaps a session's footprint on idle/disconnect."""
     client = MongoClient(os.environ["MONGODB_URI"])
     try:
         db = client["agent_registry"]
         bases = (seed_runner.SESSION_MUTABLE_BASES
-                 + ["agent_workstreams", "agent_memories"])
+                 + seed_runner.SESSION_STATE_BASES)
         for base in bases:
             db[prefix + base].drop()
             if base == "ibn_telemetry":
@@ -307,7 +308,7 @@ async def ws_endpoint(ws: WebSocket):
                     "host":    info["host"],
                     "indexes": info["indexes"],
                     "servers": list(session.orch.sessions.keys()),
-                    "history": shell_history.read_recent(),
+                    "history": shell_history.read_recent(prefix=session.prefix),
                     "session": token,
                 }))
                 continue
@@ -322,7 +323,7 @@ async def ws_endpoint(ws: WebSocket):
                 text = (msg.get("text") or "").strip()
                 if not text:
                     continue
-                shell_history.append(text, source="web")
+                shell_history.append(text, source="web", prefix=session.prefix)
                 async with session.lock:
                     t0 = time.monotonic()
                     try:
@@ -461,12 +462,12 @@ async def ws_endpoint(ws: WebSocket):
                     await ws.send_text(json.dumps({
                         "type": "status", "servers": list(agent.sessions.keys())}))
                 elif cmd in ("memory", "preferences"):
-                    # user_preferences is shared across sessions (bare).
+                    # Per-session: read this session's own preferences lane.
                     memories = []
                     try:
                         client = MongoClient(os.environ["MONGODB_URI"])
                         docs = list(
-                            client["agent_registry"]["user_preferences"]
+                            client["agent_registry"][session.prefix + "user_preferences"]
                             .find({}, {"_id": 0, "text": 1, "category": 1,
                                        "createdAt": 1, "is_temporary": 1})
                             .limit(10)

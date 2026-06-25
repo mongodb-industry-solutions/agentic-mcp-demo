@@ -45,6 +45,23 @@ SESSION_MUTABLE_BASES = [
     "dtw_scenarios",
 ]
 
+# The session's conversation/agent-state planes — also per-session and
+# wiped on reset, but NOT reseeded (they start empty). Kept distinct from
+# the demo collections above because these are cleared with delete_many
+# (no drop) so live change-stream watchers aren't disturbed. This is the
+# single source of truth for "what a reset / reap clears beyond the demo
+# fixtures" — keep in sync with the DEMO_PREFIX-prefixed collections in
+# the orchestrator (workstreams, memories, preferences, routing_decisions)
+# and the consult log + the preferences/analytics MCP services.
+SESSION_STATE_BASES = [
+    "agent_workstreams",
+    "agent_memories",
+    "user_preferences",
+    "agent_conversations",
+    "routing_decisions",
+    "agent_history",        # per-web-session cursor-up recall
+]
+
 
 # The full reset+seed pipeline as (label, fn) pairs. fn(db) mirrors one
 # step of the CLI seeders' main(); order matches them exactly.
@@ -140,17 +157,18 @@ def _seed_session_sync(db, prefix: str, emit) -> None:
                 pass
     emit("    dropped: " + ", ".join(P + b for b in SESSION_MUTABLE_BASES))
 
-    # Clear this session's conversation memory too, so a reset is a TRUE
-    # clean slate. Otherwise a surviving workstream ("Establish Alpenmarkt
-    # Marienplatz operations", summary saying the intent was submitted)
-    # keeps feeding the agent stale context and it answers "already
-    # submitted" instead of re-running the workflow. delete_many (not
-    # drop) so the orchestrator's live change-stream watcher isn't
-    # disturbed; empty no-op when seeding a brand-new lane.
-    emit(f"━━ session {prefix} · clear conversation memory ━━")
-    wiped_ws = db[P + "agent_workstreams"].delete_many({}).deleted_count
-    wiped_mem = db[P + "agent_memories"].delete_many({}).deleted_count
-    emit(f"    cleared {wiped_ws} workstream(s), {wiped_mem} memory/-ies")
+    # Clear this session's agent-state planes too, so a reset is a TRUE
+    # clean slate: workstreams + memories (a surviving workstream would
+    # keep feeding the agent stale "already submitted" context),
+    # user preferences, the agent-to-agent consult log, and routing
+    # analytics. delete_many (not drop) so live change-stream watchers
+    # aren't disturbed; all no-ops when seeding a brand-new lane.
+    emit(f"━━ session {prefix} · clear agent state ━━")
+    for base in SESSION_STATE_BASES:
+        n = db[P + base].delete_many({}).deleted_count
+        if n:
+            emit(f"    cleared {n} from {base}")
+    emit("    workstreams, memories, preferences, consult log, analytics cleared")
 
     emit(f"━━ session {prefix} · telemetry timeseries ━━")
     db.create_collection(
