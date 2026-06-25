@@ -501,10 +501,13 @@ function connect() {
       if (sessionToken) {
         const q = '?session=' + encodeURIComponent(sessionToken);
         let ibn, dtw;
-        if (location.port === '8070') {                 // direct uvicorn (dev)
+        if (msg.ibn_url) {                               // Kanopy: env-configured ingress URLs
+          ibn = msg.ibn_url.replace(/\/$/, '') + '/' + q;
+          dtw = msg.dtw_url.replace(/\/$/, '') + '/' + q;
+        } else if (location.port === '8070') {           // direct uvicorn (dev)
           ibn = `${location.protocol}//${location.hostname}:8060/${q}`;
           dtw = `${location.protocol}//${location.hostname}:8080/${q}`;
-        } else {                                         // behind reverse proxy
+        } else {                                         // behind nginx proxy
           ibn = `/ibn/${q}`;
           dtw = `/dtw/${q}`;
         }

@@ -1,0 +1,25 @@
+security:
+  dataClassification: "Internal"
+  dataDesignation: ["MI"]
+
+ownership:
+  driEmail: benjamin.lorenz@mongodb.com
+
+env:
+  NODE_ENV: staging
+  AWS_REGION: us-east-1
+  OPENAI_MODEL: gpt-4o
+  AGENT_MODE: all
+  IBN_DASHBOARD_URL: "https://agentic-mcp-demo-ibn.industrysolutions.staging.corp.mongodb.com"
+  DTW_DASHBOARD_URL: "https://agentic-mcp-demo-dtw.industrysolutions.staging.corp.mongodb.com"
+
+envSecrets:
+  OPENAI_API_KEY: agentic-mcp-demo-secrets
+  MONGODB_URI: agentic-mcp-demo-secrets
+  VOYAGE_API_KEY: agentic-mcp-demo-secrets
+
+serviceAccount:
+  enabled: true
+  irsa:
+    accountId: "275662791714"
+    roleName: "kanopy-staging-cicd-irsa"

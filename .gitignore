@@ -1,3 +1,9 @@
 __pycache__
 logs/
 run/
+security_check.sh
+setup-hooks.sh
+setup-drone-secrets.sh
+KANOPY_DEPLOYMENT.md
+KANOPY_DEPLOYMENT_PLAN.md
+DASHBOARD_ROUTING_PROBLEM.md
