@@ -58,6 +58,6 @@ cat <<EOF
 Open the shell, then use its banner "📊 IBN/DTW dashboard" links — they
 carry your session token so the dashboards mirror your own lane.
 
-Behind nginx (agentic.bjjl.dev): start with DEMO_BIND_HOST=127.0.0.1 so
+Behind nginx (agentic.example.com): start with DEMO_BIND_HOST=127.0.0.1 so
 the ports are reachable only through the proxy.
 EOF

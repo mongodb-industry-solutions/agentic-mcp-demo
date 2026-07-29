@@ -33,11 +33,11 @@ bin/restart.sh                   # stop then start (composes the other two)
 ```
 `bin/start.sh` launches the three web-server processes detached (logs to `./logs/`, PIDs in `./run/`); it's idempotent and fails fast if a service dies. `bin/stop.sh` kills them via pidfile (falling back to the script path) and sweeps any leftover MCP server subprocesses. Open the shell, then use its banner's **📊 IBN/DTW dashboard** links — they carry your session token so the dashboards mirror your own isolated demo lane. First run on a fresh database still needs the one-time seeders (`python seed/ibn_seed.py && python seed/dtw_seed.py`) to create the shared reference data + Atlas vector indexes.
 
-**Behind nginx (production, `agentic.bjjl.dev`):** `etc/nginx.conf` has a server block that path-routes one host to all three apps — shell at `/`, IBN dashboard at `/ibn/`, DTW dashboard at `/dtw/` — with WebSocket upgrade + long timeouts. Set `DEMO_BIND_HOST=127.0.0.1` so the uvicorn ports are reachable only through nginx. The shell/dashboards auto-detect the sub-path mount (WS uses `wss://`, dashboards derive their prefix from the URL). **Cert prerequisite:** `bjjl.dev` is NOT a wildcard cert (covers `bjjl.dev` + `notify.bjjl.dev` only) — reissue it with `agentic.bjjl.dev` added as a SAN (the renewed cert stays in the same `bjjl.dev/` dir) before the TLS block validates.
+**Behind nginx (production, `agentic.example.com`):** `etc/nginx.conf` has a server block that path-routes one host to all three apps — shell at `/`, IBN dashboard at `/ibn/`, DTW dashboard at `/dtw/` — with WebSocket upgrade + long timeouts. Set `DEMO_BIND_HOST=127.0.0.1` so the uvicorn ports are reachable only through nginx. The shell/dashboards auto-detect the sub-path mount (WS uses `wss://`, dashboards derive their prefix from the URL). **Cert prerequisite:** `example.com` is NOT a wildcard cert (covers `example.com` + `notify.example.com` only) — reissue it with `agentic.example.com` added as a SAN (the renewed cert stays in the same `example.com/` dir) before the TLS block validates.
 
-**Watch live agent activity (separate terminal):**
+**Watch live agent activity (optional external relay):** the in-browser Agent Log always works. To also stream to a guest-device feed, set `NOTIFY_BROADCAST_URL` (POST target) and `NOTIFY_RECEIVE_URL` (SSE source) to your own notify relay; when unset (default), the external POST is skipped. Then, in a separate terminal:
 ```bash
-curl -sN https://notify.bjjl.dev/receive | sed -n 's/^data: //p'
+curl -sN "$NOTIFY_RECEIVE_URL" | sed -n 's/^data: //p'
 ```
 
 There is no test suite or linter configured — this is a prototype/demo project.
@@ -81,7 +81,7 @@ There is no test suite or linter configured — this is a prototype/demo project
 
 5. **ReAct Loop** (`process_query`): Iterates up to 5 times. Collects tools from all active sessions (prefixed as `{service_name}__{tool_name}`), calls `session.call_tool()` with extracted arguments, and appends results to the message list. Tool definitions are cached per session in `self.tool_cache`.
 
-6. **Live Broadcast**: Posts colored status tags (`BOOTSTRAP`, `QUERY`, `AGENT`, `ROUTING`, `ACTION`, `RESULT`, `ERROR`) to `https://notify.bjjl.dev/send` for the live-feed viewer.
+6. **Live Broadcast**: Posts colored status tags (`BOOTSTRAP`, `QUERY`, `AGENT`, `ROUTING`, `ACTION`, `RESULT`, `ERROR`) to the optional external relay at `NOTIFY_BROADCAST_URL` for the live-feed viewer (skipped when unset).
 
 ### Adding a New MCP Service
 

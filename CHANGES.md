@@ -2,6 +2,24 @@
 
 ## 2026-06-26
 
+### Remove all `bjjl.dev` references (personal domain scrub)
+
+The demo no longer hardcodes the personal `bjjl.dev` domain anywhere:
+
+- **Broadcast relay is now opt-in via env.** `agents/broadcast.py` reads
+  `NOTIFY_BROADCAST_URL` / `NOTIFY_RECEIVE_URL` (both empty by default);
+  when unset, the external POST is skipped entirely — the in-browser
+  Agent Log (local_broadcast) is unaffected. `main.py` only prints the
+  live-feed hint when a relay is configured. (Was hardcoded to
+  `notify.bjjl.dev`.)
+- Remaining occurrences (nginx server blocks + cert paths, the watchOS
+  companion app URL, and docs) are genericised to `example.com` /
+  `agentic.example.com` / `notify.example.com` placeholders. CLAUDE.md
+  and README describe the opt-in `NOTIFY_*` relay instead of a fixed URL.
+
+Left untouched: the `$Id … bjjl Exp $` RCS username in etc/nginx.conf
+(not the domain), author emails, and `/Users/bjjl` paths.
+
 ### Remove HTTP Basic Auth from the web apps
 
 Dropped the shared-credential gate entirely: deleted `web/auth.py` and
@@ -110,7 +128,7 @@ with no interference.
 
 ## 2026-06-19
 
-### Run behind nginx at agentic.bjjl.dev (`etc/nginx.conf`, `web/shell.html`, `web/ibn.html`, `web/dtw.html`, `web/*_dashboard.py`)
+### Run behind nginx at agentic.example.com (`etc/nginx.conf`, `web/shell.html`, `web/ibn.html`, `web/dtw.html`, `web/*_dashboard.py`)
 
 One nginx host fronts all three demo apps via path routing: the web
 shell at `/`, the IBN dashboard at `/ibn/`, the DTW dashboard at
@@ -119,11 +137,11 @@ dashboard `proxy_pass` carries a trailing slash to strip the mount
 prefix, WebSocket upgrade headers are set on every location, and
 read/send timeouts are 86400s so idle live-feed sockets survive.
 
-**Cert prerequisite (verified):** the `bjjl.dev` cert is NOT a wildcard
-— the live cert covers only `bjjl.dev` + `notify.bjjl.dev`. It must be
-reissued to add `agentic.bjjl.dev` as a SAN (e.g. dehydrated
-`domains.txt`: `bjjl.dev notify.bjjl.dev agentic.bjjl.dev`, then re-run
-dehydrated; the renewed cert stays in the same `bjjl.dev/` dir, so the
+**Cert prerequisite (verified):** the `example.com` cert is NOT a wildcard
+— the live cert covers only `example.com` + `notify.example.com`. It must be
+reissued to add `agentic.example.com` as a SAN (e.g. dehydrated
+`domains.txt`: `example.com notify.example.com agentic.example.com`, then re-run
+dehydrated; the renewed cert stays in the same `example.com/` dir, so the
 nginx path is unchanged) before the 443 block validates.
 
 App adaptations for serving under a reverse proxy / sub-path:
@@ -137,7 +155,7 @@ App adaptations for serving under a reverse proxy / sub-path:
   the proxy and fall back to sibling ports (`:8060`, `:8080`) when the
   shell is hit directly on `:8070` in dev.
 - All three apps now share the Basic-Auth realm `Agentic AI Demo`, so
-  the single agentic.bjjl.dev origin prompts for the login only once.
+  the single agentic.example.com origin prompts for the login only once.
 - `DEMO_BIND_HOST` env (default `0.0.0.0`) lets the deploy bind the
   uvicorn ports to `127.0.0.1` so they're only reachable through nginx
   (and the auth gate can't be bypassed by hitting a port directly).

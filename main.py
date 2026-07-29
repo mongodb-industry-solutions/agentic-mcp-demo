@@ -36,9 +36,10 @@ def show_banner():
 - `exit` - Quit
 """
     console.print(Panel(Markdown(banner), border_style="green", box=box.DOUBLE))
-    console.print(f"📱 [bold bright_cyan]Live Feed:[/] "
-                  f"[cyan]curl -sN {BROADCAST_RECEIVE_URL} | sed -n 's/^data: //p'",
-                  style="dim")
+    if BROADCAST_RECEIVE_URL:
+        console.print(f"📱 [bold bright_cyan]Live Feed:[/] "
+                      f"[cyan]curl -sN {BROADCAST_RECEIVE_URL} | sed -n 's/^data: //p'",
+                      style="dim")
     _show_mongo_info()
 
 def _show_mongo_info():

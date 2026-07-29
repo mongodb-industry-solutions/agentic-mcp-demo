@@ -473,7 +473,7 @@ let   savedDraft   = '';
 let ws;
 function connect() {
   // wss when the page is served over TLS (e.g. behind nginx at
-  // https://agentic.bjjl.dev) — a hardcoded ws:// would be blocked as
+  // https://agentic.example.com) — a hardcoded ws:// would be blocked as
   // mixed content.
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -495,7 +495,7 @@ function connect() {
       try { if (sessionToken) localStorage.setItem('demo_session', sessionToken); } catch (_) {}
       // Point the dashboard links at this session so they mirror the
       // exact per-session lane. Behind the reverse proxy the three apps
-      // share one origin (agentic.bjjl.dev) and the dashboards live under
+      // share one origin (agentic.example.com) and the dashboards live under
       // /ibn and /dtw; in local dev they run on their own uvicorn ports
       // (8060 / 8080). Detect by the shell's own port: 8070 = direct dev.
       if (sessionToken) {

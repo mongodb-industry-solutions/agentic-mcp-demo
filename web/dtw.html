@@ -158,7 +158,7 @@ document.getElementById("modePill").textContent = MODE;
 const SESSION = params.get("session") || "";
 const SQ = SESSION ? ("session=" + encodeURIComponent(SESSION)) : "";
 // Mount prefix when served under a sub-path behind a reverse proxy
-// (e.g. /dtw at agentic.bjjl.dev); empty at the origin root (dev port).
+// (e.g. /dtw at agentic.example.com); empty at the origin root (dev port).
 const PREFIX = location.pathname.replace(/\/+$/, "");
 
 const state = { scenarios: [], focusedId: null };

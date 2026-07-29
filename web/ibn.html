@@ -697,7 +697,7 @@ document.getElementById('modeBadge').textContent = mode;
 const SESSION = params.get('session') || '';
 const SQ = SESSION ? ('session=' + encodeURIComponent(SESSION)) : '';
 // Mount prefix when served under a sub-path behind a reverse proxy
-// (e.g. /ibn at agentic.bjjl.dev); empty when served at the origin root
+// (e.g. /ibn at agentic.example.com); empty when served at the origin root
 // (direct uvicorn port). The page is always the mount root, so the path
 // IS the prefix. Prepended to /ws and /snapshot so they hit this app.
 const PREFIX = location.pathname.replace(/\/+$/, '');

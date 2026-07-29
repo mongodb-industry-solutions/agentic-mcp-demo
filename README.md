@@ -50,10 +50,10 @@ python main.py
 
 #### Look behind the scenes
 
-Open another shell, and issue this command:
+The external live feed is optional. Point `NOTIFY_BROADCAST_URL` / `NOTIFY_RECEIVE_URL` at your own notify relay (unset by default → the external POST is skipped; the in-browser Agent Log still works). Then open another shell and run:
 
 ```
-curl -sN https://notify.bjjl.dev/receive | sed -n 's/^data: //p'
+curl -sN "$NOTIFY_RECEIVE_URL" | sed -n 's/^data: //p'
 ```
 
 #### Watch the portfolio live
