@@ -310,6 +310,8 @@ async def ws_endpoint(ws: WebSocket):
                     "servers": list(session.orch.sessions.keys()),
                     "history": shell_history.read_recent(prefix=session.prefix),
                     "session": token,
+                    "ibn_url": os.environ.get("IBN_DASHBOARD_URL", ""),
+                    "dtw_url": os.environ.get("DTW_DASHBOARD_URL", ""),
                 }))
                 continue
 
