@@ -16,8 +16,6 @@ export VOYAGE_API_KEY="<your voyage api token>"   # used by restaurant_guide ser
 export OPENAI_MODEL="gpt-4o"  # optional, defaults to gpt-4o
 ```
 
-**Web app auth:** the browser shell and both dashboards are gated by a single shared HTTP Basic Auth credential (`web/auth.py`), default `mdb` / `mdbagentic2026`. Override with `SHELL_AUTH_USER` / `SHELL_AUTH_PASS`, or set `SHELL_AUTH_DISABLE=1` to turn the gate off (e.g. local dev). The terminal CLI (`main.py`) is unaffected.
-
 **Install and run (terminal CLI):**
 ```bash
 python -m venv <dir>
@@ -33,9 +31,9 @@ bin/start.sh                     # start all 3 detached: shell :8070, IBN :8060,
 bin/stop.sh                      # stop all 3 (+ sweep orphaned MCP subprocesses)
 bin/restart.sh                   # stop then start (composes the other two)
 ```
-`bin/start.sh` launches the three web-server processes detached (logs to `./logs/`, PIDs in `./run/`) behind the Basic-Auth gate; it's idempotent and fails fast if a service dies. `bin/stop.sh` kills them via pidfile (falling back to the script path) and sweeps any leftover MCP server subprocesses. Open the shell, then use its banner's **📊 IBN/DTW dashboard** links — they carry your session token so the dashboards mirror your own isolated demo lane. First run on a fresh database still needs the one-time seeders (`python seed/ibn_seed.py && python seed/dtw_seed.py`) to create the shared reference data + Atlas vector indexes.
+`bin/start.sh` launches the three web-server processes detached (logs to `./logs/`, PIDs in `./run/`); it's idempotent and fails fast if a service dies. `bin/stop.sh` kills them via pidfile (falling back to the script path) and sweeps any leftover MCP server subprocesses. Open the shell, then use its banner's **📊 IBN/DTW dashboard** links — they carry your session token so the dashboards mirror your own isolated demo lane. First run on a fresh database still needs the one-time seeders (`python seed/ibn_seed.py && python seed/dtw_seed.py`) to create the shared reference data + Atlas vector indexes.
 
-**Behind nginx (production, `agentic.bjjl.dev`):** `etc/nginx.conf` has a server block that path-routes one host to all three apps — shell at `/`, IBN dashboard at `/ibn/`, DTW dashboard at `/dtw/` — with WebSocket upgrade + long timeouts. Set `DEMO_BIND_HOST=127.0.0.1` so the uvicorn ports are reachable only through nginx (the apps' shared `Agentic AI Demo` Basic-Auth realm means one login covers all three). The shell/dashboards auto-detect the sub-path mount (WS uses `wss://`, dashboards derive their prefix from the URL). **Cert prerequisite:** `bjjl.dev` is NOT a wildcard cert (covers `bjjl.dev` + `notify.bjjl.dev` only) — reissue it with `agentic.bjjl.dev` added as a SAN (the renewed cert stays in the same `bjjl.dev/` dir) before the TLS block validates.
+**Behind nginx (production, `agentic.bjjl.dev`):** `etc/nginx.conf` has a server block that path-routes one host to all three apps — shell at `/`, IBN dashboard at `/ibn/`, DTW dashboard at `/dtw/` — with WebSocket upgrade + long timeouts. Set `DEMO_BIND_HOST=127.0.0.1` so the uvicorn ports are reachable only through nginx. The shell/dashboards auto-detect the sub-path mount (WS uses `wss://`, dashboards derive their prefix from the URL). **Cert prerequisite:** `bjjl.dev` is NOT a wildcard cert (covers `bjjl.dev` + `notify.bjjl.dev` only) — reissue it with `agentic.bjjl.dev` added as a SAN (the renewed cert stays in the same `bjjl.dev/` dir) before the TLS block validates.
 
 **Watch live agent activity (separate terminal):**
 ```bash

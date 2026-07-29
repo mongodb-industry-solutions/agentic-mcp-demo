@@ -47,16 +47,13 @@ for entry in "${SERVICES[@]}"; do
 done
 [ "$ok" = 1 ] || { echo; echo "Startup failed. See $LOGDIR/."; exit 1; }
 
-login="${AUTH_USER} / ${AUTH_PASS}"
-[ -n "${SHELL_AUTH_DISABLE:-}" ] && login="(auth disabled)"
-
 cat <<EOF
 
 ✓ All services up (detached). Stop with: bin/stop.sh   (restart: bin/restart.sh)
 
-  Web shell:      http://localhost:8070     login: $login
-  IBN dashboard:  http://localhost:8060      (same login)
-  DTW dashboard:  http://localhost:8080      (same login)
+  Web shell:      http://localhost:8070
+  IBN dashboard:  http://localhost:8060
+  DTW dashboard:  http://localhost:8080
 
 Open the shell, then use its banner "📊 IBN/DTW dashboard" links — they
 carry your session token so the dashboards mirror your own lane.

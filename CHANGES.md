@@ -2,6 +2,17 @@
 
 ## 2026-06-26
 
+### Remove HTTP Basic Auth from the web apps
+
+Dropped the shared-credential gate entirely: deleted `web/auth.py` and
+removed the `install_basic_auth(...)` calls + imports from the shell and
+both dashboards (now serve unauthenticated). Cleaned up the
+`SHELL_AUTH_*` / login handling in `bin/start.sh` + `bin/_common.sh`, the
+`web/auth.py` mention in `etc/nginx.conf`, and the auth notes in
+CLAUDE.md. Per-browser-session data isolation is unchanged — it never
+depended on the gate. If access control is wanted later, put it at the
+reverse proxy (nginx `auth_basic`) rather than in the apps.
+
 ### Proper start/stop/restart lifecycle scripts in `bin/` (replaces `start_demo.sh`)
 
 `start_demo.sh` (foreground, Ctrl-C only) is replaced by three daemon

@@ -35,8 +35,6 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from pymongo import AsyncMongoClient
 
-from web.auth import install_basic_auth
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 log = logging.getLogger("ibn_dashboard")
 
@@ -352,11 +350,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-# Shared realm with the shell + DTW dashboard so that behind the reverse
-# proxy (one origin, agentic.bjjl.dev) the browser authenticates once and
-# replays the credential to /ibn, /dtw, and / without re-prompting.
-install_basic_auth(app, realm="Agentic AI Demo")
-
 HTML_PATH = Path(__file__).parent / "ibn.html"
 
 

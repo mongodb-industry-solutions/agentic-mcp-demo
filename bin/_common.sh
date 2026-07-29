@@ -15,8 +15,6 @@ cd "$ROOT" || exit 1
 PYTHON="${PYTHON:-python}"
 LOGDIR="${DEMO_LOG_DIR:-$ROOT/logs}"
 RUNDIR="${DEMO_RUN_DIR:-$ROOT/run}"
-AUTH_USER="${SHELL_AUTH_USER:-mdb}"
-AUTH_PASS="${SHELL_AUTH_PASS:-mdbagentic2026}"
 
 # The web-server processes to manage:  name | port | script (rel. to ROOT)
 SERVICES=(
