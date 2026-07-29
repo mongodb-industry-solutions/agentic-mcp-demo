@@ -2,6 +2,15 @@
 
 ## 2026-06-26
 
+### Remove etc/nginx.conf
+
+Deleted the checked-in nginx config (it was a full personal server
+config, not demo material). The CLAUDE.md deployment note is reworded to
+generic reverse-proxy guidance — the app-side sub-path support (WS
+`wss://`, per-dashboard prefix derivation, `DEMO_BIND_HOST`) is
+unchanged, so any proxy fronting `/`, `/ibn/`, `/dtw/` → 8070/8060/8080
+works without app config.
+
 ### Remove all `bjjl.dev` references (personal domain scrub)
 
 The demo no longer hardcodes the personal `bjjl.dev` domain anywhere:
