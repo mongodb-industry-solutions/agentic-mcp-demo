@@ -1,6 +1,7 @@
 fastapi
 httpx
-mcp
+mcp<2          # 2.0 dropped mcp.server.fastmcp (FastMCP → mcp.server.mcpserver); the
+               # servers + orchestrator use the 1.x FastMCP API. Bump to 2.x needs a code migration.
 numpy
 openai
 pymongo
