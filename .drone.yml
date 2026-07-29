@@ -8,7 +8,7 @@ name: staging
 
 trigger:
   branch:
-    - deploy-to-staging
+    - staging
 
 steps:
   # ── Build images ──────────────────────────────────────────────────
