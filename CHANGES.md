@@ -11,23 +11,24 @@ generic reverse-proxy guidance — the app-side sub-path support (WS
 unchanged, so any proxy fronting `/`, `/ibn/`, `/dtw/` → 8070/8060/8080
 works without app config.
 
-### Remove all `bjjl.dev` references (personal domain scrub)
+### Remove the author's personal domain (broadcast relay made opt-in)
 
-The demo no longer hardcodes the personal `bjjl.dev` domain anywhere:
+The demo no longer hardcodes any personal domain:
 
 - **Broadcast relay is now opt-in via env.** `agents/broadcast.py` reads
   `NOTIFY_BROADCAST_URL` / `NOTIFY_RECEIVE_URL` (both empty by default);
   when unset, the external POST is skipped entirely — the in-browser
   Agent Log (local_broadcast) is unaffected. `main.py` only prints the
-  live-feed hint when a relay is configured. (Was hardcoded to
-  `notify.bjjl.dev`.)
-- Remaining occurrences (nginx server blocks + cert paths, the watchOS
-  companion app URL, and docs) are genericised to `example.com` /
-  `agentic.example.com` / `notify.example.com` placeholders. CLAUDE.md
-  and README describe the opt-in `NOTIFY_*` relay instead of a fixed URL.
+  live-feed hint when a relay is configured. (Previously hardcoded to a
+  personal notify endpoint.)
+- Remaining occurrences (the watchOS companion app URL and docs) are
+  genericised to `example.com` placeholders; CLAUDE.md and README
+  describe the opt-in `NOTIFY_*` relay instead of a fixed URL. The
+  checked-in nginx config that also carried the domain was removed
+  outright (see above).
 
-Left untouched: the `$Id … bjjl Exp $` RCS username in etc/nginx.conf
-(not the domain), author emails, and `/Users/bjjl` paths.
+Left untouched: author emails and local filesystem paths (neither is a
+domain).
 
 ### Remove HTTP Basic Auth from the web apps
 
