@@ -39,13 +39,12 @@ class RegistryMixin:
         """Re-sync registry whenever a .py file in mcp_servers/ is added,
         changed, or deleted. watchfiles debounces rapid saves automatically.
 
-        Hot-reload is a dev convenience; disable it with
-        DEMO_DISABLE_FILE_WATCH=1. We force POLLING because watchfiles'
-        native backend (the Rust `notify` crate) has no NetBSD support and
-        busy-loops there — pegging the event loop at ~100% CPU and starving
-        every other coroutine (WS handling, change streams, sessions).
-        Polling a handful of files once a second costs ~nothing and behaves
-        identically on every platform."""
+        Hot-reload is a local-dev convenience only — in a container image
+        the code is immutable, so set DEMO_DISABLE_FILE_WATCH=1 in
+        deployment (done in the Kanopy shell env). We force POLLING so the
+        watcher behaves identically on every platform and can never spin a
+        core if the native OS backend misbehaves; polling a handful of
+        files once a second costs ~nothing."""
         if os.environ.get("DEMO_DISABLE_FILE_WATCH"):
             return
         try:
