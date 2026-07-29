@@ -604,7 +604,7 @@ The architectural beat: the orchestrator's iteration cap is a soft guarantee; Mo
 - **Auto-embedding adds latency to writes** (small — milliseconds for short docstrings). If the customer batches mass inserts (10k+/min), explain the rate-limit posture.
 - **Modern embedding models compress absolute scores.** voyage-4, OpenAI `text-embedding-3`, Cohere `embed-v3` all output unit-norm vectors that land in a narrow similarity band (~0.45–0.55) for documents in a tight semantic neighbourhood. The orchestrator visually highlights the winner and gap-to-runner-up so the demo audience can read the routing decision at a glance — but you should *expect* the question "why are the numbers so close?" from skeptical reviewers and have the model-behaviour answer ready (see §3.4).
 - **`$graphLookup` is not infinite-depth.** We cap at 4–6 hops in our walks. For deeper traversals (e.g. full social network walks), the customer's tool of choice may still be a dedicated graph DB. We are honest about the boundary.
-- **Live broadcasts via `notify.bjjl.dev/send`** are an internal demo aid, not part of the framework. A production customer would use Change Streams or a message bus directly.
+- **Live broadcasts via `notify.example.com/send`** are an internal demo aid, not part of the framework. A production customer would use Change Streams or a message bus directly.
 - **Closure-only turns skip the ReAct loop entirely.** When the user says *"done with TODOs"* or *"we're finished"*, the workstream classifier flags the turn as a pure-closure cue and `process_query` short-circuits: no Stage 1, no Stage 2, no service activation, no tool call. The workstream is closed (which triggers memory extraction in the background), the user gets a canned acknowledgement, and the routing-decisions analytics row is tagged `closure_short_circuit=true`. **One LLM call total for goodbyes (the classifier's own), zero tokens spent on a tool the user didn't ask for.** This is the kind of efficiency a token-cost-conscious customer asks about; the framework has the answer.
 
 ## 2.4 Where this scales next
@@ -683,7 +683,7 @@ This is the most common pushback at the demo, and the honest answer is the model
 
 ## 3.5 The 5-minute live demo storyline
 
-1. **Open the live feed.** Show `curl -sN https://notify.bjjl.dev/receive` streaming colored events. Open the web shell at `http://localhost:8070`, click the **Workstreams** tab — empty for now.
+1. **Open the live feed.** Show `curl -sN https://notify.example.com/receive` streaming colored events. Open the web shell at `http://localhost:8070`, click the **Workstreams** tab — empty for now.
 2. **`python main.py`** — orchestrator boots. Audience sees `[BOOTSTRAP] Registry: 25 services in 16 domains — acc(2), dtw(5), ibn(5), workstream(1), …`. Talking point: *"Atlas is the catalog. Filename prefix becomes a domain tag at sync time. No manual registration. The catalog includes the agent's own audit-trail service — `workstream_service` — because the agent's memory is just another collection."*
 3. **Type:** *"I'm opening a new Alpenmarkt store at Marienplatz Munich. POS priority, guest WiFi strict, camera uplink, online by 18:00, max 40ms POS latency, 99.95% availability."*
 4. **Live feed lights up:**

@@ -2,6 +2,45 @@
 
 ## 2026-06-26
 
+### Remove etc/nginx.conf
+
+Deleted the checked-in nginx config (it was a full personal server
+config, not demo material). The CLAUDE.md deployment note is reworded to
+generic reverse-proxy guidance — the app-side sub-path support (WS
+`wss://`, per-dashboard prefix derivation, `DEMO_BIND_HOST`) is
+unchanged, so any proxy fronting `/`, `/ibn/`, `/dtw/` → 8070/8060/8080
+works without app config.
+
+### Remove the author's personal domain (broadcast relay made opt-in)
+
+The demo no longer hardcodes any personal domain:
+
+- **Broadcast relay is now opt-in via env.** `agents/broadcast.py` reads
+  `NOTIFY_BROADCAST_URL` / `NOTIFY_RECEIVE_URL` (both empty by default);
+  when unset, the external POST is skipped entirely — the in-browser
+  Agent Log (local_broadcast) is unaffected. `main.py` only prints the
+  live-feed hint when a relay is configured. (Previously hardcoded to a
+  personal notify endpoint.)
+- Remaining occurrences (the watchOS companion app URL and docs) are
+  genericised to `example.com` placeholders; CLAUDE.md and README
+  describe the opt-in `NOTIFY_*` relay instead of a fixed URL. The
+  checked-in nginx config that also carried the domain was removed
+  outright (see above).
+
+Left untouched: author emails and local filesystem paths (neither is a
+domain).
+
+### Remove HTTP Basic Auth from the web apps
+
+Dropped the shared-credential gate entirely: deleted `web/auth.py` and
+removed the `install_basic_auth(...)` calls + imports from the shell and
+both dashboards (now serve unauthenticated). Cleaned up the
+`SHELL_AUTH_*` / login handling in `bin/start.sh` + `bin/_common.sh`, the
+`web/auth.py` mention in `etc/nginx.conf`, and the auth notes in
+CLAUDE.md. Per-browser-session data isolation is unchanged — it never
+depended on the gate. If access control is wanted later, put it at the
+reverse proxy (nginx `auth_basic`) rather than in the apps.
+
 ### Proper start/stop/restart lifecycle scripts in `bin/` (replaces `start_demo.sh`)
 
 `start_demo.sh` (foreground, Ctrl-C only) is replaced by three daemon
@@ -99,7 +138,7 @@ with no interference.
 
 ## 2026-06-19
 
-### Run behind nginx at agentic.bjjl.dev (`etc/nginx.conf`, `web/shell.html`, `web/ibn.html`, `web/dtw.html`, `web/*_dashboard.py`)
+### Run behind nginx at agentic.example.com (`etc/nginx.conf`, `web/shell.html`, `web/ibn.html`, `web/dtw.html`, `web/*_dashboard.py`)
 
 One nginx host fronts all three demo apps via path routing: the web
 shell at `/`, the IBN dashboard at `/ibn/`, the DTW dashboard at
@@ -108,11 +147,11 @@ dashboard `proxy_pass` carries a trailing slash to strip the mount
 prefix, WebSocket upgrade headers are set on every location, and
 read/send timeouts are 86400s so idle live-feed sockets survive.
 
-**Cert prerequisite (verified):** the `bjjl.dev` cert is NOT a wildcard
-— the live cert covers only `bjjl.dev` + `notify.bjjl.dev`. It must be
-reissued to add `agentic.bjjl.dev` as a SAN (e.g. dehydrated
-`domains.txt`: `bjjl.dev notify.bjjl.dev agentic.bjjl.dev`, then re-run
-dehydrated; the renewed cert stays in the same `bjjl.dev/` dir, so the
+**Cert prerequisite (verified):** the `example.com` cert is NOT a wildcard
+— the live cert covers only `example.com` + `notify.example.com`. It must be
+reissued to add `agentic.example.com` as a SAN (e.g. dehydrated
+`domains.txt`: `example.com notify.example.com agentic.example.com`, then re-run
+dehydrated; the renewed cert stays in the same `example.com/` dir, so the
 nginx path is unchanged) before the 443 block validates.
 
 App adaptations for serving under a reverse proxy / sub-path:
@@ -126,7 +165,7 @@ App adaptations for serving under a reverse proxy / sub-path:
   the proxy and fall back to sibling ports (`:8060`, `:8080`) when the
   shell is hit directly on `:8070` in dev.
 - All three apps now share the Basic-Auth realm `Agentic AI Demo`, so
-  the single agentic.bjjl.dev origin prompts for the login only once.
+  the single agentic.example.com origin prompts for the login only once.
 - `DEMO_BIND_HOST` env (default `0.0.0.0`) lets the deploy bind the
   uvicorn ports to `127.0.0.1` so they're only reachable through nginx
   (and the auth gate can't be bypassed by hitting a port directly).

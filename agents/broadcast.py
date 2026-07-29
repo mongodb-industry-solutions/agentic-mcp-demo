@@ -4,12 +4,17 @@
 #
 
 """
-Live-feed broadcast — ANSI palette, status-tag colors, and the
-notify-service POST used by the demo's live feed.
+Live-feed broadcast — ANSI palette, status-tag colors, and an optional
+POST to an external notify relay for the guest-device live feed.
+
+The external relay is OPT-IN: set NOTIFY_BROADCAST_URL (and, for the
+banner hint, NOTIFY_RECEIVE_URL) to your own notify endpoint, e.g.
+https://notify.example.com/send and /receive. When unset (the default),
+the external POST is skipped entirely — the in-browser Agent Log (via
+local_broadcast) is unaffected.
 
 Phase 0 extraction from the former monolithic OrchestratorAgent
-(see MULTI_AGENT_PLAN.md). Method bodies are unchanged; they share
-state with the composition root in orchestrator.py via mixin `self`.
+(see MULTI_AGENT_PLAN.md).
 """
 
 import asyncio
@@ -32,8 +37,8 @@ from mcp.client.stdio import stdio_client
 from openai import AsyncOpenAI
 
 
-BROADCAST_URL         = "https://notify.bjjl.dev/send"
-BROADCAST_RECEIVE_URL = "https://notify.bjjl.dev/receive"
+BROADCAST_URL         = os.environ.get("NOTIFY_BROADCAST_URL", "")
+BROADCAST_RECEIVE_URL = os.environ.get("NOTIFY_RECEIVE_URL", "")
 
 
 class Colors:
@@ -77,6 +82,8 @@ class BroadcastMixin:
                 await self.local_broadcast(title, message)
             except Exception:
                 pass
+        if not BROADCAST_URL:
+            return  # no external relay configured — local feed only
         try:
             if title == "":
                 await self.http_client.post(BROADCAST_URL, content=f"{Colors.RESET}\n", timeout=15)
