@@ -10,6 +10,7 @@ env:
   AWS_REGION: us-east-1
   OPENAI_MODEL: gpt-4o
   AGENT_MODE: all
+  DEMO_DISABLE_FILE_WATCH: "1"   # immutable image — no mcp_servers/ hot-reload needed
   IBN_DASHBOARD_URL: "https://agentic-mcp-demo-ibn.industrysolutions.prod.corp.mongodb.com"
   DTW_DASHBOARD_URL: "https://agentic-mcp-demo-dtw.industrysolutions.prod.corp.mongodb.com"
 

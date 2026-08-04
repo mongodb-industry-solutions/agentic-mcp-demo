@@ -3,7 +3,9 @@
 # Author: Benjamin Lorenz <benjamin.lorenz@mongodb.com>
 #
 # Shared config + helpers for bin/start.sh, bin/stop.sh, bin/restart.sh.
-# Sourced, not executed. Portable bash (works on NetBSD's pkgsrc bash).
+# Sourced, not executed. Portable bash. These scripts are for running the
+# whole demo on one host in local dev; production runs each app as its own
+# container on Kanopy (see the Dockerfiles + environment/*.yaml).
 
 # Repo root, derived from this file's location (bin/ -> root). All
 # services run with CWD = root so the orchestrator's relative
@@ -15,8 +17,6 @@ cd "$ROOT" || exit 1
 PYTHON="${PYTHON:-python}"
 LOGDIR="${DEMO_LOG_DIR:-$ROOT/logs}"
 RUNDIR="${DEMO_RUN_DIR:-$ROOT/run}"
-AUTH_USER="${SHELL_AUTH_USER:-mdb}"
-AUTH_PASS="${SHELL_AUTH_PASS:-mdbagentic2026}"
 
 # The web-server processes to manage:  name | port | script (rel. to ROOT)
 SERVICES=(

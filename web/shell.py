@@ -30,7 +30,6 @@ from pymongo import MongoClient
 from agents.orchestrator import OrchestratorAgent
 from agents import history as shell_history
 from web import seed_runner
-from web.auth import install_basic_auth
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 log = logging.getLogger("shell")
@@ -234,8 +233,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-# Global Basic-Auth gate (HTML + WebSocket) — see web/auth.py.
-install_basic_auth(app, realm="Agentic AI Demo")
 
 HTML_PATH = Path(__file__).parent / "shell.html"
 

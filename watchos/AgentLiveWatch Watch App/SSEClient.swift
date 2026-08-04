@@ -6,7 +6,7 @@ class SSEClient: ObservableObject {
     @Published var messages: [LogMessage] = []
     @Published var isConnected = false
 
-    private let url = URL(string: "https://notify.bjjl.dev/receive")!
+    private let url = URL(string: "https://notify.example.com/receive")!
     private var streamTask: Task<Void, Never>?
     private var dataTask: URLSessionDataTask?
     private var lineBuffer = Data()
