@@ -2,6 +2,27 @@
 
 ## 2026-06-26
 
+### Kanopy-hardening pass (deployment target is AWS/Kanopy, not the old VM)
+
+The demo deploys on AWS via Kanopy — each app is its own container on
+`:8080` with its own host (`Dockerfile.*` + `environment/*.yaml`, already
+wired). This pass removes the leftover single-VM/NetBSD assumptions:
+
+- `environment/{staging,production}-shell.yaml`: add
+  `DEMO_DISABLE_FILE_WATCH=1` — the image is immutable, so the
+  mcp_servers/ hot-reload watcher is pointless in prod (only the shell
+  runs it).
+- `agents/registry.py::_watch_servers`: reworded to drop the NetBSD
+  rationale — forced polling is kept purely as a safe, platform-neutral
+  default; hot-reload is a local-dev convenience.
+- `web/shell.html`: dashboard-link comment reworded to lead with the
+  Kanopy case (`IBN_DASHBOARD_URL`/`DTW_DASHBOARD_URL` → per-host links,
+  `?session=` carries the lane cross-host); dev-ports and single-origin
+  proxy are documented as fallbacks. Logic unchanged.
+- `bin/_common.sh`: note the start/stop scripts are local-dev only
+  (prod runs per-app containers); dropped the "NetBSD pkgsrc" phrasing.
+- CLAUDE.md: deployment section rewritten for the Kanopy model.
+
 ### Remove etc/nginx.conf
 
 Deleted the checked-in nginx config (it was a full personal server
