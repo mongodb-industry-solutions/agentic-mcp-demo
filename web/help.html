@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agentic AI Demo — Help</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:      #0a0a0a;
+    --surface: #111111;
+    --border:  #1e1e1e;
+    --green:   #00ff88;
+    --yellow:  #ffd700;
+    --cyan:    #00d4ff;
+    --red:     #ff4d6a;
+    --blue:    #4d9fff;
+    --dim:     rgba(255,255,255,0.32);
+    --text:    rgba(255,255,255,0.88);
+    --mono:    'JetBrains Mono', 'SF Mono', monospace;
+  }
+
+  body {
+    font-family: var(--mono);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    padding: 14px 14px 60px;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; }
+
+  .banner {
+    border: 1px solid var(--green); border-radius: 6px;
+    padding: 12px 18px; margin-bottom: 18px;
+  }
+  .banner-title { color: var(--green); font-weight: 700; font-size: 16px; margin-bottom: 4px; }
+  .banner-meta  { color: var(--dim); font-size: 13px; }
+
+  h2 {
+    font-size: 15px; color: var(--cyan); font-weight: 700;
+    margin: 26px 0 8px; padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 { font-size: 14px; color: var(--text); font-weight: 700; margin: 16px 0 6px; }
+  p  { margin: 6px 0; }
+  ul { margin: 6px 0 6px 18px; }
+  li { margin: 3px 0; }
+  b, strong { color: var(--text); font-weight: 700; }
+  .dim { color: var(--dim); }
+
+  .flow {
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--surface); padding: 14px 16px; margin: 10px 0 18px;
+  }
+  .flow-title { font-weight: 700; margin-bottom: 2px; }
+  .flow-ibn .flow-title { color: var(--yellow); }
+  .flow-dtw .flow-title { color: var(--blue); }
+  .flow-sub { color: var(--dim); font-size: 13px; margin-bottom: 12px; }
+
+  /* numbered step with a copyable prompt */
+  .step { display: flex; gap: 10px; margin: 10px 0; align-items: flex-start; }
+  .step-n {
+    flex-shrink: 0; width: 23px; height: 23px; border-radius: 50%;
+    border: 1px solid #333; color: var(--dim); font-size: 12px;
+    display: flex; align-items: center; justify-content: center; margin-top: 2px;
+  }
+  .step-body { min-width: 0; flex: 1; }
+  .prompt {
+    display: block; width: 100%; text-align: left; cursor: pointer;
+    font-family: var(--mono); font-size: 14px; line-height: 1.5;
+    background: rgba(255,255,255,0.03); color: var(--text);
+    border: 1px solid #2a2a2a; border-radius: 4px; padding: 6px 10px;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .prompt:hover { border-color: var(--green); }
+  .prompt::before { content: '❯ '; color: var(--green); }
+  .prompt.copied { border-color: var(--green); }
+  .why { color: var(--dim); font-size: 13px; margin: 4px 0 0; }
+  .why b { color: rgba(255,255,255,0.6); }
+
+  .note {
+    border: 1px solid #5a4a00; border-radius: 6px;
+    padding: 10px 14px; margin: 12px 0; color: var(--yellow); font-size: 14px;
+  }
+  .note b { color: var(--text); }
+  code {
+    background: rgba(255,255,255,0.08); border-radius: 2px; padding: 0 3px;
+    font-family: var(--mono);
+  }
+  a { color: var(--cyan); }
+  .back {
+    display: inline-block; margin-top: 24px; padding: 4px 12px;
+    font-family: var(--mono); font-size: 13px; cursor: pointer;
+    background: none; border: 1px solid #2a3f55; border-radius: 4px;
+    color: var(--cyan);
+  }
+  .back:hover { border-color: var(--cyan); }
+  .back-hint { margin-left: 10px; font-size: 13px; color: var(--dim); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="banner">
+    <div class="banner-title">❔ Help — how to drive this demo</div>
+    <div class="banner-meta">Two workflows · Intent-Based Networking (IBN) and What-if scenarios (DTW network digital twin)</div>
+  </div>
+
+  <p>
+    The shell is a <b>multi-agent orchestrator</b>. Every query is routed in two
+    stages — a domain classifier picks the demo (IBN or DTW), then Atlas Vector
+    Search picks the MCP service inside that domain — and the matching domain
+    agent runs its own ReAct loop over that domain's tools. Watch the
+    <b>Agent Log</b> on the right to see routing, tool calls and results as they
+    happen, and the <b>Workstreams</b> tab to see the agent's running memory of
+    each thread.
+  </p>
+  <p class="dim">
+    Both opener queries are pre-loaded in the input history: press <b>↑</b> once
+    for the IBN opener, twice for the DTW opener. Below, click any prompt to copy it.
+  </p>
+
+  <h2>1 · Intent-Based Networking</h2>
+  <p>
+    A retail customer asks for connectivity in business language. The agent turns
+    that sentence into a structured intent, checks it against real inventory,
+    activates a plan, then watches it break under load and repairs it.
+  </p>
+
+  <div class="flow flow-ibn">
+    <div class="flow-title">IBN — intent → feasibility → activation → violation → repair</div>
+    <div class="flow-sub">Services: ibn_intent · ibn_inventory · ibn_feasibility · ibn_assurance · ibn_telemetry_simulator</div>
+
+    <div class="step">
+      <div class="step-n">1</div>
+      <div class="step-body">
+        <button class="prompt">IBN: I'm opening a new Alpenmarkt store at Marienplatz Munich. POS priority, guest WiFi strictly separated, camera uplink, online by 18:00, max 40ms POS latency, 99.95% availability.</button>
+        <p class="why"><b>What happens:</b> the IBN agent extracts the fields from
+        free text — site, SLOs, segmentation and timing — and submits a structured
+        intent. The new intent appears on the IBN dashboard immediately (Change Streams).</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">2</div>
+      <div class="step-body">
+        <button class="prompt">feasibility check</button>
+        <p class="why"><b>What happens:</b> the intent is matched against sites,
+        resources and topology; geospatial lookup finds nearby spare capacity.
+        You get a verdict with the gaps that block it.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">3</div>
+      <div class="step-body">
+        <button class="prompt">propose and activate</button>
+        <p class="why"><b>What happens:</b> a plan is proposed and then activated —
+        policy snapshots are written and the intent moves to <code>active</code> on
+        the dashboard.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">4</div>
+      <div class="step-body">
+        <button class="prompt">inject morning rush</button>
+        <p class="why"><b>What happens:</b> the telemetry simulator pushes a burst
+        of load into the time-series collection, breaching the 40 ms POS latency
+        objective. A compliance violation lights up on the dashboard.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">5</div>
+      <div class="step-body">
+        <button class="prompt">diagnose violation</button>
+        <p class="why"><b>What happens — the hero query:</b> one
+        <code>$vectorSearch</code> stage combines semantic similarity over the
+        knowledge base with structured pre-filters on kind, a time window, and a
+        geographic bounding box. Semantics + time + geo + exact match, inside a
+        single index. In <code>?mode=eng</code> the dashboard shows the raw
+        aggregation pipeline.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">6</div>
+      <div class="step-body">
+        <button class="prompt">apply runbook</button>
+        <p class="why"><b>What happens:</b> the recommended remediation from the
+        retrieved runbook is applied, the template version is bumped, and
+        compliance returns to green.</p>
+      </div>
+    </div>
+  </div>
+
+  <h2>2 · What-if scenarios (network digital twin)</h2>
+  <p>
+    A digital twin of ACME Mobile's plans, QoS profiles, RAN/core topology and
+    traffic models lives in Atlas. The agent runs simulations against it, so you
+    can ask "what breaks if…" before touching production.
+  </p>
+
+  <div class="flow flow-dtw">
+    <div class="flow-title">DTW — scenario → refinement → simulation</div>
+    <div class="flow-sub">Services: dtw_plan · dtw_topology · dtw_traffic · dtw_scenario · dtw_simulation</div>
+
+    <div class="step">
+      <div class="step-n">1</div>
+      <div class="step-body">
+        <button class="prompt">DTW: Raise prepaid ACME M downlink from 7.2 Mbps to 15 Mbps in NYC and LA Saturday evening - where do we bottleneck?</button>
+        <p class="why"><b>What happens:</b> the DTW agent extracts plan, target
+        rate, markets and time window, resolves the numeric rate to the nearest
+        QoS profile (with an explicit substitution note), and creates a what-if
+        scenario. It shows up on the DTW dashboard.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">2</div>
+      <div class="step-body">
+        <button class="prompt">change to 20 Mbps</button>
+        <p class="why"><b>What happens:</b> a short follow-up updates the existing
+        scenario in place rather than creating a new one — this is the
+        conversation memory and domain stickiness at work.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">3</div>
+      <div class="step-body">
+        <button class="prompt">run simulation</button>
+        <p class="why"><b>What happens — the hero query:</b> a
+        <code>$graphLookup</code> walks the dependency tree from the plan through
+        QoS → cells → eNodeBs → SGW → PGW to establish scope, per-cell load is
+        projected from the traffic models, and a hybrid
+        <code>$vectorSearch</code> retrieves analogous past incidents and their
+        mitigations — all in one tool call. Graph for operational structure,
+        vector for institutional memory, one database.</p>
+      </div>
+    </div>
+  </div>
+
+  <h2>Interleaving the two flows</h2>
+  <p>
+    The two demos are independent: separate domains, separate agents, separate
+    collections, separate workstreams. You can switch between them mid-session
+    and each thread keeps its own state — start the IBN intent, jump to DTW, come
+    back and continue with <i>propose and activate</i>.
+  </p>
+  <div class="note">
+    <b>One caveat.</b> The short follow-up steps (<i>feasibility check</i>,
+    <i>propose and activate</i>, <i>change to 20 Mbps</i>, <i>diagnose
+    violation</i>, <i>apply runbook</i>, <i>run simulation</i>) carry no domain of
+    their own — they are resolved against the previous turn. If you have just
+    switched demos, name the target explicitly (<code>IBN: feasibility
+    check</code>, <code>DTW: run simulation</code>) so the classifier lands in the
+    right domain. Sequences within one flow are safe to keep short.
+  </div>
+
+  <h2>Controls in the header</h2>
+  <ul>
+    <li><b>↺ Reset demo data</b> — drops and re-seeds this session's IBN + DTW
+        demo collections and clears the agent-state planes (workstreams,
+        memories, preferences, routing decisions). Shared read-only fixtures and
+        the service/agent catalogue stay put. Use it to get back to a clean
+        slate between runs.</li>
+    <li><b>📊 IBN dashboard</b> / <b>📊 DTW dashboard</b> — open in a second
+        window; both are bound to <i>your</i> session token, so they mirror your
+        own isolated demo lane. Append <code>&amp;mode=exec</code> for the
+        narrative, non-technical rendering, or leave it out for the engineering
+        view with raw pipelines.</li>
+    <li><b>Agent Log · MCP Servers · Workstreams</b> tabs on the right — live
+        routing/tool trace, the auto-discovered service registry (you can add a
+        new MCP server at runtime), and the agent's per-thread memory.</li>
+  </ul>
+
+  <p class="dim" style="margin-top:18px">
+    Typing <code>status</code> or <code>preferences</code> in the shell prints the
+    session's registry state and learned user preferences.
+  </p>
+
+  <button class="back" id="backBtn" type="button">↩ Back to the shell</button>
+  <span class="back-hint" id="backHint"></span>
+</div>
+
+<script>
+// Click a prompt to copy it, then paste into the shell input.
+document.querySelectorAll('.prompt').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const text = btn.textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (_) {
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (__) {}
+      ta.remove();
+    }
+    btn.classList.add('copied');
+    setTimeout(() => btn.classList.remove('copied'), 900);
+  });
+});
+
+// "Back to the shell": hand focus to the tab that opened us (the shell link
+// uses rel="opener", so window.opener is available), then close this tab —
+// navigating here would spawn a second shell instead. Closing is only
+// permitted for script/link-opened tabs, so if we're still here a moment
+// later, fall back to the keyboard shortcut hint.
+document.getElementById('backBtn').addEventListener('click', () => {
+  const opener = (() => {
+    try { return window.opener && !window.opener.closed ? window.opener : null; }
+    catch (_) { return null; }
+  })();
+  if (opener) {
+    try { opener.focus(); } catch (_) {}
+  }
+  window.close();
+  setTimeout(() => {
+    const hint = document.getElementById('backHint');
+    hint.textContent = opener
+      ? 'switched back — close this tab with '
+        + (navigator.platform.startsWith('Mac') ? '⌘W' : 'Ctrl+W')
+        + ' when you no longer need it'
+      : 'this tab can\'t close itself — use '
+        + (navigator.platform.startsWith('Mac') ? '⌘W' : 'Ctrl+W')
+        + ' and switch back to the shell tab';
+  }, 400);
+});
+</script>
+</body>
+</html>

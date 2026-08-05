@@ -235,11 +235,18 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 HTML_PATH = Path(__file__).parent / "shell.html"
+HELP_PATH = Path(__file__).parent / "help.html"
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return HTML_PATH.read_text()
+
+
+@app.get("/help", response_class=HTMLResponse)
+async def help_page():
+    """Static walkthrough of the two demo flows (IBN + DTW)."""
+    return HELP_PATH.read_text()
 
 
 @app.websocket("/ws")
