@@ -1,5 +1,64 @@
 # CHANGES.md
 
+## 2026-08-05 (2)
+
+### Presentation polish: bigger type, telco title, log clears on reset
+
+Aimed at conducting the demo over a video call, where 10–11px text is
+unreadable for the audience:
+
+- **Every `font-size` scaled ×1.15** (rounded to whole px, stylesheets and
+  inline styles alike) across `web/shell.html`, `web/help.html`,
+  `web/ibn.html`, `web/dtw.html` and `web/portfolio.html` — roughly one
+  browser zoom step. Base body text 13 → 15px, smallest text anywhere is
+  now 12px (was 10px). Scaling the declarations rather than switching to
+  `rem` + a root `zoom`: these pages are px-sized throughout, and the
+  shell/dashboards use `height: 100%` + `overflow: hidden` flex layouts
+  where `zoom` on `html` overflows the viewport by the zoom factor. The
+  fixed-width *text* columns that would have clipped were widened to
+  match (IBN event time/kind, check labels, SLA value + badge,
+  fingerprint keys, step-counter circles); bars, dots and sparklines were
+  left as they were.
+- **Shell title is telco-specific** — banner reads "Agentic AI Demo for
+  Telco OSS/BSS — Web Shell", and the browser tab title matches.
+- **Reset clears the Agent Log.** The seeding/teardown trace stays up for
+  2.5s after `reset_done`, then the log pane is emptied and reseeded with
+  a single "✓ Clean slate" line, so the next run starts at the top of an
+  empty pane. A failed reset leaves the log intact.
+
+## 2026-08-05
+
+### Online help page + pinned demo start queries in the web shell
+
+Two additions to make the shell self-explanatory for a presenter (or a
+visitor driving it alone):
+
+- **Pinned cursor-up history.** The two canonical demo openers (the IBN
+  Alpenmarkt intent and the DTW ACME M QoS uplift) are hardcoded in
+  `web/shell.html` as `PINNED_HISTORY` and pushed to the front of the
+  input history — one `↑` for IBN, two for DTW — both at page load and
+  after the stored per-session history arrives (de-duped). Clicking
+  **Reset demo data** also resets the cursor-up buffer to just those two;
+  the server already wipes the prefixed `agent_history` in the same pass
+  (`seed_runner.SESSION_STATE_BASES`), the client was only holding a
+  stale copy.
+- **"❔ Help with this demo"** — a fourth banner control next to reset +
+  the two dashboard links, opening the new `web/help.html` (served by
+  `GET /help` in `web/shell.py`) in a second tab. It walks both flows
+  step by step with click-to-copy prompts — IBN: intent → feasibility
+  check → propose and activate → inject morning rush → diagnose
+  violation → apply runbook; DTW: scenario → *change to 20 Mbps* → run
+  simulation — annotating each step with what happens and which Atlas
+  primitive is the point (hybrid `$vectorSearch` for diagnose,
+  `$graphLookup` + vector for simulate). Also covers interleaving the two
+  demos (independent domains/agents/collections/workstreams, with the
+  caveat that short follow-ups resolve against the previous turn, so
+  prefix them after a switch) and the header controls. Its footer button
+  hands focus back to the opener tab and closes itself (the shell link
+  carries `rel="opener"` for that) rather than linking to `/`, which would
+  have opened a second shell; if the browser refuses to let the tab close
+  itself, it falls back to a ⌘W/Ctrl+W hint.
+
 ## 2026-06-26
 
 ### Kanopy-hardening pass (deployment target is AWS/Kanopy, not the old VM)
