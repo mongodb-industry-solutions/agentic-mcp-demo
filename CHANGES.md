@@ -27,7 +27,11 @@ visitor driving it alone):
   `$graphLookup` + vector for simulate). Also covers interleaving the two
   demos (independent domains/agents/collections/workstreams, with the
   caveat that short follow-ups resolve against the previous turn, so
-  prefix them after a switch) and the header controls.
+  prefix them after a switch) and the header controls. Its footer button
+  hands focus back to the opener tab and closes itself (the shell link
+  carries `rel="opener"` for that) rather than linking to `/`, which would
+  have opened a second shell; if the browser refuses to let the tab close
+  itself, it falls back to a ⌘W/Ctrl+W hint.
 
 ## 2026-06-26
 

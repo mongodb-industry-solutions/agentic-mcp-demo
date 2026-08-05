@@ -93,7 +93,14 @@
     font-family: var(--mono);
   }
   a { color: var(--cyan); }
-  .back { display: inline-block; margin-top: 24px; font-size: 11px; }
+  .back {
+    display: inline-block; margin-top: 24px; padding: 4px 12px;
+    font-family: var(--mono); font-size: 11px; cursor: pointer;
+    background: none; border: 1px solid #2a3f55; border-radius: 4px;
+    color: var(--cyan);
+  }
+  .back:hover { border-color: var(--cyan); }
+  .back-hint { margin-left: 10px; font-size: 11px; color: var(--dim); }
 </style>
 </head>
 <body>
@@ -279,7 +286,8 @@
     session's registry state and learned user preferences.
   </p>
 
-  <a class="back" href="./">← back to the shell</a>
+  <button class="back" id="backBtn" type="button">↩ Back to the shell</button>
+  <span class="back-hint" id="backHint"></span>
 </div>
 
 <script>
@@ -298,6 +306,32 @@ document.querySelectorAll('.prompt').forEach(btn => {
     btn.classList.add('copied');
     setTimeout(() => btn.classList.remove('copied'), 900);
   });
+});
+
+// "Back to the shell": hand focus to the tab that opened us (the shell link
+// uses rel="opener", so window.opener is available), then close this tab —
+// navigating here would spawn a second shell instead. Closing is only
+// permitted for script/link-opened tabs, so if we're still here a moment
+// later, fall back to the keyboard shortcut hint.
+document.getElementById('backBtn').addEventListener('click', () => {
+  const opener = (() => {
+    try { return window.opener && !window.opener.closed ? window.opener : null; }
+    catch (_) { return null; }
+  })();
+  if (opener) {
+    try { opener.focus(); } catch (_) {}
+  }
+  window.close();
+  setTimeout(() => {
+    const hint = document.getElementById('backHint');
+    hint.textContent = opener
+      ? 'switched back — close this tab with '
+        + (navigator.platform.startsWith('Mac') ? '⌘W' : 'Ctrl+W')
+        + ' when you no longer need it'
+      : 'this tab can\'t close itself — use '
+        + (navigator.platform.startsWith('Mac') ? '⌘W' : 'Ctrl+W')
+        + ' and switch back to the shell tab';
+  }, 400);
 });
 </script>
 </body>

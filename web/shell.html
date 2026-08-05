@@ -382,7 +382,9 @@
      title="Open the IBN dashboard bound to this session">📊 IBN dashboard</a>
   <a class="dash-link" id="dtwDashLink" target="_blank" rel="noopener"
      title="Open the DTW dashboard bound to this session">📊 DTW dashboard</a>
-  <a class="dash-link help-link" href="help" target="_blank" rel="noopener"
+  <!-- rel="opener" (not noopener): the help page uses window.opener to
+       hand focus back to this tab instead of opening a second shell. -->
+  <a class="dash-link help-link" href="help" target="_blank" rel="opener"
      title="How to play the two demo workflows">❔ Help with this demo</a>
 </div>
 
