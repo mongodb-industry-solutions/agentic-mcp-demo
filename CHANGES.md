@@ -1,5 +1,31 @@
 # CHANGES.md
 
+## 2026-08-05 (2)
+
+### Presentation polish: bigger type, telco title, log clears on reset
+
+Aimed at conducting the demo over a video call, where 10–11px text is
+unreadable for the audience:
+
+- **Every `font-size` scaled ×1.15** (rounded to whole px, stylesheets and
+  inline styles alike) across `web/shell.html`, `web/help.html`,
+  `web/ibn.html`, `web/dtw.html` and `web/portfolio.html` — roughly one
+  browser zoom step. Base body text 13 → 15px, smallest text anywhere is
+  now 12px (was 10px). Scaling the declarations rather than switching to
+  `rem` + a root `zoom`: these pages are px-sized throughout, and the
+  shell/dashboards use `height: 100%` + `overflow: hidden` flex layouts
+  where `zoom` on `html` overflows the viewport by the zoom factor. The
+  fixed-width *text* columns that would have clipped were widened to
+  match (IBN event time/kind, check labels, SLA value + badge,
+  fingerprint keys, step-counter circles); bars, dots and sparklines were
+  left as they were.
+- **Shell title is telco-specific** — banner reads "Agentic AI Demo for
+  Telco OSS/BSS — Web Shell", and the browser tab title matches.
+- **Reset clears the Agent Log.** The seeding/teardown trace stays up for
+  2.5s after `reset_done`, then the log pane is emptied and reseeded with
+  a single "✓ Clean slate" line, so the next run starts at the top of an
+  empty pane. A failed reset leaves the log intact.
+
 ## 2026-08-05
 
 ### Online help page + pinned demo start queries in the web shell

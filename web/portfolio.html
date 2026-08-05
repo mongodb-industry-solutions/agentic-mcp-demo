@@ -92,7 +92,7 @@
     display: grid;
     place-items: center;
     font-family: var(--heading);
-    font-size: 18px;
+    font-size: 21px;
     font-weight: 700;
     color: var(--purple);
     background: var(--purple-dim);
@@ -101,7 +101,7 @@
 
   .logo h1 {
     font-family: var(--heading);
-    font-size: 22px;
+    font-size: 25px;
     font-weight: 700;
     letter-spacing: -0.02em;
     color: var(--text);
@@ -110,14 +110,14 @@
   .logo h1 span {
     color: var(--text-dim);
     font-weight: 400;
-    font-size: 18px;
+    font-size: 21px;
   }
 
   .status-badge {
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 13px;
+    font-size: 15px;
     font-family: var(--body);
     font-weight: 500;
     color: var(--text-dim);
@@ -169,7 +169,7 @@
   }
 
   .card-label {
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 500;
     color: var(--text-dim);
     margin-bottom: 12px;
@@ -178,7 +178,7 @@
 
   .card-value {
     font-family: var(--heading);
-    font-size: 28px;
+    font-size: 32px;
     font-weight: 700;
     letter-spacing: -0.02em;
     color: var(--text);
@@ -192,7 +192,7 @@
   }
 
   .card-sub {
-    font-size: 13px;
+    font-size: 15px;
     color: var(--text-dim);
     margin-top: 6px;
   }
@@ -221,13 +221,13 @@
 
   .table-title {
     font-family: var(--heading);
-    font-size: 18px;
+    font-size: 21px;
     font-weight: 700;
     color: var(--text);
   }
 
   .table-count {
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 500;
     color: var(--text-dim);
     background: var(--surface-2);
@@ -242,7 +242,7 @@
   }
 
   thead th {
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 600;
     letter-spacing: 0.03em;
     color: var(--text-dim);
@@ -265,7 +265,7 @@
 
   tbody td {
     padding: 18px 28px;
-    font-size: 16px;
+    font-size: 18px;
     font-weight: 400;
     color: var(--text-2);
     border-bottom: 1px solid rgba(255, 255, 255, 0.04);
@@ -275,7 +275,7 @@
   tbody td.num {
     text-align: right;
     font-family: var(--mono);
-    font-size: 16px;
+    font-size: 18px;
     font-weight: 400;
     color: var(--text-2);
   }
@@ -284,7 +284,7 @@
     font-family: var(--mono);
     font-weight: 600;
     color: var(--cyan);
-    font-size: 16px;
+    font-size: 18px;
   }
 
   tbody td.name-cell {
@@ -294,13 +294,13 @@
     white-space: nowrap;
     font-weight: 500;
     color: var(--text);
-    font-size: 14px;
+    font-size: 16px;
   }
 
 
   .currency-tag {
     display: inline-block;
-    font-size: 12px;
+    font-size: 14px;
     font-family: var(--mono);
     font-weight: 500;
     color: var(--purple);
@@ -340,11 +340,11 @@
     text-align: center;
     padding: 72px 20px;
     color: var(--text-dim);
-    font-size: 15px;
+    font-size: 17px;
   }
 
   .empty-state .icon {
-    font-size: 36px;
+    font-size: 41px;
     margin-bottom: 12px;
     opacity: 0.3;
   }
@@ -353,7 +353,7 @@
   footer {
     margin-top: 36px;
     text-align: center;
-    font-size: 13px;
+    font-size: 15px;
     color: var(--text-dim);
     letter-spacing: 0.02em;
   }
@@ -371,7 +371,7 @@
 
   .toast {
     font-family: var(--body);
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 500;
     padding: 12px 18px;
     border-radius: 12px;
@@ -400,29 +400,29 @@
   @media (max-width: 768px) {
     .container { padding: 20px 12px; }
     header { margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
-    .logo h1 { font-size: 18px; }
-    .logo h1 span { font-size: 15px; }
-    .card-value { font-size: 22px; }
+    .logo h1 { font-size: 21px; }
+    .logo h1 span { font-size: 17px; }
+    .card-value { font-size: 25px; }
     .card { padding: 16px; }
     .summary { gap: 10px; margin-bottom: 24px; }
     .table-header { padding: 14px 16px; }
-    .table-title { font-size: 15px; }
+    .table-title { font-size: 17px; }
 
-    thead th { padding: 14px 16px; font-size: 13px; }
-    tbody td { padding: 14px 16px; font-size: 15px; }
-    tbody td.num { font-size: 15px; }
-    tbody td.ticker-cell { font-size: 15px; }
-    tbody td.name-cell { font-size: 13px; max-width: 260px; }
-    tbody td.isin-cell { font-size: 13px; }
+    thead th { padding: 14px 16px; font-size: 15px; }
+    tbody td { padding: 14px 16px; font-size: 17px; }
+    tbody td.num { font-size: 17px; }
+    tbody td.ticker-cell { font-size: 17px; }
+    tbody td.name-cell { font-size: 15px; max-width: 260px; }
+    tbody td.isin-cell { font-size: 15px; }
 
   }
 
   @media (max-width: 480px) {
     .summary { grid-template-columns: repeat(2, 1fr); }
-    .card-value { font-size: 20px; }
-    .card-label { font-size: 12px; }
+    .card-value { font-size: 23px; }
+    .card-label { font-size: 14px; }
     .card { padding: 14px; border-radius: 12px; }
-    .logo-icon { width: 34px; height: 34px; font-size: 15px; }
+    .logo-icon { width: 34px; height: 34px; font-size: 17px; }
   }
 </style>
 </head>
@@ -458,7 +458,7 @@
     </div>
     <div class="card">
       <div class="card-label">Last Update</div>
-      <div class="card-value" id="lastUpdate" style="font-size:20px;">--</div>
+      <div class="card-value" id="lastUpdate" style="font-size:23px;">--</div>
       <div class="card-sub" id="lastChange"></div>
     </div>
   </div>
