@@ -1,5 +1,34 @@
 # CHANGES.md
 
+## 2026-08-05
+
+### Online help page + pinned demo start queries in the web shell
+
+Two additions to make the shell self-explanatory for a presenter (or a
+visitor driving it alone):
+
+- **Pinned cursor-up history.** The two canonical demo openers (the IBN
+  Alpenmarkt intent and the DTW ACME M QoS uplift) are hardcoded in
+  `web/shell.html` as `PINNED_HISTORY` and pushed to the front of the
+  input history — one `↑` for IBN, two for DTW — both at page load and
+  after the stored per-session history arrives (de-duped). Clicking
+  **Reset demo data** also resets the cursor-up buffer to just those two;
+  the server already wipes the prefixed `agent_history` in the same pass
+  (`seed_runner.SESSION_STATE_BASES`), the client was only holding a
+  stale copy.
+- **"❔ Help with this demo"** — a fourth banner control next to reset +
+  the two dashboard links, opening the new `web/help.html` (served by
+  `GET /help` in `web/shell.py`) in a second tab. It walks both flows
+  step by step with click-to-copy prompts — IBN: intent → feasibility
+  check → propose and activate → inject morning rush → diagnose
+  violation → apply runbook; DTW: scenario → *change to 20 Mbps* → run
+  simulation — annotating each step with what happens and which Atlas
+  primitive is the point (hybrid `$vectorSearch` for diagnose,
+  `$graphLookup` + vector for simulate). Also covers interleaving the two
+  demos (independent domains/agents/collections/workstreams, with the
+  caveat that short follow-ups resolve against the previous turn, so
+  prefix them after a switch) and the header controls.
+
 ## 2026-06-26
 
 ### Remove etc/nginx.conf

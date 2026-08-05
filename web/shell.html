@@ -256,6 +256,8 @@
     display: inline-block;
   }
   .dash-link:hover { border-color: var(--cyan); }
+  .help-link { border-color: #2f4a2f; color: var(--green); }
+  .help-link:hover { border-color: var(--green); }
   .modal .warn { color: var(--yellow); font-size: 12px; line-height: 1.55; }
   .modal .warn b { color: var(--text); }
   .modal-result { font-size: 11px; padding: 4px 0; }
@@ -380,6 +382,8 @@
      title="Open the IBN dashboard bound to this session">📊 IBN dashboard</a>
   <a class="dash-link" id="dtwDashLink" target="_blank" rel="noopener"
      title="Open the DTW dashboard bound to this session">📊 DTW dashboard</a>
+  <a class="dash-link help-link" href="help" target="_blank" rel="noopener"
+     title="How to play the two demo workflows">❔ Help with this demo</a>
 </div>
 
 <div class="columns">
@@ -469,6 +473,26 @@ const inputHistory = [];
 let   historyPos   = -1;
 let   savedDraft   = '';
 
+// The two canonical demo openers, always reachable with one/two ↑ presses
+// regardless of what the shared shell history holds. Kept in cursor-up
+// order: first ↑ = IBN, second ↑ = DTW.
+const PINNED_HISTORY = [
+  "IBN: I'm opening a new Alpenmarkt store at Marienplatz Munich. POS priority, guest WiFi strictly separated, camera uplink, online by 18:00, max 40ms POS latency, 99.95% availability.",
+  "DTW: Raise prepaid ACME M downlink from 7.2 Mbps to 15 Mbps in NYC and LA Saturday evening - where do we bottleneck?",
+];
+
+function seedPinnedHistory() {
+  // Drop any duplicate that came from the stored history, then push the
+  // pinned pair to the front so ↑ always finds them first.
+  for (let i = PINNED_HISTORY.length - 1; i >= 0; i--) {
+    const q = PINNED_HISTORY[i];
+    let j;
+    while ((j = inputHistory.indexOf(q)) !== -1) inputHistory.splice(j, 1);
+    inputHistory.unshift(q);
+  }
+}
+seedPinnedHistory();
+
 // ── WebSocket ──────────────────────────────────────────────────────────────
 let ws;
 function connect() {
@@ -526,6 +550,7 @@ function connect() {
         msg.history.forEach(h => inputHistory.push(h));
         appendLog('INFO', `↑ ${msg.history.length} historic queries loaded`);
       }
+      seedPinnedHistory();
       ws.send(JSON.stringify({type: 'server_list'}));
       return;
     }
@@ -624,6 +649,13 @@ function connect() {
       const resEl = document.getElementById('resetResult');
       if (msg.ok) {
         appendLog('SEED', '✓ ' + msg.message);
+        // The server wiped this session's stored history too — bring the
+        // cursor-up buffer back to just the two pinned demo openers.
+        inputHistory.length = 0;
+        seedPinnedHistory();
+        historyPos = -1;
+        savedDraft = '';
+        appendLog('INFO', '↑ history reset to the 2 demo start queries');
         closeResetModalForce();
         const panel = document.createElement('div');
         panel.className = 'response-panel';
