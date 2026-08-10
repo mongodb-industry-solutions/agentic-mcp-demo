@@ -17,6 +17,31 @@ set -u
 [ -n "${VOYAGE_API_KEY:-}" ] || \
     echo "⚠  VOYAGE_API_KEY not set — restaurant_guide embedding unavailable."
 
+# The shell spawns MCP servers with `uv run …` (agents/mcp_pool.py), so
+# `uv` must be resolvable in the *child's* PATH. When the venv is
+# activated that's automatic; when only PYTHON= is set (the documented
+# alternative) it is not — the services then start fine, serve HTTP fine,
+# and every query dies with "I couldn't load any tools for the 'x'
+# domain". Put PYTHON's own bin dir on PATH so both invocations behave
+# identically.
+PYBIN="$(cd "$(dirname "$PYTHON")" && pwd)"
+case ":$PATH:" in
+    *":$PYBIN:"*) ;;
+    *) PATH="$PYBIN:$PATH"; export PATH ;;
+esac
+command -v uv >/dev/null 2>&1 || cat <<'EOF'
+⚠  `uv` is not on PATH — the shell will start and serve pages, but every
+   query will fail with "I couldn't load any tools for the '…' domain",
+   because MCP servers are launched via `uv run`. Install it into the venv
+   (`pip install uv`) or onto your PATH before demoing.
+EOF
+
+# Detached stdout is a pipe, so Python block-buffers it and the
+# orchestrator's `print` diagnostics (⚠️ warnings especially) can sit
+# unflushed for the entire run — invisible in logs/ exactly when you need
+# them. uvicorn's own logging is unaffected either way.
+export PYTHONUNBUFFERED=1
+
 mkdir -p "$LOGDIR" "$RUNDIR"
 
 echo "🧠 Starting Agentic AI demo (detached)…"

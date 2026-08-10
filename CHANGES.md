@@ -1,5 +1,98 @@
 # CHANGES.md
 
+## 2026-08-10 (2)
+
+### Fix: tool selection was sampled at temperature 1.0
+
+`feasbility check` answered "The tools for feasibility check are currently
+unavailable" and made no tool call, on a turn where all five IBN servers
+and all 19 of their tools had loaded correctly. The same step, same typo,
+worked on the next run — the hallmark of sampling, not logic.
+
+Every routing, classification, workstream and memory helper in the
+orchestrator pins `temperature=0`. The two **tool-calling ReAct loops**
+(`DomainAgent.run`, `ReactMixin.process_query`) passed no `temperature` at
+all, so they ran at the API default of 1.0: the choice between calling
+`check_feasibility` and replying that the tool was unavailable was drawn
+from a distribution. Tool selection is a decision, not a creative act —
+both loops now pin `temperature=0`.
+
+Note this is a *fix for flakiness*, not for a deterministic failure. The
+original symptom was never reproduced locally; the diagnosis rests on the
+inconsistency with every other LLM call in the codebase, and on ruling out
+the alternative below. Post-fix, the failing step called
+`check_feasibility` in 5/5 fresh sessions.
+
+### Partial tool harvests are now visible
+
+Ruling out the first hypothesis — that one server's schema harvest had
+silently returned nothing — exposed a real reporting gap. `DomainAgent.run`
+guarded only against a *completely* empty toolset, and its broadcast
+counted the servers it had *selected* rather than the ones that actually
+yielded tools. A partial harvest therefore looked identical to a healthy
+turn in the log, while the LLM reported the missing capability as
+"unavailable" — exactly the observed symptom, from a different cause.
+
+- Servers that yield zero schemas are now named in an `ERROR` broadcast.
+- The `ROUTING` line reports `loaded/selected` servers and a tool count
+  (`5/5 domain server(s) available, 19 tools`) instead of a bare server
+  count.
+
+(Measured for the record: a cold concurrent harvest of all five IBN
+servers takes ~1s and yields 19 tools, reproducibly — so the harvest was
+not in fact the culprit here.)
+
+## 2026-08-10
+
+### Fix: terse IBN follow-ups no longer fan out to the DTW agent
+
+`inject morning rush`, typed as step 4 of the IBN flow, produced a
+parallel dispatch to `dtw_agent` alongside `ibn_agent`. The DTW agent had
+no scenario to work on, invented one ("simulate the impact of injecting
+morning rush scenarios on the mobile network twin…"), `create_scenario`
+correctly rejected it, and that rejection *led* the synthesized answer —
+burying the real IBN result (the injected SLA violation) under a request
+for clarification the user had no reason to answer.
+
+- **Rule 0 in `_select_agents_for_turn`** (`agents/dispatch.py`): a terse
+  follow-up inside an agent-enabled workstream resolves to that
+  workstream's agent alone. Stage 1 deliberately overmatches on low-signal
+  input — its own contract is "overmatching is cheap, Stage 2 vector
+  search picks the winner" — but that does not hold for agent dispatch,
+  where a second in-scope domain becomes a second agent running real tool
+  calls. Only the fan-out is suppressed, and only for short follow-ups; a
+  longer cross-domain question still fans out exactly as before. The
+  suppression is broadcast (`⚓ Terse follow-up continues WS-… — staying
+  single-agent`) and recorded under `agent_anchor` in the routing decision.
+- **`_split_subtasks` now defaults to null** and is told which domain owns
+  the active workstream, so an agent Stage 1 pulled in on vocabulary
+  overlap has to earn its sub-task instead of being handed the full query.
+  This is the last checkpoint before an uninvolved agent invents work for
+  itself; when it nulls everyone but one agent, the turn collapses to a
+  plain single dispatch (existing behaviour, now actually reachable).
+
+### Fix: `PYTHON=…` starts a demo that can't call any tools
+
+`bin/start.sh` launched `nohup "$PYTHON" …` without putting that
+interpreter's `bin` directory on `PATH`. Since MCP servers are spawned as
+`uv run …` and `uv` is pip-installed inside the venv, the documented
+`PYTHON=<venv>/bin/python bin/start.sh` alternative produced services that
+started, bound their ports and served every page correctly — then failed
+*every* query with "I couldn't load any tools for the 'ibn' domain".
+Activating the venv masked it entirely.
+
+- `bin/start.sh` prepends `$PYTHON`'s directory to `PATH`, so both
+  invocations behave identically, and warns up front if `uv` still isn't
+  resolvable rather than letting the failure surface one query later.
+- `PYTHONUNBUFFERED=1` for the detached services. Their stdout is a pipe,
+  so Python block-buffered it and the orchestrator's `print` diagnostics —
+  including the `⚠️ schema harvest for … failed` line that would have named
+  this bug immediately — never reached `logs/`.
+- **`tool_schemas_for` no longer caches failures** (`agents/mcp_pool.py`).
+  An empty result was written into the process-wide `_TOOL_SCHEMA_CACHE`,
+  so one transient spawn failure disabled that server for the lifetime of
+  the process; a domain stayed toolless long after the cause was fixed.
+
 ## 2026-08-05 (2)
 
 ### Presentation polish: bigger type, telco title, log clears on reset
