@@ -84,7 +84,6 @@ class McpPoolMixin:
 
         matches = self._resolve_server_paths([name])
         if not matches:
-            _TOOL_SCHEMA_CACHE[name] = []
             return []
         params = StdioServerParameters(
             command="uv", args=["run", matches[0]["path"]],
@@ -100,7 +99,12 @@ class McpPoolMixin:
                 t_list = await session.list_tools()
                 schemas = self._schemas_from(name, t_list)
         except Exception as e:
-            print(f"⚠️ schema harvest for {name} failed: {e}")
+            # Never cache a failure: a missing `uv`, a busy machine, or a
+            # transient spawn error would otherwise disable this server for
+            # the whole process lifetime, so every later query in the
+            # domain reports "no tools" long after the cause is gone.
+            print(f"⚠️ schema harvest for {name} failed: {e}", flush=True)
+            return []
         _TOOL_SCHEMA_CACHE[name] = schemas
         return schemas
 

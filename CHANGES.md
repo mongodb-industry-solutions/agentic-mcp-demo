@@ -1,5 +1,56 @@
 # CHANGES.md
 
+## 2026-08-10
+
+### Fix: terse IBN follow-ups no longer fan out to the DTW agent
+
+`inject morning rush`, typed as step 4 of the IBN flow, produced a
+parallel dispatch to `dtw_agent` alongside `ibn_agent`. The DTW agent had
+no scenario to work on, invented one ("simulate the impact of injecting
+morning rush scenarios on the mobile network twin…"), `create_scenario`
+correctly rejected it, and that rejection *led* the synthesized answer —
+burying the real IBN result (the injected SLA violation) under a request
+for clarification the user had no reason to answer.
+
+- **Rule 0 in `_select_agents_for_turn`** (`agents/dispatch.py`): a terse
+  follow-up inside an agent-enabled workstream resolves to that
+  workstream's agent alone. Stage 1 deliberately overmatches on low-signal
+  input — its own contract is "overmatching is cheap, Stage 2 vector
+  search picks the winner" — but that does not hold for agent dispatch,
+  where a second in-scope domain becomes a second agent running real tool
+  calls. Only the fan-out is suppressed, and only for short follow-ups; a
+  longer cross-domain question still fans out exactly as before. The
+  suppression is broadcast (`⚓ Terse follow-up continues WS-… — staying
+  single-agent`) and recorded under `agent_anchor` in the routing decision.
+- **`_split_subtasks` now defaults to null** and is told which domain owns
+  the active workstream, so an agent Stage 1 pulled in on vocabulary
+  overlap has to earn its sub-task instead of being handed the full query.
+  This is the last checkpoint before an uninvolved agent invents work for
+  itself; when it nulls everyone but one agent, the turn collapses to a
+  plain single dispatch (existing behaviour, now actually reachable).
+
+### Fix: `PYTHON=…` starts a demo that can't call any tools
+
+`bin/start.sh` launched `nohup "$PYTHON" …` without putting that
+interpreter's `bin` directory on `PATH`. Since MCP servers are spawned as
+`uv run …` and `uv` is pip-installed inside the venv, the documented
+`PYTHON=<venv>/bin/python bin/start.sh` alternative produced services that
+started, bound their ports and served every page correctly — then failed
+*every* query with "I couldn't load any tools for the 'ibn' domain".
+Activating the venv masked it entirely.
+
+- `bin/start.sh` prepends `$PYTHON`'s directory to `PATH`, so both
+  invocations behave identically, and warns up front if `uv` still isn't
+  resolvable rather than letting the failure surface one query later.
+- `PYTHONUNBUFFERED=1` for the detached services. Their stdout is a pipe,
+  so Python block-buffered it and the orchestrator's `print` diagnostics —
+  including the `⚠️ schema harvest for … failed` line that would have named
+  this bug immediately — never reached `logs/`.
+- **`tool_schemas_for` no longer caches failures** (`agents/mcp_pool.py`).
+  An empty result was written into the process-wide `_TOOL_SCHEMA_CACHE`,
+  so one transient spawn failure disabled that server for the lifetime of
+  the process; a domain stayed toolless long after the cause was fixed.
+
 ## 2026-08-05 (2)
 
 ### Presentation polish: bigger type, telco title, log clears on reset
