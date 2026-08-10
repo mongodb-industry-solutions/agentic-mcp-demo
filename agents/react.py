@@ -275,11 +275,15 @@ class ReactMixin:
             iteration += 1
             await self._broadcast("AGENT", f"Iteration {iteration}/{max_iterations}")
 
+            # temperature=0 — see the matching note in DomainAgent.run; the
+            # legacy direct-to-server ReAct loop had the same unpinned
+            # sampling on its tool-selection call.
             response = await self.openai.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 tools=openai_tools,
-                parallel_tool_calls=False
+                parallel_tool_calls=False,
+                temperature=0,
             )
 
             msg = response.choices[0].message

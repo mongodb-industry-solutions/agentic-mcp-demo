@@ -183,15 +183,29 @@ class DomainAgent:
         # McpPoolMixin.tool_schemas_for / ensure_active.)
         names = await self._select_servers(task)
         openai_tools: List[Dict] = []
+        empty: List[str] = []
         for name in names:
-            openai_tools.extend(await host.tool_schemas_for(name))
+            schemas = await host.tool_schemas_for(name)
+            if not schemas:
+                empty.append(name)
+            openai_tools.extend(schemas)
         if not openai_tools:
             return AgentResult(
                 answer=(f"I couldn't load any tools for the "
                         f"'{self.domain}' domain right now."),
                 status="error")
+        # Name the servers that yielded nothing. A PARTIAL harvest slips
+        # past the guard above, and the LLM then reports the missing
+        # capability as "unavailable" — indistinguishable, from the log
+        # alone, from a healthy turn where it simply chose not to act. So
+        # report tools loaded, not just servers selected.
+        if empty:
+            await host._broadcast("ERROR",
+                f"⚠ [{self.name}] no tools harvested from "
+                f"{', '.join(empty)} — this turn is missing capabilities")
         await host._broadcast("ROUTING",
-            f"[{self.name}] {len(names)} domain server(s) available; "
+            f"[{self.name}] {len(names) - len(empty)}/{len(names)} domain "
+            f"server(s) available, {len(openai_tools)} tools; "
             f"each activates on first tool call")
 
         others = [a for a in host.domain_agents.values() if a is not self]
@@ -227,11 +241,20 @@ class DomainAgent:
             await host._broadcast("AGENT",
                 f"[{self.name}] iteration {iteration}/{max_iterations}")
 
+            # temperature=0: every routing/classification helper in the
+            # orchestrator already pins this, but the tool-calling loop was
+            # left at the API default of 1.0 — so "call check_feasibility"
+            # vs "reply that the tool is unavailable" was being *sampled*.
+            # That produced demo-visible flakiness where the same scripted
+            # step worked on one run and answered "the tools for feasibility
+            # check are currently unavailable" on the next. Tool selection
+            # is a decision, not a creative act.
             response = await host.openai.chat.completions.create(
                 model=host.model,
                 messages=messages,
                 tools=openai_tools,
-                parallel_tool_calls=False
+                parallel_tool_calls=False,
+                temperature=0,
             )
 
             msg = response.choices[0].message

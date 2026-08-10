@@ -1,5 +1,47 @@
 # CHANGES.md
 
+## 2026-08-10 (2)
+
+### Fix: tool selection was sampled at temperature 1.0
+
+`feasbility check` answered "The tools for feasibility check are currently
+unavailable" and made no tool call, on a turn where all five IBN servers
+and all 19 of their tools had loaded correctly. The same step, same typo,
+worked on the next run — the hallmark of sampling, not logic.
+
+Every routing, classification, workstream and memory helper in the
+orchestrator pins `temperature=0`. The two **tool-calling ReAct loops**
+(`DomainAgent.run`, `ReactMixin.process_query`) passed no `temperature` at
+all, so they ran at the API default of 1.0: the choice between calling
+`check_feasibility` and replying that the tool was unavailable was drawn
+from a distribution. Tool selection is a decision, not a creative act —
+both loops now pin `temperature=0`.
+
+Note this is a *fix for flakiness*, not for a deterministic failure. The
+original symptom was never reproduced locally; the diagnosis rests on the
+inconsistency with every other LLM call in the codebase, and on ruling out
+the alternative below. Post-fix, the failing step called
+`check_feasibility` in 5/5 fresh sessions.
+
+### Partial tool harvests are now visible
+
+Ruling out the first hypothesis — that one server's schema harvest had
+silently returned nothing — exposed a real reporting gap. `DomainAgent.run`
+guarded only against a *completely* empty toolset, and its broadcast
+counted the servers it had *selected* rather than the ones that actually
+yielded tools. A partial harvest therefore looked identical to a healthy
+turn in the log, while the LLM reported the missing capability as
+"unavailable" — exactly the observed symptom, from a different cause.
+
+- Servers that yield zero schemas are now named in an `ERROR` broadcast.
+- The `ROUTING` line reports `loaded/selected` servers and a tool count
+  (`5/5 domain server(s) available, 19 tools`) instead of a bare server
+  count.
+
+(Measured for the record: a cold concurrent harvest of all five IBN
+servers takes ~1s and yields 19 tools, reproducibly — so the harvest was
+not in fact the culprit here.)
+
 ## 2026-08-10
 
 ### Fix: terse IBN follow-ups no longer fan out to the DTW agent
