@@ -405,7 +405,8 @@ class OrchestratorAgent(BroadcastMixin, RegistryMixin, RouterMixin,
         # for singleton services.
         if not is_meta_query:
             _agents = await self._select_agents_for_turn(
-                user_input, stage1_domains, ws_domain)
+                user_input, stage1_domains, ws_domain,
+                is_short_followup=is_short_followup)
             if len(_agents) == 1:
                 return await self._dispatch_to_agent(
                     _agents[0], user_input, replay_recipe, turn_t0)

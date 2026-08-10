@@ -84,10 +84,19 @@ class AgentDispatchMixin:
     async def _select_agents_for_turn(
             self, user_input: str,
             stage1_domains: Optional[List[str]],
-            ws_domain: Optional[str]) -> List[DomainAgent]:
+            ws_domain: Optional[str],
+            is_short_followup: bool = False) -> List[DomainAgent]:
         """Resolve this turn to zero, one, or several DomainAgents.
 
         Phase 2 rules, in precedence order:
+        0. A TERSE FOLLOW-UP inside an agent-enabled workstream → that
+           workstream's agent alone. Stage 1 deliberately overmatches on
+           low-signal input ("overmatching is cheap, Stage 2 picks the
+           winner" — see _classify_domain), but that contract does not
+           hold here: a second agent-enabled domain becomes a second
+           agent running real tool calls, and with nothing in the query
+           to scope it, it invents work. 'inject morning rush' inside an
+           IBN workstream is a continuation, not a cross-domain question.
         1. Stage 1 put TWO OR MORE agent-enabled domains in scope →
            multi-agent turn (card-ranked), even inside a workstream —
            cross-domain questions are inherently cross-workstream.
@@ -113,6 +122,22 @@ class AgentDispatchMixin:
             if _ok(d) and d not in candidates:
                 candidates.append(d)
 
+        # Rule 0 — workstream anchor for low-signal follow-ups. Only the
+        # fan-out is suppressed; if the workstream's own domain is the
+        # sole candidate this is the same agent rules 2/3 would pick.
+        if is_short_followup and _ok(ws_domain):
+            suppressed = [d for d in candidates if d != ws_domain]
+            if suppressed:
+                await self._broadcast("DISPATCH",
+                    f"⚓ Terse follow-up continues {self.current_workstream_id} "
+                    f"[{ws_domain}] — staying single-agent "
+                    f"(fan-out to {', '.join(suppressed)} suppressed)")
+                self._decision_under("agent_anchor",
+                    anchored_to=ws_domain,
+                    suppressed_domains=suppressed,
+                    reason="short_followup_in_workstream")
+            return [self.domain_agents[ws_domain]]
+
         if len(candidates) >= 2:
             ranked = await self._rank_agents_via_cards(user_input, candidates)
             self._decision_under("agent_cards", ranked=[
@@ -126,17 +151,44 @@ class AgentDispatchMixin:
         return []
 
     async def _split_subtasks(self, user_input: str,
-                              agents: List[DomainAgent]) -> Dict[str, str]:
+                              agents: List[DomainAgent],
+                              ws_domain: Optional[str] = None,
+                              ws_title: Optional[str] = None
+                              ) -> Dict[str, str]:
         """Scope the user's request into one focused sub-task per agent
         (gpt-4o-mini, like the other routing helpers). Returns
         {domain: sub-task}; an agent the splitter rules out gets no
-        entry. Any failure degrades to every agent receiving the full
-        query — over-asking is safe, dropping an agent is not."""
+        entry — and if that narrows the turn to one agent, _dispatch_multi
+        collapses to a plain single dispatch. Any failure degrades to
+        every agent receiving the full query.
+
+        The null bias matters: Stage 1 puts domains in scope on
+        vocabulary overlap alone, so the splitter is the last checkpoint
+        that can keep an uninvolved agent from inventing plausible-
+        sounding work for itself."""
+        anchor = ""
+        if ws_domain and any(a.domain == ws_domain for a in agents):
+            anchor = (
+                f"\nThe user is working in the '{ws_domain}' domain right "
+                f"now (active workstream: {ws_title or '(untitled)'}). "
+                f"Treat '{ws_domain}' as the default owner of this turn. "
+                f"Another agent needs positive evidence in the request "
+                f"itself — a concrete entity, metric, or action that only "
+                f"it can handle — not merely overlapping vocabulary.\n"
+            )
         prompt = (
             "You are the coordinator of domain-specialist agents. Split "
             "the user's request into one focused sub-task per agent, "
             "phrased as a self-contained instruction. Use null for an "
             "agent that has nothing to contribute to this request.\n\n"
+            "Default to null. Only assign a sub-task to an agent when the "
+            "request names something that agent specifically must act on. "
+            "Never invent work for an agent just because the request's "
+            "wording resembles its domain — for a request that concerns "
+            "only one agent, null for every other agent is the correct "
+            "answer, and returning a single non-null agent is a normal, "
+            "expected outcome.\n"
+            f"{anchor}\n"
             f"User request: {user_input!r}\n\n"
             "Agents:\n"
             + "\n".join(f"- {a.domain}: {a.description[:220]}"
@@ -384,7 +436,19 @@ class AgentDispatchMixin:
         # and shared — both agents see the same operational memory.
         context = await self._build_agent_context(user_input, replay_recipe)
 
-        subtasks = await self._split_subtasks(user_input, agents)
+        # The active workstream's domain is the splitter's default owner,
+        # so an agent Stage 1 pulled in on vocabulary alone has to earn
+        # its sub-task rather than being handed the whole query.
+        _ws_domain = _ws_title = None
+        if self.current_workstream_id:
+            _ws = await self.workstreams.find_one(
+                {"_id": self.current_workstream_id},
+                {"domain": 1, "title": 1})
+            _ws_domain = (_ws or {}).get("domain")
+            _ws_title  = (_ws or {}).get("title")
+
+        subtasks = await self._split_subtasks(
+            user_input, agents, ws_domain=_ws_domain, ws_title=_ws_title)
         active = [a for a in agents if a.domain in subtasks]
         if not active:                      # splitter ruled everyone out
             active = agents
