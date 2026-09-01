@@ -43,7 +43,7 @@ click==8.4.2
     # via
     #   huggingface-hub
     #   uvicorn
-cryptography==49.0.0
+cryptography==50.0.0
     # via pyjwt
 distro==1.9.0
     # via
