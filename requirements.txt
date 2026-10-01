@@ -154,7 +154,7 @@ pydantic-settings==2.14.2
     # via mcp
 pygments==2.20.0
     # via rich
-pyjwt==2.13.0
+pyjwt==2.15.0
     # via mcp
 pymongo==4.17.0
     # via -r requirements.in
