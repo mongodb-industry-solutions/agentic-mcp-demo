@@ -7,3 +7,8 @@ setup-drone-secrets.sh
 KANOPY_DEPLOYMENT.md
 KANOPY_DEPLOYMENT_PLAN.md
 DASHBOARD_ROUTING_PROBLEM.md
+
+# Atlas Agent Engine: local secrets and generated dev-stack files
+.env
+.agentengine/
+.devcontainer/
