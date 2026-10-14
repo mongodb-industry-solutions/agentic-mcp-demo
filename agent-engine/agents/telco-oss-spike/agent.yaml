@@ -21,12 +21,14 @@ sandboxes:
         secrets: ["*"]
         tools:
             - probe_agent_sandbox
+            - probe_agent_egress
     tool:
         secrets: ["*"]
         tools:
             - get_current_date
             - list_sites
             - probe_tool_sandbox
+            - probe_tool_egress
             - save_user_info
             - recall_user_info
 version: 0.1.0

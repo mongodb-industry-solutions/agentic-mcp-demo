@@ -10,7 +10,9 @@ concise language.
 - When the user asks for today's date, call `get_current_date`.
 - When explicitly asked to probe the tool sandbox or the agent sandbox,
   call `probe_tool_sandbox` or `probe_agent_sandbox` and output the JSON
-  result verbatim. Never call the probe tools otherwise.
+  result verbatim. Likewise `probe_tool_egress` / `probe_agent_egress`
+  when explicitly asked to probe tool or agent sandbox egress. Never call
+  the probe tools otherwise.
 - When the user states a preference or a fact about themselves, save it
   with `save_user_info`. When asked what you remember, call
   `recall_user_info`.

@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import httpx
 from agent_engine_runner_shared.context import get_current_custom_headers
 from agent_engine_sdk_langgraph import App
 from pymongo import MongoClient
@@ -53,6 +55,36 @@ def _probe(app: App, sandbox: str) -> str:
             "custom_headers": headers,
             "user_id": user_id,
             "secrets_present": {k: bool(os.environ.get(k)) for k in _SECRETS_OF_INTEREST},
+        },
+        indent=2,
+    )
+
+
+def _egress(sandbox: str) -> str:
+    """Try a non-allow-listed host two ways (proxy-aware HTTPS and a raw TCP
+    socket, which bypassed the local dev proxy) plus the allow-listed LLM host."""
+
+    def https(url: str) -> str:
+        try:
+            r = httpx.get(url, timeout=8)
+            return f"reachable (HTTP {r.status_code})"
+        except Exception as exc:  # noqa: BLE001 - the failure mode is the finding
+            return f"blocked/failed: {type(exc).__name__}: {str(exc)[:120]}"
+
+    def tcp(host: str, port: int) -> str:
+        try:
+            with socket.create_connection((host, port), timeout=8):
+                return "connected"
+        except Exception as exc:  # noqa: BLE001
+            return f"blocked/failed: {type(exc).__name__}: {str(exc)[:120]}"
+
+    return json.dumps(
+        {
+            "sandbox": sandbox,
+            "proxy_env": {k: bool(os.environ.get(k)) for k in ("HTTPS_PROXY", "https_proxy")},
+            "https://example.com (not allow-listed)": https("https://example.com"),
+            "tcp example.com:443 (not allow-listed)": tcp("example.com", 443),
+            "https://api.openai.com (allow-listed)": https("https://api.openai.com/v1/models"),
         },
         indent=2,
     )
@@ -101,6 +133,18 @@ def register(app: App) -> None:
         """Diagnostics: report custom headers, user identity and secrets visible in the
         agent sandbox. Call only when explicitly asked to probe the agent sandbox."""
         return _probe(app, "agent")
+
+    @app.tool(is_local=False)
+    def probe_tool_egress() -> str:
+        """Diagnostics: test outbound network access from the tool sandbox. Call only
+        when explicitly asked to probe tool sandbox egress."""
+        return _egress("tool")
+
+    @app.tool(is_local=True)
+    def probe_agent_egress() -> str:
+        """Diagnostics: test outbound network access from the agent sandbox. Call only
+        when explicitly asked to probe agent sandbox egress."""
+        return _egress("agent")
 
     @app.tool(is_local=False)
     def save_user_info(info_key: str, info_value: str) -> str:
