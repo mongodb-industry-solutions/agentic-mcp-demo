@@ -454,6 +454,40 @@ learned procedure.
    show the Traces UI and log export. Is there an OTLP endpoint?
 7. Connector core availability in preview (Phase 7).
 
+### Phase 0 findings (local dev stack, CLI 0.1.119, SDK 0.11.x, 2026-10-14)
+
+Spike agent: `agent-engine/agents/telco-oss-spike/` (hello-world template,
+`gpt-4o` at `temperature=0`, real IBN fixtures read through
+`DEMO_MONGODB_URI`). Everything below was measured with
+`agentengine dev up`, **not yet on the deployed platform**.
+
+| # | Status | Finding |
+|---|---|---|
+| 1 | ✅ answered | The LLM host must be on each sandbox's egress allow-list. `agentengine create --llm openai` declares `api.openai.com:443` itself. Local egress is an `HTTP_PROXY`: native sockets (e.g. `pymongo` to Atlas) are **not** blocked locally, so local runs can't prove the deployed egress policy. |
+| 2 | ✅ yes (local) | `X-Mdb-Agent-Engine-Custom-Demo-Prefix` arrives as `demo-prefix` in `get_current_custom_headers()` in **both** the agent and the tool sandbox. The prefix-by-header design (D5) works and needs no hidden tool argument. |
+| 3 | ◐ partly | `user_id` in the invoke body reaches both sandboxes and scopes memory correctly (user A recalls across sessions, user B sees nothing). With `durable_workflow` + `memory` on, `user_id` is **mandatory** (otherwise `durable Memory identity is incomplete`). The CLI help names a project-level **"end-user delegation"** setting that lets a caller act as another user. That's likely the fix for the service-account limitation; verify when deployed. |
+| 4 | ☐ open | Needs two deployed A2A agents. |
+| 5 | ✅ yes, internal schema | Runtime state is plain collections in `mdb_store_<project>` (`executions`, `sessions`, `traces`, `workflow_events`, `workflow_activities`, …) and `mdb_memory_<project>` (`memory_semantic` / `_episodic` / `_procedural` / `_taxonomic` / `_short_term`, `tasks`). `executions` carries `status`, `suspend_context`, `interrupts`, `resume_schema`, `parent_execution_id`, `a2a_caller_workspace_id`, `user_id`, `session_id`, so a Change Stream on it can drive the approval card and the dashboards' "awaiting approval" state. The schema is undocumented: treat it as read-only and pin to it per CLI version. |
+| 6 | ◐ partly | Traces are **OpenTelemetry spans** (OpenInference conventions, `telemetry.sdk.name: opentelemetry`) stored in `mdb_store_<project>.traces`. OTLP export to an external collector is still unverified. |
+| 7 | ✅ available | `agentengine create-tool --spec <openapi>` compiles OpenAPI 3.0 into connector `tool.yaml` / `tool_defs.yaml` (experimental). |
+
+Plan corrections from the spike:
+- **HITL resume:** the SDK/skill resumes by interrupt ID (`resume_map:
+  {<interrupt-id>: {...}}` on the same session), not only the flat
+  `{"decision": …}` body from the public docs. The Phase 3 shell code
+  must read `suspend_context.interrupts[].id`.
+- **Tool placement** is also declared in code (`@app.tool(is_local=False)`
+  → tool sandbox, `is_local=True` → agent sandbox), alongside the
+  `agent.yaml` lists.
+- **Guardrails** need a `GUARDRAILS_SERVER_URL` locally (Phase 6).
+- **Memory extraction is fast locally.** An episodic memory appeared
+  within about a minute (`snapshot.stale_minutes: 1`). Its default
+  extraction LLM is `gpt-5.6-luna` via `LLM_API_KEY` in
+  `project-config.yaml`.
+- **Reset button (Phase 5):** memories are soft-deleted (`deleted`,
+  `deleted_at`, versioned via `memory_lineage_id`), and no delete-by-user
+  API has been found yet.
+
 ## Risks
 
 - **Preview churn.** APIs and the CLI change without migration paths. Pin

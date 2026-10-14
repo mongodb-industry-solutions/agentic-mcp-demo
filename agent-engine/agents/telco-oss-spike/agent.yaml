@@ -1,0 +1,36 @@
+# Human-readable app slug used by Agent Engine tooling.
+# `agentengine create` should rewrite this when generating a new app from the template.
+name: telco-oss-spike
+# Python import path to the SDK App instance.
+# Format: <module path>:<variable name>. This template exposes `app` from
+# src/agent_telco_oss_spike/main.py.
+entrypoint: agent_telco_oss_spike.main:app
+framework: langgraph
+# Runtime feature flags controlled by agent.yaml, not .env. A key that is
+# present here wins over any ENABLE_* environment variable, so declaring memory
+# keeps ambient environment state from switching it on behind your back.
+# Set memory to true to enable long-term profile memory; VOYAGE_API_KEY must be
+# present in .env when memory is enabled.
+features:
+    durable_workflow: true
+    memory: true
+# Tool placement and pass-through secrets. This template's tools are all
+# remote-capable, so they run in the tool sandbox.
+sandboxes:
+    agent:
+        secrets: ["*"]
+        tools:
+            - probe_agent_sandbox
+    tool:
+        secrets: ["*"]
+        tools:
+            - get_current_date
+            - list_sites
+            - probe_tool_sandbox
+            - save_user_info
+            - recall_user_info
+version: 0.1.0
+network:
+    egress:
+        - fqdn: api.openai.com
+          ports: [443]
