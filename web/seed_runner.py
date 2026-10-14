@@ -35,8 +35,8 @@ from pymongo import ASCENDING, DESCENDING, MongoClient
 
 # The mutable demo collections — the only ones a browser session needs
 # its own copy of (everything else is read-only reference data, shared
-# across sessions). Must match the DEMO_PREFIX-prefixed collections in
-# the MCP servers. See MULTI_SESSION_PLAN.md.
+# across sessions). Must match the `collection(..., mutable=True)` handles
+# in oss_tools/ (the IBN/DTW tool code). See MULTI_SESSION_PLAN.md.
 SESSION_MUTABLE_BASES = [
     "ibn_intents",
     "ibn_telemetry",            # time-series

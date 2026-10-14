@@ -1,5 +1,45 @@
 # CHANGES.md
 
+## 2026-10-14
+
+### IBN/DTW tool code moved to `oss_tools/` (Agent Engine migration, Phase 1)
+
+The 10 Telco MCP servers (`ibn_*`, `dtw_*`) are now ~25-line FastMCP shims.
+Their tool code lives in `oss_tools/{ibn,dtw}/*.py` as plain functions
+collected in a per-module `tools` ToolSet. The Atlas Agent Engine agents
+(`AGENT_ENGINE_PLAN.md`) can register the same functions with
+`@app.tool()`, so we get one implementation and two runtimes. Each shim keeps
+the full module docstring, because the registry embeds it for routing.
+The pre-move history of the tool code stays on the `mcp_servers/` paths,
+since the shims reuse them.
+
+**Prefix per call, not per process.** The servers bound `_PFX =
+os.environ["DEMO_PREFIX"]` and their collection handles at import time.
+That works for one subprocess per browser session, but not for an Agent
+Engine sandbox serving many sessions. `oss_tools._ctx.collection(name,
+mutable=…)` returns a proxy that resolves `<prefix><name>` on every
+attribute access. The prefix comes from the `demo-prefix` custom header
+inside Agent Engine (validated against the shell's `s_<token>_` shape, and
+anything else is rejected), else from `DEMO_PREFIX`. Reference collections
+are never prefixed. Tool bodies are unchanged: `intents.find(...)` still
+reads the same.
+
+**Hot reload.** The registry's file hash now also covers the `oss_tools/`
+modules a shim imports (plus `_ctx.py`), and the watcher watches
+`oss_tools/` too. Editing a tool body still evicts the running server.
+Non-shim servers hash exactly as before.
+
+Verified: tool schemas served over stdio are identical before/after (44
+tools: names, descriptions, input schemas). A throwaway session lane gives
+identical answers to `main` for IBN sites (reference), IBN intents
+(prefixed) and DTW markets, and an IBN `submit_intent` lands in the lane's
+`s_…_ibn_intents` with the shared `ibn_intents` untouched.
+
+Side finding, not changed here: on both `main` and this branch, the
+generic phrasings "list all sites" / "show all intents" without
+conversation context are routed away from IBN by Stage 1 (to `acc_*` /
+`analytics_service`). With "IBN" in the query they route correctly.
+
 ## 2026-08-10 (2)
 
 ### Fix: tool selection was sampled at temperature 1.0
