@@ -3,9 +3,7 @@
 Two kinds of tools:
 
 - list_sites: a read-only port of ibn_inventory_service.list_sites, reading
-  the shared IBN reference fixtures through DEMO_MONGODB_URI. The runtime's
-  own state (checkpoints, executions, memory) lives on MONGODB_URI, which
-  stays a separate connection on purpose.
+  the IBN reference fixtures (see _demo_db for which cluster).
 - probe_*: report what the sandbox a tool runs in can actually see (custom
   headers, user identity, secrets). These answer the AGENT_ENGINE_PLAN.md
   open questions and get deleted once Phase 0 is written up.
@@ -28,10 +26,15 @@ _demo_client: MongoClient | None = None
 
 
 def _demo_db():
-    """Lazily connect to the demo cluster; tool bodies run only on demand."""
+    """Lazily connect to the demo cluster; tool bodies run only on demand.
+
+    Local dev reads the shared fixtures via DEMO_MONGODB_URI (.env only).
+    Deployed, that variable is absent and the fixtures live on the linked
+    dedicated cluster, which the platform provides as MONGODB_URI.
+    """
     global _demo_client
     if _demo_client is None:
-        _demo_client = MongoClient(os.environ["DEMO_MONGODB_URI"])
+        _demo_client = MongoClient(os.environ.get("DEMO_MONGODB_URI") or os.environ["MONGODB_URI"])
     return _demo_client["agent_registry"]
 
 

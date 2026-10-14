@@ -471,6 +471,21 @@ Spike agent: `agent-engine/agents/telco-oss-spike/` (hello-world template,
 | 6 | ◐ partly | Traces are **OpenTelemetry spans** (OpenInference conventions, `telemetry.sdk.name: opentelemetry`) stored in `mdb_store_<project>.traces`. OTLP export to an external collector is still unverified. |
 | 7 | ✅ available | `agentengine create-tool --spec <openapi>` compiles OpenAPI 3.0 into connector `tool.yaml` / `tool_defs.yaml` (experimental). |
 
+**Deployed run (2026-10-14).** Workspace `ws-6acfac0cea67bce171582ba8` in
+the personal Agent Engine org, linked to a dedicated Atlas Flex cluster
+(`telco-oss-spike`, AWS us-east-1, project in BenLorenzPersonalOrg) and
+seeded with `seed/ibn_seed.py`. The first `deploy --auto` took about 8
+min, with the tool sandbox last to become ready.
+
+| # | Deployed result |
+|---|---|
+| — | `list_sites` returns the 5 seeded sites from the linked cluster. Linked-cluster egress works with no allow-list entry. |
+| 2 | ✅ **Confirmed on the platform.** A service-account `POST …/invoke` with `X-Mdb-Agent-Engine-Custom-Demo-Prefix` delivers `demo-prefix` to both the tool and the agent sandbox. The `agentengine invoke` CLI has no custom-header flag, so use the HTTP API. |
+| 3 | ✅ **Per-end-user memory works with a service account, contrary to the docs.** With `user_id` in the body, the sandbox sees that `user_id`: user-a saves a fact, user-a recalls it in a new session, user-b recalls nothing. Without `user_id`, identity falls back to the service account's ID. A *human* caller (CLI login) passing another `--user-id` is rejected: "end-user delegation is not enabled for this project". Design D4's standalone-memory workaround is **not needed**: the shell passes `user_id = <session token>`. Re-verify after CLI/SDK upgrades, since the docs say otherwise. |
+| — | **Service-account roles:** new service accounts accept only `PROJECT_OWNER` or `PROJECT_READ_ONLY` (`AGENT_DEVELOPER` is rejected), so the shell's invoker is necessarily project owner. That's another reason for a dedicated project per environment. |
+| — | **Pool capacity is real:** with the default `scaling.replicas: 4`, a 5th concurrent session returns **HTTP 503** "All agent instances are currently busy… retry after Retry-After". `agentengine workspace sessions stop` frees a sandbox only after a short reset delay. The Phase 8 "demo at capacity" banner should key on 503 + `Retry-After`. |
+| 1 | Deployed egress enforcement is not yet tested; it needs a probe tool that calls a non-allow-listed host. |
+
 Plan corrections from the spike:
 - **HITL resume:** the SDK/skill resumes by interrupt ID (`resume_map:
   {<interrupt-id>: {...}}` on the same session), not only the flat
@@ -487,6 +502,18 @@ Plan corrections from the spike:
 - **Reset button (Phase 5):** memories are soft-deleted (`deleted`,
   `deleted_at`, versioned via `memory_lineage_id`), and no delete-by-user
   API has been found yet.
+
+### Spike resources to clean up
+
+- Atlas (BenLorenzPersonalOrg → project `telco-oss-spike`): Flex cluster
+  `telco-oss-spike` (billed hourly), the database user and Voyage API key
+  created by `agentengine atlas setup`, the IP access entries
+  `44.214.209.237/32` and `52.44.27.64/32` (Agent Engine) plus the
+  laptop IP added for seeding.
+- Agent Engine (personal org → Default Project): workspace
+  `ws-6acfac0cea67bce171582ba8`, service account `spike-shell`
+  (`ae_sa_id_6acfb816b2980dbbd0c2e809`), project secrets `LLM_API_KEY`,
+  `MONGODB_URI`, `VOYAGE_API_KEY`, and workspace secret `DEMO_MONGODB_URI`.
 
 ## Risks
 
