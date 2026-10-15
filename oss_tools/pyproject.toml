@@ -1,0 +1,20 @@
+# Packaging for the Atlas Agent Engine agents only (agent-engine/agents/*
+# depend on it via a uv path source). The legacy runtime imports oss_tools
+# from the repo root and never builds this. There is deliberately NO
+# pyproject.toml at the repo root: `uv run mcp_servers/…` would then switch
+# to that project's environment.
+
+[project]
+name = "oss-tools"
+version = "0.1.0"
+description = "Runtime-neutral IBN/DTW tool implementations shared by the MCP servers and the Agent Engine agents."
+requires-python = ">=3.11"
+dependencies = ["pymongo>=4.10"]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "oss_tools" = "." }
+packages = ["oss_tools", "oss_tools.ibn", "oss_tools.dtw"]

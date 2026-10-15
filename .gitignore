@@ -12,3 +12,6 @@ DASHBOARD_ROUTING_PROBLEM.md
 .env
 .agentengine/
 .devcontainer/
+.env.*
+build/
+*.egg-info/

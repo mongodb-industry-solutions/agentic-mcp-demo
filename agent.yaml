@@ -1,0 +1,9 @@
+# Atlas Agent Engine monorepo manifest (AGENT_ENGINE_PLAN.md, Phase 2).
+# Listing the agents here makes the repo root the build archive root, so
+# their uv path sources (oss_tools/, agents/catalog/, agent-engine/
+# telco-runtime/) are included. Unrelated to the legacy runtime.
+agents:
+  - name: ibn-agent
+    path: agent-engine/agents/ibn-agent
+  - name: dtw-agent
+    path: agent-engine/agents/dtw-agent

@@ -1,0 +1,42 @@
+# .agentengineignore — files left out of the source archive uploaded by
+# 'agentengine build'. The repo root is the archive root (see agent.yaml);
+# the agents need only agent-engine/, oss_tools/ and agents/catalog/.
+# .env / .env.* files, *.pem / *.key secrets and .git are always excluded.
+
+# Version control
+.git
+
+# Python
+.venv*
+__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.pyc
+
+# Node
+node_modules
+
+# Build output
+dist
+build
+
+# Local env files
+.env
+.env.*
+
+# Agent Engine local state
+.agentengine
+.agentic
+.devcontainer
+
+# Legacy runtime and demo assets the agents don't import. Only directory
+# names that can't collide with agent code: an earlier "/agents/*" +
+# "!/agents/catalog/" pair also dropped agent-engine/agents/* from the
+# archive, so don't rely on anchoring or negation here.
+mcp_servers/
+web/
+seed/
+environment/
+logs/
+telco-oss-spike/

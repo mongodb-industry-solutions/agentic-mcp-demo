@@ -503,6 +503,54 @@ Plan corrections from the spike:
   `deleted_at`, versioned via `memory_lineage_id`), and no delete-by-user
   API has been found yet.
 
+### Phase 2 findings (CLI 0.1.119, 2026-10-14)
+
+Built: `agent-engine/agents/{ibn-agent,dtw-agent}` (about 30 lines each)
+on a shared `agent-engine/telco-runtime` package. `graph.py` is the
+LangGraph port of `DomainAgent.run`: `gpt-4o` at `temperature=0`,
+`parallel_tool_calls=False`, today's date in the system prompt, and a
+5-iteration cap followed by a tool-less finalize node. The system prompts
+come unchanged from `agents/catalog/` (packaged as `telco_catalog`). The
+tools are the `oss_tools` ToolSets from Phase 1, registered with
+`app.tool(is_local=False)`: 19 IBN and 25 DTW tools, with no parameter or
+`required` differences from the MCP schemas. The repo-root `agent.yaml`
+lists both agents, so one build archive carries `oss_tools/`,
+`agents/catalog/` and `telco-runtime/` as uv path sources.
+
+Verified locally (`dev up --all`) and **deployed**, as the service
+account with `X-Mdb-Agent-Engine-Custom-Demo-Prefix: s_p2deploy01_`
+against the Flex cluster:
+- **IBN onboarding** goes `submit_intent → check_feasibility →
+  propose_plan → activate_plan` across 5 turns on one session. IBN-001
+  ends active with all SLOs green. "Show all intents" lists only the lane's
+  IBN-001, not the four shared seed intents, so reads and writes both
+  stay in the lane.
+- **DTW Flow A** goes `create_scenario` (DTW-SCN-001) then
+  `simulate_qos_change`: 9 cells over capacity (`cell_NYC_Metro_01_B`
+  BLOCK) and no core elements at risk. These are the same numbers as the
+  local run and the legacy runtime.
+
+| # | Finding |
+|---|---|
+| 1 | **`app.llm()` calls run in the tool sandbox**, not the agent sandbox: the SDK's LLM protocol executes in the tool pod. The first local run failed with `LLM_API_KEY` missing there. So the tool sandbox holds the key and the only external egress (`api.openai.com:443`). The agent sandbox needs the key only to construct the client and runs **`deny_all`**. Deployed LLM calls work under that policy, which confirms the split. |
+| 2 | **`.agentengineignore` at the archive root:** an anchored `/agents/*` plus negation `!/agents/catalog/` also dropped `agent-engine/agents/*`, and the first cloud build failed. Keep that file to plain, collision-free directory names. |
+| 3 | `deploy --auto` can't be combined with `--workspace`/`--all`. Run it from each agent directory (with the monorepo root still the archive root). |
+| 4 | The Atlas link is per Agent Engine **project**. New workspaces inherit the Flex cluster with no extra setup. |
+| 5 | Deploy refuses a `.env` holding keys that aren't platform secrets. Keep only `LLM_API_KEY` in the agents' `.env`. |
+| 6 | Trace attribute keys contain literal dots (`tool.name`, `thread.id`, `execution.id`), so queries on `mdb_store_<project>.traces` need `$getField`. |
+| 7 | An expired CLI login (refresh token) kills running `deploy`/`status` watchers mid-rollout. The deployment itself carries on: `agentengine status` after re-login showed it succeeded. A fresh workspace's first rollout also waits several minutes on a cert-manager certificate (`…-aer-pool-int`). |
+| 8 | **New workspaces need an Atlas-backed org.** The org Agent Engine auto-created at first login ("Benjamin Lorenz's Organization", not Atlas-backed) now refuses new workspaces; its existing three can still be redeployed. Agent Engine orgs/projects *are* Atlas orgs/projects (the CLI lists BenLorenzPersonalOrg › telco-oss-spike as a project). **Decision:** Phase 3 stays in the existing workspaces; before Phase 4 (new coordinator workspace) agents, Flex cluster, secrets and service account move together into one project of the corporate-billed Industry Solutions TelcoMedia org. |
+
+Deviations from the Phase 2 bullets above:
+- **No VERBATIM edge.** No IBN/DTW tool returns `VERBATIM`, so there was
+  nothing to short-circuit.
+- **No in-domain tool narrowing.** The 5-service domains bind all their
+  tools, as the legacy runtime does today.
+- **Memory, guardrails and A2A are off.** They come in Phases 5, 6 and 4.
+- **Dashboards not yet live.** The legacy dashboards still watch the
+  shared dev cluster, while the agents write to the Flex cluster. Point
+  them at the Flex cluster in Phase 8, or earlier for a demo.
+
 ### Spike resources to clean up
 
 - Atlas (BenLorenzPersonalOrg → project `telco-oss-spike`): Flex cluster
@@ -510,8 +558,9 @@ Plan corrections from the spike:
   created by `agentengine atlas setup`, the IP access entries
   `44.214.209.237/32` and `52.44.27.64/32` (Agent Engine) plus the
   laptop IP added for seeding.
-- Agent Engine (personal org → Default Project): workspace
-  `ws-6acfac0cea67bce171582ba8`, service account `spike-shell`
+- Agent Engine (personal org → Default Project): workspaces
+  `ws-6acfac0cea67bce171582ba8` (spike), `ws-6acfc3acea67bce171582e86`
+  (ibn-agent), `ws-6acfc3ad6189a50fdc381424` (dtw-agent), service account `spike-shell`
   (`ae_sa_id_6acfb816b2980dbbd0c2e809`), project secrets `LLM_API_KEY`,
   `MONGODB_URI`, `VOYAGE_API_KEY`, and workspace secret `DEMO_MONGODB_URI`.
 

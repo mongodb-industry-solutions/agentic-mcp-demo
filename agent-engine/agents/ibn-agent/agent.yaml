@@ -1,0 +1,42 @@
+# IBN domain agent (Phase 2 of AGENT_ENGINE_PLAN.md). Built from the repo
+# root (monorepo agent.yaml) so oss_tools/ and agents/catalog/ are in the
+# build archive.
+name: ibn-agent
+description: >-
+  Intent-Based Networking specialist for retail customer networks: intent
+  capture, feasibility, plan activation, live SLO compliance, hybrid
+  vector-search diagnosis of violations, runbooks, template folding.
+entrypoint: ibn_agent.main:app
+framework: langgraph
+agent_card:
+  summary: NOC assistant for the IBN intent lifecycle and service assurance.
+  capabilities:
+    - intent-lifecycle
+    - feasibility-and-activation
+    - slo-assurance
+    - incident-diagnosis
+    - telemetry-simulation
+features:
+  durable_workflow: true
+  # Memory (Phase 5) and guardrails (Phase 6) come later.
+  memory: false
+version: 0.1.0
+# Least privilege. app.llm() calls execute in the TOOL sandbox (the SDK's
+# LLM protocol runs in the tool pod), so that sandbox holds the LLM key and
+# the only external egress (OpenAI); the linked Atlas cluster is part of
+# the platform base policy. The agent sandbox runs the graph and no tools;
+# it needs the key only to construct the client and gets no egress.
+sandboxes:
+  agent:
+    secrets: ["LLM_API_KEY"]
+    tools: []
+    network:
+      egress_mode: deny_all
+  tool:
+    secrets: ["LLM_API_KEY"]
+    tools: ["*"]
+    network:
+      egress_mode: allow_list
+      egress:
+        - fqdn: api.openai.com
+          ports: [443]

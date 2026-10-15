@@ -1,0 +1,19 @@
+# Packages the DomainAgent catalog (system prompts + agent card text) as
+# `telco_catalog` for the Atlas Agent Engine agents, so both runtimes read
+# one copy of each prompt. The legacy runtime keeps importing it as
+# agents.catalog and never builds this.
+
+[project]
+name = "telco-catalog"
+version = "0.1.0"
+description = "IBN/DTW domain-agent definitions (system prompts, agent cards)."
+requires-python = ">=3.11"
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "telco_catalog" = "." }
+packages = ["telco_catalog"]

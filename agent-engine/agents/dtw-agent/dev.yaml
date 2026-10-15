@@ -1,0 +1,6 @@
+# Local-only settings for `agentengine dev up` (never read by build/deploy).
+services:
+  playground:
+    port: 3000
+  # mongodb:
+  #   local: false  # Use an external cluster; set MONGODB_URI in .env.
