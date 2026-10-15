@@ -551,6 +551,73 @@ Deviations from the Phase 2 bullets above:
   shared dev cluster, while the agents write to the Flex cluster. Point
   them at the Flex cluster in Phase 8, or earlier for a demo.
 
+### Phase 3 findings (CLI 0.1.119, 2026-10-15)
+
+Built: a `review` node between the model and the tool node in
+`telco_runtime/graph.py`, plus `oss_tools/approvals.py`. The gated
+actions are `activate_plan`, `apply_runbook`, `update_template_version`,
+`cancel_intent`, `delete_scenario` and `delete_all_scenarios`
+(`delete_scenario` was added to the plan's list because it hard-deletes
+too). Per call:
+1. The node calls `open_review` in the tool sandbox. It builds the context
+   (intent, site, plan, violation, runbook, blast radius), writes a
+   pending doc to the session's `agent_approvals` and sets a
+   `pending_approval` marker on the target intents/scenarios.
+2. It suspends with `interrupt()`, passing the context, `allowed_decisions`
+   and a `response_schema`.
+3. On resume it calls `close_review`, which records the decision and
+   reviewer notes and clears the marker.
+4. Reject replaces the call with a ToolMessage ("NOT executed", plus the
+   notes), so the tool never runs. Approve passes the call through
+   unchanged.
+5. `approve_canary` (template bump, more than one site) narrows the call
+   to the first site. A `canary` node then re-checks that site with
+   `get_compliance` and opens a second review for the remaining sites,
+   showing the canary's compliance result. The model sees one tool call
+   and one combined result.
+
+Verified deployed (r2 of both workspaces, lane `s_p3deploy01_` on the
+Flex cluster, as the service account with the prefix header resent on
+every resume): DTW delete-all reject keeps DTW-SCN-001. IBN onboarding
+with an approved activation gives IBN-001 `active`. An injected violation
+at Marienplatz, after diagnosis, raises an `apply_runbook` review
+(observed 30.5 ms vs 20 ms).
+
+Verified locally (`dev up --all`, two seeded lanes):
+- **Activation:** reject leaves IBN-005 `planned`, with the decision and
+  notes on APR-001 and the marker cleared. A new request plus approve
+  activates it exactly once.
+- **Template bump across 5 sites:** canary on Hamburg, then fleet approve:
+  each intent flagged exactly once. Canary, then fleet reject: only
+  Hamburg flagged.
+- **Delete all scenarios:** reject keeps DTW-SCN-001.
+- **Checkpoint flow:** injected violation at Berlin Mitte → `apply_runbook`
+  review (observed 48.5 ms vs 40 ms) → approve → intent `active` again.
+  The IBN dashboard's change stream shows `pending_approval` set, then
+  cleared, then the new status.
+
+| # | Finding |
+|---|---|
+| 1 | **Interrupts must be in a graph node or a local tool.** Remote tool-pod interrupts are unsupported in durable workflows, so the review is a node and its database work runs as tool calls from that node. |
+| 2 | **Tools invoked from a node need a full ToolCall** (`{"type": "tool_call", "name", "args", "id"}`). Otherwise: "When tool includes an InjectedToolCallId argument, tool must always be invoked with a full model ToolCall". The id is the activity's durable identity, so it is derived from the model's tool-call id plus the step (`…:open`, `…:close`, `…:fleet:check`). |
+| 3 | **Replay works as documented.** On resume the node re-runs, but `open_review` returns its recorded result (no second approval doc is created), and the canary call isn't repeated after the second suspension. The interrupt payload is built only from recorded results, so it is replay-stable. |
+| 4 | **The platform enforces `response_schema`.** A decision outside the enum is refused with `409 RESUME_INPUT_INVALID` before it reaches the agent. The agent still treats unknown decisions as reject. |
+| 5 | **Native `interrupt()` resumes only through `invoke` with `resume_map: {<interrupt id>: {decision, reviewer_notes}}` on the same session**, locally and deployed. The documented `POST /executions/{id}/resume` doesn't work for them: the flat body `{"decision", "reviewer_notes"}` gets `409 RESUME_INPUT_INVALID` "continue input cannot be applied to this session", and a `resume_map` body gets `400` ("Decision required"). The flat body belongs to the legacy `app.suspend` path, which durable sessions don't support. The interrupt id is `suspend_context.interrupts[].id` (the OE activity id). While suspended, other turns on the session get `409 SESSION_BUSY` with `blocking_execution_id`. Locally the UI proxy has no `/executions` routes at all. |
+| 6 | **Path-dependency code changes don't reach the dev containers by default.** uv caches a directory dependency by its `pyproject.toml` only. Fixed with `[tool.uv] cache-keys` (`**/*.py`) in the three local packages. After editing them, restart the agent containers. |
+| 7 | `update_template_version` was already broken for a second run in any lane: its successor policy doc goes into the *shared* `ibn_knowledge_chunks` with `insert_one`. Now an upsert, plus the optional `intent_ids` for the staged rollout. Its MCP schema gains only that optional field. |
+| 8 | Pre-existing bug, found on the deployed checkpoint run: `apply_runbook` restored latency to `max(0.7 × target, 22 ms)`, so the 20 ms Marienplatz intent stayed violated (22 ms) after "Compliance restored". It now restores to 0.7 × target, which is unchanged for targets ≥ ~31 ms. |
+
+Deviations:
+- **No shell approval card yet.** The web shell doesn't invoke Agent
+  Engine before the cut-over (Phase 8), so reviews happen in Agent Engine
+  (Pending Reviews page, interactive CLI, or API). The card and its
+  resume call move to Phase 8. That call must be `invoke` + `resume_map`
+  on the same session, resending the custom headers (finding 5), not
+  `/resume`.
+- **`allowed_decisions` sits inside the interrupt value**, because that's
+  where the SDK puts `suspend_context.interrupts[].value`. Whether the
+  Pending Reviews page reads it there is checked on the deployed run.
+
 ### Spike resources to clean up
 
 - Atlas (BenLorenzPersonalOrg → project `telco-oss-spike`): Flex cluster

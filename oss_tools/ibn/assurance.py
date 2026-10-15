@@ -490,7 +490,9 @@ def apply_runbook(runbook_id: str, intent_id: str = None, site: str = None) -> s
     now = datetime.datetime.now()
     targets = intent.get("parsed", {}).get("targets", {})
     threshold = targets.get("pos_latency_ms", 40)
-    healthy_value = max(threshold * 0.7, 22)  # restore well within target
+    # Restore well within target. (The old 22 ms floor left targets under
+    # ~31 ms, e.g. the 20 ms Marienplatz onboarding, still violated.)
+    healthy_value = round(threshold * 0.7, 1)
 
     # Restore: a fresh good telemetry sample
     telemetry.insert_one({
@@ -537,7 +539,8 @@ def apply_runbook(runbook_id: str, intent_id: str = None, site: str = None) -> s
 
 @tools.tool
 def update_template_version(template_id: str = "strict-retail-v3",
-                            new_version: str = "strict-retail-v4") -> str:
+                            new_version: str = "strict-retail-v4",
+                            intent_ids: list[str] = None) -> str:
     """
     Bump a segmentation template version with the runbook fix folded in.
     For the demo, this updates the policy doc in ibn_knowledge_chunks and
@@ -548,12 +551,18 @@ def update_template_version(template_id: str = "strict-retail-v3",
     Args:
         template_id: The current template ID, default 'strict-retail-v3'.
         new_version: The new template ID, default 'strict-retail-v4'.
+        intent_ids:  Optional. Flag only these intents (a staged/canary
+                     rollout); default is every active intent on the
+                     template. Repeat calls are safe.
     """
     pol = knowledge_chunks.find_one({"_id": f"POL-{template_id}", "kind": "policy"})
     if not pol:
         return f"❌ Template {template_id} not found in policy catalogue."
 
-    affected = list(intents.find({"template": template_id, "status": "active"}))
+    query = {"template": template_id, "status": "active"}
+    if intent_ids:
+        query["_id"] = {"$in": list(intent_ids)}
+    affected = list(intents.find(query))
 
     knowledge_chunks.update_one(
         {"_id": f"POL-{template_id}"},
@@ -562,8 +571,9 @@ def update_template_version(template_id: str = "strict-retail-v3",
             "deprecated_at": datetime.datetime.now(),
         }},
     )
-    knowledge_chunks.insert_one({
-        "_id": f"POL-{new_version}",
+    # Upsert: ibn_knowledge_chunks is shared across sessions, and a staged
+    # rollout calls this more than once.
+    knowledge_chunks.update_one({"_id": f"POL-{new_version}"}, {"$setOnInsert": {
         "kind": "policy",
         "title": f"Segmentation template {new_version}",
         "ts": datetime.datetime.now(),
@@ -577,7 +587,7 @@ def update_template_version(template_id: str = "strict-retail-v3",
             "All other VLAN isolation, inter-VLAN routing, and firewall egress "
             f"rules carried forward unchanged from {template_id}."
         ),
-    })
+    }}, upsert=True)
 
     # Flag affected intents for migration
     for it in affected:

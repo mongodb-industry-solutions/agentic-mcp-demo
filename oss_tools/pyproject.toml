@@ -18,3 +18,8 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 package-dir = { "oss_tools" = "." }
 packages = ["oss_tools", "oss_tools.ibn", "oss_tools.dtw"]
+
+# Rebuild when the code changes, not only pyproject.toml (uv's default
+# cache key): the agents install this as a non-editable path dependency.
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "**/*.py" }]
