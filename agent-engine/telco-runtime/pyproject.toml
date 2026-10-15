@@ -16,3 +16,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/telco_runtime"]
+
+# Rebuild when the code changes, not only pyproject.toml (uv's default
+# cache key): the agents install this as a non-editable path dependency.
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "**/*.py" }]

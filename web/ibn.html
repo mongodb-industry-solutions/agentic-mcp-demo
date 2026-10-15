@@ -159,6 +159,15 @@
   .status-pill.planned    { background: var(--purple-dim);               color: var(--purple); }
   .status-pill.cancelled,
   .status-pill.closed     { background: var(--surface-2);                color: var(--text-dim); }
+  /* Phase 3 (Agent Engine): the agent is suspended on a NOC review of an
+     action that would change this intent (approval doc in agent_approvals). */
+  .status-pill.awaiting   { background: rgba(255,209,102,0.12);          color: var(--yellow);
+                            animation: awaiting-pulse 1.6s ease-in-out infinite; }
+  @keyframes awaiting-pulse { 50% { opacity: 0.55; } }
+  .approval-callout {
+    border-left: 3px solid var(--yellow); padding: 8px 12px; margin-bottom: 16px;
+    background: rgba(255,209,102,0.06); font-size: 15px; color: var(--text-2);
+  }
 
   .raw-text {
     font-style: italic; color: var(--text-2); font-size: 16px;
@@ -755,8 +764,12 @@ function renderIntent() {
     <div class="intent-site">${esc(siteName)}</div>
     <div class="status-line">
       <span class="status-pill ${status}">${esc(status)}</span>
+      ${i.pending_approval ? `<span class="status-pill awaiting">⏸ awaiting NOC approval</span>` : ''}
       ${i.activated_at ? `<span style="color:var(--text-dim); font-size:14px;">activated ${fmtDate(i.activated_at)}</span>` : ''}
     </div>
+    ${i.pending_approval ? `<div class="approval-callout"><strong>${esc(i.pending_approval.approval_id)}</strong> ·
+      ${esc(i.pending_approval.title || i.pending_approval.action)}. The agent is paused until a
+      NOC reviewer decides in Agent Engine.</div>` : ''}
     <div class="raw-text">${esc(i.raw_text || '—')}</div>
     <div class="exec-callout">
       <strong>Intent understood.</strong> The customer's business outcome — captured verbatim above —
@@ -996,7 +1009,7 @@ function renderTabs() {
       <div class="tab${isActive ? ' active' : ''}" id="tab-${id}"
            onclick="switchFocus('${id}')">
         <span class="tab-name">${esc(siteName)}</span>
-        <span class="tab-status ${status}">${status}</span>
+        <span class="tab-status ${status}">${status}</span>${intent.pending_approval ? ' <span title="awaiting NOC approval">⏸</span>' : ''}
       </div>`;
   }).join('');
 }

@@ -60,6 +60,7 @@ SESSION_STATE_BASES = [
     "agent_conversations",
     "routing_decisions",
     "agent_history",        # per-web-session cursor-up recall
+    "agent_approvals",      # Agent Engine NOC reviews (oss_tools/approvals.py)
 ]
 
 

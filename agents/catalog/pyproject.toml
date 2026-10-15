@@ -17,3 +17,8 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 package-dir = { "telco_catalog" = "." }
 packages = ["telco_catalog"]
+
+# Rebuild when the code changes, not only pyproject.toml (uv's default
+# cache key): the agents install this as a non-editable path dependency.
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "**/*.py" }]

@@ -1,5 +1,35 @@
 # CHANGES.md
 
+## 2026-10-15
+
+### NOC approval for blast-radius actions (Agent Engine migration, Phase 3)
+
+On Atlas Agent Engine, the IBN and DTW agents now pause before
+`activate_plan`, `apply_runbook`, `update_template_version`,
+`cancel_intent`, `delete_scenario` and `delete_all_scenarios`. A NOC
+reviewer approves or rejects in Agent Engine (Pending Reviews page, CLI or
+API), and a rejected action never runs. A template bump that affects more
+than one site can be approved as a **canary**: the first site is migrated,
+its compliance is re-checked, and a second review covers the rest. The
+legacy MCP runtime has no review step and behaves as before.
+
+What the legacy side sees:
+- **Dashboards.** While a review is pending, the documents it would change
+  carry a `pending_approval` marker, so the IBN intent card/tab and the DTW
+  scenario list show "⏸ awaiting NOC approval" through their existing
+  change streams.
+- **Audit trail.** Each review is a document in the session's
+  `agent_approvals` collection (action, arguments, blast radius, decision,
+  reviewer notes). Reset clears it with the other agent-state planes.
+- **`update_template_version`** takes an optional `intent_ids` to flag
+  only some intents (the staged rollout), and its successor policy doc is
+  now upserted. Before, a second bump of the same template, from another
+  session or a rerun, failed with a duplicate key on the shared
+  `ibn_knowledge_chunks`.
+- **`apply_runbook`** now restores POS latency to 70% of the target. The
+  old floor of 22 ms left intents with targets under ~31 ms (such as the
+  20 ms Marienplatz onboarding) violated after "Compliance restored".
+
 ## 2026-10-14
 
 ### IBN/DTW tool code moved to `oss_tools/` (Agent Engine migration, Phase 1)
