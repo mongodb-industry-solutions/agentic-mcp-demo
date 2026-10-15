@@ -7,7 +7,10 @@ dependencies = [
     "agent-engine-runner-shared[mongodb]>=0.11.3,<1",
     "agent-engine-sdk-langgraph>=0.11.3,<1",
     "langchain>=1.0.0",
+    "httpx",
     "langchain-openai>=1.1.12",
+    "oss-tools",
+    "telco-catalog",
 ]
 
 [build-system]

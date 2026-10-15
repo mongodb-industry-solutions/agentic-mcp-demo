@@ -2,6 +2,33 @@
 
 ## 2026-10-15
 
+### NOC coordinator and A2A (Agent Engine migration, Phase 4)
+
+A third Agent Engine agent, `noc-coordinator`, is the front door for NOC
+requests. It picks the domain agents in scope (an explicit "ibn"/"dtw"
+mention plus gpt-4o-mini), ranks them by `$vectorSearch` over
+`agent_cards` when both are, splits the request, and calls the agents
+concurrently over A2A, forwarding the session's lane. A single answer
+passes through unchanged; two are combined (gpt-4o). The IBN and DTW
+agents can also `consult_agent` each other: two questions per turn, one
+level deep. The legacy runtime is unchanged.
+
+What the legacy side sees:
+- **`routing_decisions`** gets one document per coordinator turn
+  (`runtime: "agent-engine"`): Stage 1 domains and method, card ranking,
+  sub-tasks, the agents' execution IDs and status, synthesis time.
+- **`agent_cards`** documents gain an `a2a_name` field (`ibn-agent`,
+  `dtw-agent`). The coordinator upserts the cards itself, with the same
+  `_id`s and index as the legacy shell.
+- **`agent_approvals`** documents record the Agent Engine execution and
+  session that paused (`execution_id`, `session_id`), so a review behind a
+  delegated call can be found and resumed.
+
+Also fixed in the Phase 3 review gate: `parallel_tool_calls=False` was
+passed to `bind_tools`, where the SDK drops it, so a deployed model could
+emit two tool calls in one turn and only the first was reviewed. It is now
+an invocation option, and the review node also keeps only the first call.
+
 ### NOC approval for blast-radius actions (Agent Engine migration, Phase 3)
 
 On Atlas Agent Engine, the IBN and DTW agents now pause before

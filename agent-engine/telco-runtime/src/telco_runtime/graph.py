@@ -21,9 +21,14 @@ approves or rejects them; a rejected call never reaches the tool node. A
 template bump with more than one site can be approved as a canary: one site
 first, its compliance re-checked, then a second review for the rest.
 
+Added in Phase 4: consult_agent, one focused question to the other
+domain agent over A2A (telco_runtime.a2a). Two per turn, and only at depth
+0: a consulted agent gets no consult tool and a 3-iteration budget, as in
+the legacy shell-mediated consultation.
+
 Not ported (later phases): the shell-injected workstream/memory/preference
-context and the replay recipe (Phase 5), consult_agent (Phase 4, via A2A),
-and the VERBATIM short-circuit (no IBN/DTW tool returns VERBATIM).
+context and the replay recipe (Phase 5), and the VERBATIM short-circuit (no
+IBN/DTW tool returns VERBATIM).
 """
 
 import datetime
@@ -48,7 +53,11 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 from pydantic import SecretStr
 
+from telco_runtime.a2a import A2A_TIMEOUT_S, AGENTS, call_agent, consult_depth
+
 MAX_ITERATIONS = 5
+CONSULTED_MAX_ITERATIONS = 3
+CONSULT_BUDGET = 2
 
 
 APPROVAL_RULES = (
@@ -59,6 +68,18 @@ APPROVAL_RULES = (
     "you the outcome. If the reviewer rejected it, say the action was NOT "
     "executed, pass on the reviewer's notes, and do not retry unless the "
     "user asks again."
+)
+
+
+CONSULT_GUIDANCE = (
+    "\n\n🤝 CONSULTATION:\n"
+    "You can ask another domain specialist ONE focused question with "
+    "the consult_agent tool when the user's request needs information "
+    "outside your own domain. Budget: 2 consultations per turn. "
+    "Phrase the question self-contained — the specialist sees nothing "
+    "of this conversation. Attribute consulted facts in your answer "
+    "(e.g. 'per the IBN agent, …'). Never consult for information "
+    "your own tools can provide."
 )
 
 
@@ -77,7 +98,35 @@ def register_tools(app: App, modules) -> None:
             app.tool(is_local=False)(fn)
 
 
-def _llm() -> ChatOpenAI:
+def register_consult(app: App, own: str) -> None:
+    """Register consult_agent (agent sandbox: A2A lives there) for the
+    agent named `own`, offering the other catalog agents."""
+    peers = {name: spec for name, spec in AGENTS.items() if name != own}
+
+    def consult_agent(agent: str, question: str) -> str:
+        if consult_depth() >= 1:
+            return "❌ Consultations can't be nested: answer from your own tools."
+        if agent not in peers:
+            return f"❌ No such agent: {agent!r}. Available: {', '.join(peers)}"
+        r = call_agent(app, agent, question, depth=1)
+        if r["status"] == "completed":
+            return r.get("result") or "(no answer)"
+        if r["status"] == "input-required":
+            return (f"❌ {agent} paused for a NOC review instead of answering; "
+                    "consultations are questions, not actions.")
+        return f"❌ Consultation failed: {r.get('error') or r['status']}"
+
+    consult_agent.__doc__ = (
+        "Ask another domain-specialist agent one focused, self-contained "
+        "question and get its answer back. Args: agent (one of: "
+        f"{', '.join(peers)}); question (self-contained: that agent has no "
+        "access to this conversation). Available specialists: "
+        + "; ".join(f"{n} ({s['domain']}): {s['description'][:140]}" for n, s in peers.items())
+    )
+    app.tool(is_local=True, timeout=A2A_TIMEOUT_S + 10)(consult_agent)
+
+
+def _llm(model: str | None = None) -> ChatOpenAI:
     api_key = os.environ.get("LLM_API_KEY", "")
     if not api_key:
         raise RuntimeError("LLM_API_KEY is missing; add it to .env or project secrets")
@@ -85,7 +134,7 @@ def _llm() -> ChatOpenAI:
     # another agent's gateway, which the openai client would otherwise pick
     # up, and api.openai.com is the tool sandbox's only egress.
     return ChatOpenAI(
-        model=os.environ.get("OPENAI_MODEL", "gpt-4o"),
+        model=model or os.environ.get("OPENAI_MODEL", "gpt-4o"),
         temperature=0,
         api_key=SecretStr(api_key),
         base_url="https://api.openai.com/v1",
@@ -99,6 +148,17 @@ def _turn_tool_iterations(messages: list[AnyMessage]) -> int:
         if isinstance(m, HumanMessage):
             break
         if isinstance(m, AIMessage) and m.tool_calls:
+            count += 1
+    return count
+
+
+def _turn_consults(messages: list[AnyMessage]) -> int:
+    """consult_agent calls since the latest user message."""
+    count = 0
+    for m in reversed(messages):
+        if isinstance(m, HumanMessage):
+            break
+        if isinstance(m, ToolMessage) and m.name == "consult_agent":
             count += 1
     return count
 
@@ -150,14 +210,15 @@ def build_domain_graph(
     """Build the agent graph for one catalog spec ({name, system_prompt, …}).
     `review` is the oss_tools.approvals module (registered with
     register_tools); its tools stay internal to the review node.
+    consult_agent is offered when the agent registered it (register_consult).
     Call from inside the agent's @app.entrypoint (app.llm needs it)."""
     internal = {fn.__name__ for fn in review.tools} if review else set()
     reviewed = set(review.REVIEWED_ACTIONS) if review else set()
     model = app.llm(_llm())
-    model_with_tools = model.bind_tools(
-        [t for t in app.get_tool_schemas() if t.name not in internal],
-        parallel_tool_calls=False,
-    )
+    schemas = [t for t in app.get_tool_schemas() if t.name not in internal]
+    can_consult = any(t.name == "consult_agent" for t in schemas)
+    with_consult = model.bind_tools(schemas)
+    without_consult = model.bind_tools([t for t in schemas if t.name != "consult_agent"])
     all_tools = {t.name: t for t in app.get_tools()}
     tools = [t for name, t in all_tools.items() if name not in internal]
 
@@ -190,16 +251,24 @@ def build_domain_graph(
              decision=decision, reviewer_notes=notes)
         return opened, decision, notes
 
+    def consult_offered(state: AgentState) -> bool:
+        return (can_consult and consult_depth() == 0
+                and _turn_consults(state["messages"]) < CONSULT_BUDGET)
+
     def prompt(state: AgentState) -> list[AnyMessage]:
         system = SystemMessage(
             content=spec["system_prompt"]
             + (APPROVAL_RULES if review else "")
+            + (CONSULT_GUIDANCE if consult_offered(state) else "")
             + f"\n\nToday's date is {datetime.date.today().isoformat()}."
         )
         return [system] + [m for m in state["messages"] if not isinstance(m, SystemMessage)]
 
     def agent(state: AgentState) -> dict:
-        return {"messages": [model_with_tools.invoke(prompt(state))]}
+        bound = with_consult if consult_offered(state) else without_consult
+        # One tool call per model turn, so the review node sees every call.
+        # An invocation option: the SDK drops it when passed to bind_tools.
+        return {"messages": [bound.invoke(prompt(state), parallel_tool_calls=False)]}
 
     def finalize(state: AgentState) -> dict:
         # Mirrors the legacy loop: after MAX_ITERATIONS tool turns, ask once
@@ -214,13 +283,18 @@ def build_domain_graph(
         last = state["messages"][-1]
         assert isinstance(last, AIMessage)
         tool_call = last.tool_calls[0]
+        # Belt and braces for parallel_tool_calls=False: run only the first
+        # call, so nothing reaches the tool node unreviewed. The model sees
+        # one result and re-issues the rest.
+        single = ([AIMessage(content=last.content, tool_calls=[tool_call], id=last.id)]
+                  if len(last.tool_calls) > 1 else [])
         if tool_call["name"] not in reviewed:
-            return {}
+            return {"messages": single} if single else {}
         opened, decision, notes = ask(tool_call["id"], tool_call["name"], tool_call["args"])
         if opened is None or decision == "approve":
-            return {}
+            return {"messages": single} if single else {}
         if decision == "reject":
-            return {"messages": [ToolMessage(
+            return {"messages": single + [ToolMessage(
                 content=f"⛔ {opened['approval_id']}: the NOC reviewer REJECTED "
                 f"{tool_call['name']}; it was NOT executed. Reviewer notes: "
                 f"{notes or '(none)'}",
@@ -277,7 +351,8 @@ def build_domain_graph(
     def after_tools(state: AgentState) -> Literal["canary", "agent", "finalize"]:
         if state.get("canary"):
             return "canary"
-        if _turn_tool_iterations(state["messages"]) >= MAX_ITERATIONS:
+        limit = CONSULTED_MAX_ITERATIONS if consult_depth() >= 1 else MAX_ITERATIONS
+        if _turn_tool_iterations(state["messages"]) >= limit:
             return "finalize"
         return "agent"
 
