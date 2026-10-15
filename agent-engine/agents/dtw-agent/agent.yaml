@@ -1,0 +1,42 @@
+# DTW domain agent (Phase 2 of AGENT_ENGINE_PLAN.md). Built from the repo
+# root (monorepo agent.yaml) so oss_tools/ and agents/catalog/ are in the
+# build archive.
+name: dtw-agent
+description: >-
+  Digital Twin specialist for ACME Mobile what-if simulations: QoS uplifts,
+  APN/PCRF changes, roaming, scenario lifecycle, $graphLookup impact walks,
+  per-cell load projection, and vector search over past incidents.
+entrypoint: dtw_agent.main:app
+framework: langgraph
+agent_card:
+  summary: NOC assistant for network what-if simulation on the ACME digital twin.
+  capabilities:
+    - qos-what-if
+    - policy-change-simulation
+    - topology-impact
+    - traffic-load-estimation
+    - scenario-lifecycle
+features:
+  durable_workflow: true
+  # Memory (Phase 5) and guardrails (Phase 6) come later.
+  memory: false
+version: 0.1.0
+# Least privilege. app.llm() calls execute in the TOOL sandbox (the SDK's
+# LLM protocol runs in the tool pod), so that sandbox holds the LLM key and
+# the only external egress (OpenAI); the linked Atlas cluster is part of
+# the platform base policy. The agent sandbox runs the graph and no tools;
+# it needs the key only to construct the client and gets no egress.
+sandboxes:
+  agent:
+    secrets: ["LLM_API_KEY"]
+    tools: []
+    network:
+      egress_mode: deny_all
+  tool:
+    secrets: ["LLM_API_KEY"]
+    tools: ["*"]
+    network:
+      egress_mode: allow_list
+      egress:
+        - fqdn: api.openai.com
+          ports: [443]
