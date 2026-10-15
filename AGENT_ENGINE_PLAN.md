@@ -618,6 +618,57 @@ Deviations:
   where the SDK puts `suspend_context.interrupts[].value`. Whether the
   Pending Reviews page reads it there is checked on the deployed run.
 
+### Phase 4 findings (CLI 0.1.119, SDK 0.11.8, 2026-10-15)
+
+Built: `agent-engine/agents/noc-coordinator` (`ws-6ad1060d6189a50fdc472a65`
+in JeffN) over `telco_runtime/coordinator.py`, which runs `route →
+delegate → respond`.
+- **route:** Stage 1 picks the domains: an explicit "ibn"/"dtw" mention
+  plus gpt-4o-mini, with the previous turn's domains as the sticky hint.
+  When two or more are in scope, it ranks them with `rank_agents`
+  (`$vectorSearch` over `agent_cards`, the tool syncs the cards) and
+  splits the request with gpt-4o-mini (`tool_choice=required`, null bias).
+- **delegate:** a local tool, one call per agent; `ToolNode` runs them
+  concurrently over A2A.
+- **respond:** passes a single answer through, synthesizes two or more
+  (gpt-4o), and writes a `routing_decisions` doc.
+
+`consult_agent` (local tool in `telco_runtime/graph.py`) gives ibn/dtw the
+legacy consultation: depth 1 via the `consult-depth` header, 2 per turn,
+and 3 iterations for the consulted agent.
+
+Verified locally (`dev up --all`, lane `s_p4local01_`): the checkpoint
+request fans out to both agents and is synthesized, and the dtw-agent's
+scenario lands in the lane. "Run the simulation." then goes to dtw-agent
+alone and finds DTW-SCN-001 through the passed context (9 cells, NYC_01_B
+BLOCK). A nested cancel review is named by the coordinator, approved on
+the child session, and the next coordinator turn sees IBN-004 cancelled.
+ibn → dtw consultation runs as a child execution, and the consulted
+dtw-agent is offered no consult tool.
+
+Verified deployed (JeffN, default lane, CLI login): coordinator → ibn-agent
+over A2A; the checkpoint fan-out plus the dtw-only follow-up with the same
+Flow A numbers; a nested cancel review reported as `input-required`.
+
+| # | Finding |
+|---|---|
+| 1 | **Every A2A call is a new child session** (`root_session_id` = caller's session, `parent_execution_id` = caller's execution). The child doesn't see earlier turns, so the coordinator passes the last 3 turns as context in each delegated message. |
+| 2 | **A2A doesn't forward custom headers.** The coordinator and `consult_agent` pass `demo-prefix` (the lane) and `consult-depth` explicitly; verified by the dtw-agent's scenario landing in the caller's lane. |
+| 3 | **A nested review stays on the child.** `invoke_agent` returns `input-required` with only the child's `execution_id`; no interrupt id, and A2A has no resume. The child resumes like any review (`invoke` + `resume_map` on *its* session). So `open_review` now records the paused `execution_id`/`session_id` on the approval doc, and the coordinator's `pending_reviews` tool names the review (APR id, title, summary) in its answer and in `routing_decisions`. The Phase 8 shell resumes it via the child session (interrupt id from `GET /executions/{id}`). The plan's "bubble it up as the coordinator's own `interrupt()`" isn't possible with today's A2A. |
+| 4 | **Capacity: each child session holds a sandbox for the idle TTL (600 s).** With the default 4 replicas, a handful of coordinator turns exhausts ibn-agent ("All agent instances are currently busy"). The idle TTL is **project-wide** ("the most recently deployed agent wins"), so in the shared JeffN project we must not lower it. ibn-agent and dtw-agent now run `scaling.replicas: 8`; size it for the shell's session cap in Phase 8. |
+| 5 | **`parallel_tool_calls` is an invocation option, not a binding option.** `SecureWrappedLLM.bind_tools` keeps only `tool_choice`, so Phase 3's `bind_tools(..., parallel_tool_calls=False)` was dropped and a deployed model could emit two tool calls with only the first reviewed. Now passed at `invoke()`, and the review node keeps only the first call. |
+| 6 | **Sandbox tool selectors must not overlap:** a tool-sandbox `"*"` also claims the agent-sandbox `consult_agent`, and validation fails. The tool sandbox lists its tools explicitly now (add new `oss_tools` functions there). |
+| 7 | **`a2a.allowed_callers` holds workspace ids, and local dev has its own** (stable hex ids such as `6dd3c9…`, not names). Each agent lists the local and the JeffN ids of its callers, so no other agent in the shared project can call ours. |
+| 8 | **Local A2A needs `A2A_JWT_SECRET` in the repo-root `.env`**: only the Orchestration Engine reads it, and it registers no A2A agents without it (`/a2a/register` 503). |
+| 9 | **Every workspace needs its own `MONGODB_URI` in JeffN.** The coordinator first ran without one and its tool sandbox used the project-wide URI of the other teams' agents, which points at **IST-Shared**: 4 `routing_decisions` docs and 2 `agent_cards` (plus `agent_cards_index`) landed in its `agent_registry`. Found by a read-only scan of the JeffN clusters and removed (both collections held only those docs; `mcp_services` there is someone else's and untouched). Set the secret before the first deploy of any new workspace. |
+| 10 | The legacy explicit-mention shortcut skipped the classifier, so "simulate … and list the IBN intents" went to IBN only. An explicit mention now adds its domain and the classifier still decides the other one. |
+
+Deviations: the legacy `_dispatch_multi`, `_consult_agent` and
+`agent_conversations` writes stay until the cut-over (Phase 8), because
+the legacy runtime serves the live demo until then. A2A calls nest in the
+session trace (`a2a.invoke_agent` spans with the child execution id), so
+Agent Engine needs no `agent_conversations`.
+
 ### Move to the JeffN project (2026-10-15)
 
 The decision in Phase 2 finding 8 changed: the agents now run in the

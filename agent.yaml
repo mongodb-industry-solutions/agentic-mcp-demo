@@ -7,3 +7,5 @@ agents:
     path: agent-engine/agents/ibn-agent
   - name: dtw-agent
     path: agent-engine/agents/dtw-agent
+  - name: noc-coordinator
+    path: agent-engine/agents/noc-coordinator

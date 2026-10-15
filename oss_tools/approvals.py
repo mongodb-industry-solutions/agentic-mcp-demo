@@ -24,7 +24,7 @@ import json
 
 from pymongo import DESCENDING
 
-from oss_tools._ctx import ToolSet, collection
+from oss_tools._ctx import ToolSet, collection, execution_context
 
 tools = ToolSet()
 
@@ -228,6 +228,9 @@ def open_review(action: str, arguments: dict) -> str:
     approvals.insert_one({
         "_id": approval_id, "seq": seq, "action": action, "arguments": arguments,
         "status": "pending", "requested_at": now, **review,
+        # The suspended execution (and its session) to resume; also how the
+        # coordinator finds the review behind a delegated call's pause.
+        **execution_context(),
     })
     _mark(review["targets"], {"$set": {"pending_approval": {
         "approval_id": approval_id, "action": action, "title": review["title"],

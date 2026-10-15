@@ -35,7 +35,12 @@ _PREFIX_RE = re.compile(r"^(s_[a-z0-9]{8,32}_)?$")
 _client: MongoClient | None = None
 
 try:  # Only present inside Atlas Agent Engine sandboxes.
-    from agent_engine_runner_shared.context import get_current_custom_headers
+    from agent_engine_runner_shared.context import (
+        get_current_custom_headers,
+        get_current_execution_id,
+        get_current_session_id,
+        get_current_workspace_id,
+    )
 except ImportError:  # Legacy MCP subprocess / CLI.
     get_current_custom_headers = None
 
@@ -49,6 +54,17 @@ def demo_prefix() -> str:
                 raise ValueError(f"invalid demo-prefix header: {prefix!r}")
             return prefix
     return os.environ.get("DEMO_PREFIX", "")
+
+
+def execution_context() -> dict:
+    """The Agent Engine execution this tool call belongs to ({} on the
+    legacy runtime): lets a reviewer, or the coordinator, find and resume
+    the suspended execution behind an approval."""
+    if get_current_custom_headers is None:
+        return {}
+    ids = {"execution_id": get_current_execution_id(), "session_id": get_current_session_id(),
+           "workspace_id": get_current_workspace_id()}
+    return {k: v for k, v in ids.items() if v}
 
 
 def db():
