@@ -644,18 +644,19 @@ delete-all reject.
 | 5 | **Service accounts in JeffN need "Atlas service account pairing"**, which is off for the project (`PROJECT_READ_ONLY` refused; `AGENT_DEVELOPER` still refused everywhere). Until a project owner enables it, test with `agentengine invoke --session/--resume` as a human login, which has no custom-header flag and so runs in the default lane. The shell (Phase 8) needs the service account. |
 | 6 | A `secret set --sync` waits for the project runtime to roll, a few minutes in JeffN. Without `--sync` the value applies after a later `agentengine secret sync --workspace-scope`. |
 
-### Spike resources to clean up
+### Spike resources (cleaned up 2026-10-15)
 
 - Atlas (BenLorenzPersonalOrg → project `telco-oss-spike`): Flex cluster
-  `telco-oss-spike` (billed hourly), the database user and Voyage API key
-  created by `agentengine atlas setup`, the IP access entries
-  `44.214.209.237/32` and `52.44.27.64/32` (Agent Engine) plus the
-  laptop IP added for seeding.
+  `telco-oss-spike` deleted, then the project with the database user,
+  Voyage API key and IP access entries from `agentengine atlas setup`.
 - Agent Engine (personal org → Default Project): workspaces
   `ws-6acfac0cea67bce171582ba8` (spike), `ws-6acfc3acea67bce171582e86`
-  (ibn-agent), `ws-6acfc3ad6189a50fdc381424` (dtw-agent), service account `spike-shell`
-  (`ae_sa_id_6acfb816b2980dbbd0c2e809`), project secrets `LLM_API_KEY`,
-  `MONGODB_URI`, `VOYAGE_API_KEY`, and workspace secret `DEMO_MONGODB_URI`.
+  (ibn-agent) and `ws-6acfc3ad6189a50fdc381424` (dtw-agent) deleted, with
+  the spike's workspace secret `DEMO_MONGODB_URI`. Project secrets
+  `LLM_API_KEY`, `MONGODB_URI`, `VOYAGE_API_KEY` and `A2A_JWT_SECRET`
+  deleted. Service account `spike-shell`
+  (`ae_sa_id_6acfb816b2980dbbd0c2e809`) deactivated; the CLI has no hard
+  delete.
 
 ## Risks
 
