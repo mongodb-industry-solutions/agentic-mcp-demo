@@ -539,7 +539,7 @@ against the Flex cluster:
 | 5 | Deploy refuses a `.env` holding keys that aren't platform secrets. Keep only `LLM_API_KEY` in the agents' `.env`. |
 | 6 | Trace attribute keys contain literal dots (`tool.name`, `thread.id`, `execution.id`), so queries on `mdb_store_<project>.traces` need `$getField`. |
 | 7 | An expired CLI login (refresh token) kills running `deploy`/`status` watchers mid-rollout. The deployment itself carries on: `agentengine status` after re-login showed it succeeded. A fresh workspace's first rollout also waits several minutes on a cert-manager certificate (`…-aer-pool-int`). |
-| 8 | **New workspaces need an Atlas-backed org.** The org Agent Engine auto-created at first login ("Benjamin Lorenz's Organization", not Atlas-backed) now refuses new workspaces; its existing three can still be redeployed. Verified on the API too (2026-10-15: `agentengine workspace create` fails with the same message). The rule arrived after 2026-10-14 18:02 UTC, when ibn-agent and dtw-agent were still created there. Agent Engine orgs/projects *are* Atlas orgs/projects (the CLI lists BenLorenzPersonalOrg › telco-oss-spike as a project). **Decision:** Phase 3 stays in the existing workspaces; before Phase 4 (new coordinator workspace) agents, Flex cluster, secrets and service account move together into one project of the corporate-billed Industry Solutions TelcoMedia org. |
+| 8 | **New workspaces need an Atlas-backed org.** The org Agent Engine auto-created at first login ("Benjamin Lorenz's Organization", not Atlas-backed) now refuses new workspaces; its existing three can still be redeployed. Verified on the API too (2026-10-15: `agentengine workspace create` fails with the same message). The rule arrived after 2026-10-14 18:02 UTC, when ibn-agent and dtw-agent were still created there. Agent Engine orgs/projects *are* Atlas orgs/projects (the CLI lists BenLorenzPersonalOrg › telco-oss-spike as a project). **Decision:** Phase 3 stays in the existing workspaces; before Phase 4 (new coordinator workspace) everything moves to an Atlas-backed org. Superseded on 2026-10-15: moved to the JeffN project instead (see "Move to the JeffN project"). |
 
 Deviations from the Phase 2 bullets above:
 - **No VERBATIM edge.** No IBN/DTW tool returns `VERBATIM`, so there was
@@ -617,6 +617,32 @@ Deviations:
 - **`allowed_decisions` sits inside the interrupt value**, because that's
   where the SDK puts `suspend_context.interrupts[].value`. Whether the
   Pending Reviews page reads it there is checked on the deployed run.
+
+### Move to the JeffN project (2026-10-15)
+
+The decision in Phase 2 finding 8 changed: the agents now run in the
+**JeffN** project (org MongoDB-Products-Team, Agent Engine project
+`6aa4558bb19c96d52970c253`, linked Atlas project
+`609d67ec2b1f17779e791567`), on corporate billing. Workspaces: ibn-agent
+`ws-6ad0efe66189a50fdc461f8d`, dtw-agent `ws-6ad0efe7ea67bce171583766`.
+Data: a new Flex cluster `telco-oss-agents` (AWS us-east-1) in JeffN,
+reseeded from `seed/`. JeffN is shared (IST-Prod, IST-Shared-Europe,
+other teams' agents), which shaped the setup.
+
+Verified deployed (default lane, CLI login): IBN onboarding with an
+activation reject then approve, the **canary template bump across 5
+sites** (first deployed run), DTW Flow A (9 cells over capacity,
+`cell_NYC_Metro_01_B` BLOCK, similar past scenarios found) and a DTW
+delete-all reject.
+
+| # | Finding |
+|---|---|
+| 1 | **Workspace secrets override project secrets of the same name.** JeffN's project `MONGODB_URI` and `LLM_API_KEY` belong to other agents, so ours are workspace-scoped. Tool data *and* the platform's run state (`mdb_store_<project>`) land on the workspace `MONGODB_URI` cluster. |
+| 2 | **Don't run `agentengine atlas setup` in a shared project.** It writes `MONGODB_URI`/`VOYAGE_API_KEY` at project scope and creates a database user for every cluster. The project is already linked (all its clusters are in the egress sync), so a new cluster there needs no setup. |
+| 3 | **Platform LLM variables leak into the sandbox.** JeffN's `OPENAI_BASE_URL` (another agent's gateway) reached our tool sandbox and the openai client used it: "Connection error", since only `api.openai.com` is allowed. `graph.py` now pins `base_url`. JeffN's `LLM_API_KEY`/`OPENAI_API_KEY` are gateway keys that OpenAI rejects, so ours is a workspace secret. |
+| 4 | **JeffN is at Atlas's cap of 100 database users.** The agents use the existing `istmedia` user (all clusters), so they hold a credential that also reaches IST-Prod. Swap in a cluster-scoped user when a slot frees up. |
+| 5 | **Service accounts in JeffN need "Atlas service account pairing"**, which is off for the project (`PROJECT_READ_ONLY` refused; `AGENT_DEVELOPER` still refused everywhere). Until a project owner enables it, test with `agentengine invoke --session/--resume` as a human login, which has no custom-header flag and so runs in the default lane. The shell (Phase 8) needs the service account. |
+| 6 | A `secret set --sync` waits for the project runtime to roll, a few minutes in JeffN. Without `--sync` the value applies after a later `agentengine secret sync --workspace-scope`. |
 
 ### Spike resources to clean up
 

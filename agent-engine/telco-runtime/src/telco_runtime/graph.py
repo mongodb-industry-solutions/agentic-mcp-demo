@@ -81,10 +81,14 @@ def _llm() -> ChatOpenAI:
     api_key = os.environ.get("LLM_API_KEY", "")
     if not api_key:
         raise RuntimeError("LLM_API_KEY is missing; add it to .env or project secrets")
+    # Pinned: a shared project may hold an OPENAI_BASE_URL secret for
+    # another agent's gateway, which the openai client would otherwise pick
+    # up, and api.openai.com is the tool sandbox's only egress.
     return ChatOpenAI(
         model=os.environ.get("OPENAI_MODEL", "gpt-4o"),
         temperature=0,
         api_key=SecretStr(api_key),
+        base_url="https://api.openai.com/v1",
     )
 
 
