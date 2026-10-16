@@ -106,3 +106,16 @@ def pending_reviews(execution_ids: list[str]) -> str:
          "session_id": 1, "workspace_id": 1},
     ).sort("seq", 1)
     return json.dumps([{"approval_id": a.pop("_id"), **a} for a in found])
+
+
+@tools.tool
+def runbooks_for_memory() -> str:
+    """Internal (not offered to the LLM). The IBN runbooks and DTW mitigation
+    playbooks from the shared knowledge chunks, for seeding procedural
+    memory (telco_runtime.memory). Returns JSON [{_id, title, text, domain}]."""
+    out = []
+    for domain in ("ibn", "dtw"):
+        for rb in collection(f"{domain}_knowledge_chunks").find(
+                {"kind": "runbook"}, {"_id": 1, "title": 1, "text": 1}).sort("_id", 1):
+            out.append({**rb, "domain": domain})
+    return json.dumps(out)

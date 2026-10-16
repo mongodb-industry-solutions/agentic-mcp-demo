@@ -1,4 +1,10 @@
 # Project-level settings go in this file.
+#
+# Telco OSS (AGENT_ENGINE_PLAN.md, Phase 5). Memory configuration is
+# project-scoped: `agentengine memory configure` applies this block to every
+# agent in the Agent Engine project (in the shared JeffN project, to the
+# other teams' agents too). Local dev (`agentengine dev up`) reads it from
+# here, the repo root.
 
 memory:
   # Memory-server log level. One of: debug | info | warning | error | critical.
@@ -24,10 +30,21 @@ memory:
   #   agentengine memory configure && agentengine memory apply
   # The API key is NOT set here. Upload it as a project secret:
   #   agentengine secret set LLM_API_KEY --sync
+  # Extraction reads a project-scoped secret from a fixed list of names
+  # (LLM_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY,
+  # CEREBRAS_API_KEY). In JeffN, LLM_API_KEY and OPENAI_API_KEY hold another
+  # agent's gateway key that OpenAI rejects, so our OpenAI key sits under
+  # the otherwise unused CEREBRAS_API_KEY name (the name doesn't have to
+  # match the provider). The base URL is pinned because JeffN's project
+  # OPENAI_BASE_URL points at that gateway. Claude through the MongoDB AI
+  # Gateway extracted locally but never deployed. The model is pinned to
+  # the one the agents already use with this key (the provider default,
+  # gpt-5.6-luna, can change with a platform upgrade).
   extraction_llm:
     provider: openai
-    model: gpt-5.6-luna
-    api_key_secret: LLM_API_KEY
+    model: gpt-4o
+    base_url: https://api.openai.com/v1
+    api_key_secret: CEREBRAS_API_KEY
 
   background_extraction:
     # Snapshot promotion
@@ -44,9 +61,12 @@ memory:
   #     prompt: "..."
   # NOTE: removing the 'enabled' line entirely falls back to the server default;
   # keep an explicit list (or []) to control exactly which types run.
+  # No taxonomic extraction: the glossary is seeded (telco_runtime.memory),
+  # and transcripts carry the recalled glossary, so the extractor tried to
+  # re-learn dozens of seeded terms per snapshot and its JSON came back
+  # truncated or malformed (dead-lettered tasks).
   extraction:
     enabled:
       - semantic
       - episodic
-      - taxonomic
       - procedural

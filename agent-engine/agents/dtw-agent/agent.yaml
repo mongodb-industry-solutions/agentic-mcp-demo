@@ -18,8 +18,9 @@ agent_card:
     - scenario-lifecycle
 features:
   durable_workflow: true
-  # Memory (Phase 5) and guardrails (Phase 6) come later.
-  memory: false
+  # Agent Engine memory (Phase 5): recall when called directly, turn
+  # recording and extraction. Guardrails come in Phase 6.
+  memory: true
 version: 0.1.0
 # Every A2A call (coordinator delegation, consultation) opens a new
 # session, which holds a sandbox for the idle TTL (600 s). That TTL is

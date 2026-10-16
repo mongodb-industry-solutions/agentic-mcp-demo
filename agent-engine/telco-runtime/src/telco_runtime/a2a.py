@@ -39,6 +39,11 @@ def consult_depth() -> int:
         return 0
 
 
+def is_a2a_child() -> bool:
+    """Called by another of our agents (we always send consult-depth)."""
+    return "consult-depth" in (get_current_custom_headers() or {})
+
+
 def forward_headers(depth: int) -> dict[str, str]:
     """Headers for a child call: this execution's lane, one level deeper."""
     headers = {"consult-depth": str(depth)}
