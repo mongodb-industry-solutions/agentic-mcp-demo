@@ -1,5 +1,25 @@
 # CHANGES.md
 
+## 2026-10-16
+
+### The Agent Engine twin of the demo
+
+The Agent Engine agents can now be demoed next to the Kanopy demo, which
+stays as it is. You chat with `noc-coordinator` in the Atlas Agent Engine
+UI, and `bin/twin.sh start` runs the IBN and DTW dashboards on :8160 and
+:8180 against the agents' cluster (`TWIN_MONGODB_URI`). `bin/twin.sh
+reset` puts the demo data back. Single user for now: everyone shares one
+lane, because the chat UI can't select a session lane.
+
+The twin runs without NOC approvals, since the chat UI has no way to
+approve a paused action; `NOC_REVIEW=on` brings them back. Its agents and
+memory extraction call gpt-4o through the Grove gateway instead of OpenAI
+directly.
+
+Memory extraction no longer looks for procedures in conversations: it
+never stored one, and on conversations without one it failed. The seeded
+demo flows and runbooks are still recalled.
+
 ## 2026-10-15
 
 ### Platform memory for the agents (Agent Engine migration, Phase 5)
@@ -12,7 +32,7 @@ The coordinator passes that recall to the agents it calls.
   saves it for the user; "What do you remember about me?" lists it. A new
   session the next day still knows it.
 - **Learned in the background:** after a conversation goes idle, the
-  platform extracts facts, episodes and procedures from it (OpenAI
+  platform extracts facts and episodes from it (OpenAI
   gpt-4o). Facts it learns supersede the ones saved by hand. Verified
   locally and deployed. Claude through the MongoDB AI Gateway extracted
   locally but not on the deployed agents.

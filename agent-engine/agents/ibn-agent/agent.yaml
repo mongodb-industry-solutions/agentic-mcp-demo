@@ -55,12 +55,15 @@ a2a:
 # client and gets no egress.
 sandboxes:
   agent:
-    secrets: ["LLM_API_KEY"]
+    # NOC_REVIEW=off skips the NOC approval step (main.py).
+    secrets: ["LLM_API_KEY", "NOC_REVIEW"]
     tools: ["consult_agent"]
     network:
       egress_mode: deny_all
   tool:
-    secrets: ["LLM_API_KEY"]
+    # LLM_BASE_URL/LLM_AUTH_HEADER pick the endpoint (graph._llm): OpenAI or
+    # the Grove gateway.
+    secrets: ["LLM_API_KEY", "LLM_BASE_URL", "LLM_AUTH_HEADER"]
     # Explicit (a "*" would also claim consult_agent): add new oss_tools
     # functions here.
     tools:
@@ -95,4 +98,6 @@ sandboxes:
       egress_mode: allow_list
       egress:
         - fqdn: api.openai.com
+          ports: [443]
+        - fqdn: grove-gateway-prod.azure-api.net
           ports: [443]

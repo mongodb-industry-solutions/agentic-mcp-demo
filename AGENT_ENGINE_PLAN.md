@@ -660,7 +660,7 @@ Flow A numbers; a nested cancel review reported as `input-required`.
 | 6 | **Sandbox tool selectors must not overlap:** a tool-sandbox `"*"` also claims the agent-sandbox `consult_agent`, and validation fails. The tool sandbox lists its tools explicitly now (add new `oss_tools` functions there). |
 | 7 | **`a2a.allowed_callers` holds workspace ids, and local dev has its own** (stable hex ids such as `6dd3c9…`, not names). Each agent lists the local and the JeffN ids of its callers, so no other agent in the shared project can call ours. |
 | 8 | **Local A2A needs `A2A_JWT_SECRET` in the repo-root `.env`**: only the Orchestration Engine reads it, and it registers no A2A agents without it (`/a2a/register` 503). |
-| 9 | **Every workspace needs its own `MONGODB_URI` in JeffN.** The coordinator first ran without one and its tool sandbox used the project-wide URI of the other teams' agents, which points at **IST-Shared**: 4 `routing_decisions` docs and 2 `agent_cards` (plus `agent_cards_index`) landed in its `agent_registry`. Found by a read-only scan of the JeffN clusters and removed (both collections held only those docs; `mcp_services` there is someone else's and untouched). Set the secret before the first deploy of any new workspace. |
+| 9 | **Every workspace needs its own `MONGODB_URI` in JeffN.** The coordinator first ran without one and its tool sandbox used the project-wide URI of the other teams' agents, which points at **IST-Shared**: 4 `routing_decisions` docs and 2 `agent_cards` (plus `agent_cards_index`) landed in its `agent_registry`. Found by a read-only scan of the JeffN clusters and removed (both collections held only those docs). **Correction (2026-10-16):** that `agent_registry` is the live Kanopy demo's database. The coordinator's card upserts had replaced the legacy `ibn_agent`/`dtw_agent` cards (same `_id`), so the cleanup removed the legacy cards and their index too. The legacy ranking falls back to the Stage 1 order without them, and the shell's bootstrap re-created both on its next start (01:53 UTC). Set the secret before the first deploy of any new workspace. |
 | 10 | The legacy explicit-mention shortcut skipped the classifier, so "simulate … and list the IBN intents" went to IBN only. An explicit mention now adds its domain and the classifier still decides the other one. |
 
 Deviations: the legacy `_dispatch_multi`, `_consult_agent` and
@@ -707,10 +707,12 @@ Built: `telco_runtime/memory.py` plus memory steps in both graphs.
   (the caller passes it).
 - **Seed:** 64 glossary terms (org visibility), the 3 demo flows and the
   10 runbooks as procedures, then a `glossary-v1` marker.
-- **Config:** repo-root `project-config.yaml`. Extraction runs semantic,
-  episodic and procedural on OpenAI `gpt-4o`, with `base_url` pinned and
-  our OpenAI key in the project secret `CEREBRAS_API_KEY` (finding 2).
-  Local dev reads that name from the repo-root `.env`.
+- **Config:** repo-root `project-config.yaml`. Extraction runs semantic
+  and episodic (procedural off since 2026-10-16, finding 11) on `gpt-4o`,
+  since 2026-10-16 through the Grove
+  gateway (twin section), with the key in the project secret
+  `CEREBRAS_API_KEY` (finding 2). Local dev reads that name from the
+  repo-root `.env`.
 
 Verified locally (`dev up --all`, user `noc-tester-1`, extraction then on
 `claude-sonnet-5-5` through the MongoDB AI Gateway): a stated
@@ -718,7 +720,8 @@ preference is saved in session A and listed in new sessions B and C,
 together with four facts extraction learned from A (role, focus, current
 what-if). The DTW agent answers with the "bottom line first" the user
 asked for. A direct ibn-agent call recalls the same user's memory.
-Extraction: semantic, episodic and procedural succeeded for every snapshot.
+Extraction: semantic, episodic and procedural succeeded for every snapshot
+(procedural "succeeded" with nothing stored, finding 11).
 Again on OpenAI `gpt-4o` (2026-10-16, user `noc-tester-3`): a new session
 listed both facts from one turn three minutes earlier. `dev up` writes the
 config to `.agentengine/memory-config.yaml`; a running memory server picks
@@ -739,7 +742,7 @@ uplift as top priority, Northeast retail SLA compliance).
 | # | Finding |
 |---|---|
 | 1 | **The memory config is project-wide and has no read command.** `memory configure` stores it (ours stored generation 1 in JeffN, so no other team had one) and `memory apply` rolls the project's memory server, which every JeffN agent with memory shares. |
-| 2 | **The extraction key must be a project secret from a fixed list** (`LLM_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `CEREBRAS_API_KEY`). JeffN's `LLM_API_KEY`/`OPENAI_API_KEY` are other agents' keys, so our OpenAI key sits under the unused `CEREBRAS_API_KEY` name: the name doesn't have to match the provider. `base_url` is pinned to `api.openai.com`, since JeffN's project `OPENAI_BASE_URL` points at another gateway (finding 3 of Phase 4). The provider defaults (memory-server code) are `gpt-5.6-luna` and `claude-sonnet-5`; we pin `gpt-4o`, which the key is known to serve. A MongoDB AI Gateway key (`ANTHROPIC_API_KEY`, `base_url` `https://ai-gateway.corp.mongodb.com/anthropic`) extracted locally but never deployed; that secret is deleted. |
+| 2 | **The extraction key must be a project secret from a fixed list** (`LLM_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `CEREBRAS_API_KEY`). JeffN's `LLM_API_KEY`/`OPENAI_API_KEY` are other agents' keys, so our key sits under the unused `CEREBRAS_API_KEY` name (OpenAI's, since 2026-10-16 a Grove gateway key, see the twin section): the name doesn't have to match the provider. `base_url` is pinned to `api.openai.com`, since JeffN's project `OPENAI_BASE_URL` points at another gateway (finding 3 of Phase 4). The provider defaults (memory-server code) are `gpt-5.6-luna` and `claude-sonnet-5`; we pin `gpt-4o`, which the key is known to serve. A MongoDB AI Gateway key (`ANTHROPIC_API_KEY`, `base_url` `https://ai-gateway.corp.mongodb.com/anthropic`) extracted locally but never deployed; that secret is deleted. |
 | 3 | **Extraction supersedes hand-saved memories.** A preference saved with `metadata.kind=preference` was replaced (`is_latest: false`) by the extracted version without that metadata within a minute. `list_preferences` therefore returns the user's semantic memories as a whole, not a metadata filter. |
 | 4 | **Seed writes are create-only and don't raise.** A taxonomic term that exists returns 409 (the SDK logs it and returns unacknowledged). `save_procedure(update_existing=True)` fails on the server (`update_procedural()` rejects `trigger_conditions`). The seed checks `get_procedure` first and writes the marker only when every entry is present. |
 | 5 | **Procedure steps need the server's `ProceduralStep` shape** (`step_type` ∈ instruction/code/validation/prompt/human_input, `content`, `description`); other keys are rejected. |
@@ -748,6 +751,7 @@ uplift as top priority, Northeast retail SLA compliance).
 | 8 | **Recall size.** Unbudgeted, `build_context` returned about 10k characters (mostly glossary) per turn, and the coordinator passes it into every delegated message. Now `max_tokens=2000`. |
 | 9 | **Memory identity.** A turn's memory belongs to the invoking user (`user_id` in the invoke body locally, the human login deployed). A service account invoking an agent makes every turn the service account's (`user_id` ignored), so the Phase 8 shell needs the standalone memory service for per-browser-session memory. |
 | 10 | **The project's memory store isn't on our cluster.** The memory server is per project, so it can't use our workspace `MONGODB_URI`; no `mdb_memory_6aa4558…` exists on any JeffN cluster we can reach. Most likely it uses the project-scoped `MONGODB_URI` (another team's), so our users' memories live in someone else's database (unverified: we can't read that secret). |
+| 11 | **Procedural extraction never stored a procedure, so it's off.** The memory server asks the LLM for plain JSON mode (`json_object`) and doesn't pass the schema; the default prompt only says "Return a JSON object with a 'procedures' array". gpt-4o, gpt-4.1 and gpt-4.1-mini all name each procedure's field `name` (or `kebab-case-name`) instead of `procedure`, and the extractor drops those as invalid names. For a conversation without a procedure gpt-4o answers `{}` about three times in four, so the task fails with "model response missing required key 'procedures'" and is dead-lettered after its retries. A prompt with an explicit output contract fixed both (24/24 valid, field named `procedure`), but `memory.extraction.procedural.prompt` has no effect: the server reads it into the handler and never passes it to the extractor, which only takes a prompt from its internal DB store (off). The 13 procedures in memory are the seeded ones. Worth reporting to the Agent Engine team. |
 
 Deviations:
 - **Episodic on workstream closure** (`save_episode`) moves to Phase 8 with
@@ -756,6 +760,52 @@ Deviations:
 - **Reset** can't clear a user's platform memory: there is no
   delete-by-user API in the SDK.
 - **Promotion/decay** is left to platform consolidation.
+- **Learned procedures:** no procedural extraction (finding 11), so the
+  checkpoint's "learned procedure" comes from the seeded demo flows.
+
+### The Agent Engine twin (interim, 2026-10-16)
+
+Until the web shell can call the agents (Phase 8 needs a service account,
+see Phase 4 finding 5, and per-user memory, Phase 5 finding 9), the demo
+runs as a twin next to the Kanopy demo, single user:
+- **Chat:** the Atlas Agent Engine UI, with `noc-coordinator`. A human
+  login keeps the user's memory identity.
+- **No NOC approvals.** The chat UI offers no way to approve a paused
+  run, and no Pending Reviews page turned up for a project owner. The
+  documented `/resume` endpoint refuses native `interrupt()` pauses anyway
+  (Phase 3 finding 5). The workspace secret `NOC_REVIEW=off` (ibn-agent,
+  dtw-agent) builds the graph without the review node; set it to `on` and
+  sync to bring the approvals back. The code is unchanged otherwise.
+- **LLM through the Grove gateway** (Azure API Management,
+  `grove-gateway-prod.azure-api.net/grove-foundry-prod/openai/v1`). It
+  takes the key in an `api-key` header; `Authorization: Bearer` alone gets
+  401. `graph._llm` reads `LLM_BASE_URL` and `LLM_AUTH_HEADER` (workspace
+  secrets, default OpenAI) and sets the header at send time, so switching
+  back to OpenAI is two secrets and a sync. Both hosts are in the tool
+  sandbox's egress. Extraction uses `auth_header: api-key`; the memory
+  server keeps a `grove-foundry` URL up to `/v1` (`_normalize_extraction_base_url`).
+  The key is in each workspace's `LLM_API_KEY` and the project's
+  `CEREBRAS_API_KEY`. Locally every secret a manifest declares must be
+  non-empty in `.env`, or the `.env` watcher refuses the change.
+- **Dashboards:** `bin/twin.sh start` runs the IBN and DTW dashboards on
+  :8160/:8180 against `TWIN_MONGODB_URI`, the agents' cluster, default
+  lane. The script refuses a URI on the legacy demo's cluster.
+- **Reset:** `bin/twin.sh reset` reseeds the default lane's demo
+  collections and clears its approvals and routing decisions. Platform
+  memory stays (no delete-by-user API).
+- **The Kanopy demo stays as it is.** Every push to `main` redeploys
+  production (`.drone.yml`), and PRs #31–#35 change legacy code
+  (`mcp_servers/`, `web/*.html`, `seed_runner.py`). They stay unmerged
+  until verified on `staging`. The twin needs no merge: the agents deploy
+  with the CLI, the dashboards run from this branch.
+
+Verified: a deployed coordinator turn created DTW-SCN-001 and the twin DTW
+dashboard received it live; `bin/twin.sh reset` reseeded the default lane
+and the IBN dashboard picked it up live. On Grove with approvals off
+(deployed): ibn-agent took the Munich onboarding through activation
+without a pause (IBN-007 active), and dtw-agent ran Flow A (9 cells over,
+`cell_NYC_Metro_01_B` BLOCK). Grove answered `gpt-4o`, `gpt-4o-mini`,
+tool calls (`tool_choice=required`) and the Responses API.
 
 ### Spike resources (cleaned up 2026-10-15)
 

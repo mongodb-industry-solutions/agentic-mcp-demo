@@ -9,14 +9,14 @@ Agent Engine memory for the Telco OSS agents (Phase 5 of AGENT_ENGINE_PLAN.md).
 - **Taxonomic:** a Telco glossary (3GPP/TMF vocabulary plus the demo's own
   terms), shared by every user: the "agent speaks operator" beat.
 - **Procedural:** the three demo flows plus the IBN runbooks and DTW
-  mitigation playbooks from the knowledge chunks. Extraction adds learned
-  procedures from conversations.
+  mitigation playbooks from the knowledge chunks.
 - **Semantic:** what the user asks to remember (the legacy
   preferences_service plane), plus the facts extraction learns.
 - **Episodic:** extracted from the recorded turns by the platform.
 
 Taxonomic extraction is off (project-config.yaml): it only re-learned the
-seeded glossary from the transcripts.
+seeded glossary from the transcripts. Procedural extraction is off too: it
+never stored a procedure (AGENT_ENGINE_PLAN.md, Phase 5 finding 11).
 
 Recall is one build_context call. It needs the caller's identity, which an
 A2A child execution doesn't have, so the front door (the coordinator, or a
