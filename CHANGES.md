@@ -1,5 +1,16 @@
 # CHANGES.md
 
+## 2026-10-16
+
+### The Agent Engine twin of the demo
+
+The Agent Engine agents can now be demoed next to the Kanopy demo, which
+stays as it is. You chat with `noc-coordinator` in the Atlas Agent Engine
+UI, and `bin/twin.sh start` runs the IBN and DTW dashboards on :8160 and
+:8180 against the agents' cluster (`TWIN_MONGODB_URI`). `bin/twin.sh
+reset` puts the demo data back. Single user for now: everyone shares one
+lane, because the chat UI can't select a session lane.
+
 ## 2026-10-15
 
 ### Platform memory for the agents (Agent Engine migration, Phase 5)

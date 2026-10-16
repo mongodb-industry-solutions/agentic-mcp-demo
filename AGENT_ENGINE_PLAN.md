@@ -660,7 +660,7 @@ Flow A numbers; a nested cancel review reported as `input-required`.
 | 6 | **Sandbox tool selectors must not overlap:** a tool-sandbox `"*"` also claims the agent-sandbox `consult_agent`, and validation fails. The tool sandbox lists its tools explicitly now (add new `oss_tools` functions there). |
 | 7 | **`a2a.allowed_callers` holds workspace ids, and local dev has its own** (stable hex ids such as `6dd3c9…`, not names). Each agent lists the local and the JeffN ids of its callers, so no other agent in the shared project can call ours. |
 | 8 | **Local A2A needs `A2A_JWT_SECRET` in the repo-root `.env`**: only the Orchestration Engine reads it, and it registers no A2A agents without it (`/a2a/register` 503). |
-| 9 | **Every workspace needs its own `MONGODB_URI` in JeffN.** The coordinator first ran without one and its tool sandbox used the project-wide URI of the other teams' agents, which points at **IST-Shared**: 4 `routing_decisions` docs and 2 `agent_cards` (plus `agent_cards_index`) landed in its `agent_registry`. Found by a read-only scan of the JeffN clusters and removed (both collections held only those docs; `mcp_services` there is someone else's and untouched). Set the secret before the first deploy of any new workspace. |
+| 9 | **Every workspace needs its own `MONGODB_URI` in JeffN.** The coordinator first ran without one and its tool sandbox used the project-wide URI of the other teams' agents, which points at **IST-Shared**: 4 `routing_decisions` docs and 2 `agent_cards` (plus `agent_cards_index`) landed in its `agent_registry`. Found by a read-only scan of the JeffN clusters and removed (both collections held only those docs). **Correction (2026-10-16):** that `agent_registry` is the live Kanopy demo's database. The coordinator's card upserts had replaced the legacy `ibn_agent`/`dtw_agent` cards (same `_id`), so the cleanup removed the legacy cards and their index too. The legacy ranking falls back to the Stage 1 order without them, and the shell's bootstrap re-created both on its next start (01:53 UTC). Set the secret before the first deploy of any new workspace. |
 | 10 | The legacy explicit-mention shortcut skipped the classifier, so "simulate … and list the IBN intents" went to IBN only. An explicit mention now adds its domain and the classifier still decides the other one. |
 
 Deviations: the legacy `_dispatch_multi`, `_consult_agent` and
@@ -756,6 +756,30 @@ Deviations:
 - **Reset** can't clear a user's platform memory: there is no
   delete-by-user API in the SDK.
 - **Promotion/decay** is left to platform consolidation.
+
+### The Agent Engine twin (interim, 2026-10-16)
+
+Until the web shell can call the agents (Phase 8 needs a service account,
+see Phase 4 finding 5, and per-user memory, Phase 5 finding 9), the demo
+runs as a twin next to the Kanopy demo, single user:
+- **Chat:** the Atlas Agent Engine UI, with `noc-coordinator` (or
+  `ibn-agent` directly, where a review shows inline). A human login keeps
+  the user's memory identity.
+- **Dashboards:** `bin/twin.sh start` runs the IBN and DTW dashboards on
+  :8160/:8180 against `TWIN_MONGODB_URI`, the agents' cluster, default
+  lane. The script refuses a URI on the legacy demo's cluster.
+- **Reset:** `bin/twin.sh reset` reseeds the default lane's demo
+  collections and clears its approvals and routing decisions. Platform
+  memory stays (no delete-by-user API).
+- **The Kanopy demo stays as it is.** Every push to `main` redeploys
+  production (`.drone.yml`), and PRs #31–#35 change legacy code
+  (`mcp_servers/`, `web/*.html`, `seed_runner.py`). They stay unmerged
+  until verified on `staging`. The twin needs no merge: the agents deploy
+  with the CLI, the dashboards run from this branch.
+
+Verified: a deployed coordinator turn created DTW-SCN-001 and the twin DTW
+dashboard received it live; `bin/twin.sh reset` reseeded the default lane
+and the IBN dashboard picked it up live.
 
 ### Spike resources (cleaned up 2026-10-15)
 
