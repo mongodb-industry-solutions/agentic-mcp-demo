@@ -707,8 +707,9 @@ Built: `telco_runtime/memory.py` plus memory steps in both graphs.
   (the caller passes it).
 - **Seed:** 64 glossary terms (org visibility), the 3 demo flows and the
   10 runbooks as procedures, then a `glossary-v1` marker.
-- **Config:** repo-root `project-config.yaml`. Extraction runs semantic,
-  episodic and procedural on `gpt-4o`, since 2026-10-16 through the Grove
+- **Config:** repo-root `project-config.yaml`. Extraction runs semantic
+  and episodic (procedural off since 2026-10-16, finding 11) on `gpt-4o`,
+  since 2026-10-16 through the Grove
   gateway (twin section), with the key in the project secret
   `CEREBRAS_API_KEY` (finding 2). Local dev reads that name from the
   repo-root `.env`.
@@ -719,7 +720,8 @@ preference is saved in session A and listed in new sessions B and C,
 together with four facts extraction learned from A (role, focus, current
 what-if). The DTW agent answers with the "bottom line first" the user
 asked for. A direct ibn-agent call recalls the same user's memory.
-Extraction: semantic, episodic and procedural succeeded for every snapshot.
+Extraction: semantic, episodic and procedural succeeded for every snapshot
+(procedural "succeeded" with nothing stored, finding 11).
 Again on OpenAI `gpt-4o` (2026-10-16, user `noc-tester-3`): a new session
 listed both facts from one turn three minutes earlier. `dev up` writes the
 config to `.agentengine/memory-config.yaml`; a running memory server picks
@@ -749,6 +751,7 @@ uplift as top priority, Northeast retail SLA compliance).
 | 8 | **Recall size.** Unbudgeted, `build_context` returned about 10k characters (mostly glossary) per turn, and the coordinator passes it into every delegated message. Now `max_tokens=2000`. |
 | 9 | **Memory identity.** A turn's memory belongs to the invoking user (`user_id` in the invoke body locally, the human login deployed). A service account invoking an agent makes every turn the service account's (`user_id` ignored), so the Phase 8 shell needs the standalone memory service for per-browser-session memory. |
 | 10 | **The project's memory store isn't on our cluster.** The memory server is per project, so it can't use our workspace `MONGODB_URI`; no `mdb_memory_6aa4558…` exists on any JeffN cluster we can reach. Most likely it uses the project-scoped `MONGODB_URI` (another team's), so our users' memories live in someone else's database (unverified: we can't read that secret). |
+| 11 | **Procedural extraction never stored a procedure, so it's off.** The memory server asks the LLM for plain JSON mode (`json_object`) and doesn't pass the schema; the default prompt only says "Return a JSON object with a 'procedures' array". gpt-4o, gpt-4.1 and gpt-4.1-mini all name each procedure's field `name` (or `kebab-case-name`) instead of `procedure`, and the extractor drops those as invalid names. For a conversation without a procedure gpt-4o answers `{}` about three times in four, so the task fails with "model response missing required key 'procedures'" and is dead-lettered after its retries. A prompt with an explicit output contract fixed both (24/24 valid, field named `procedure`), but `memory.extraction.procedural.prompt` has no effect: the server reads it into the handler and never passes it to the extractor, which only takes a prompt from its internal DB store (off). The 13 procedures in memory are the seeded ones. Worth reporting to the Agent Engine team. |
 
 Deviations:
 - **Episodic on workstream closure** (`save_episode`) moves to Phase 8 with
@@ -757,6 +760,8 @@ Deviations:
 - **Reset** can't clear a user's platform memory: there is no
   delete-by-user API in the SDK.
 - **Promotion/decay** is left to platform consolidation.
+- **Learned procedures:** no procedural extraction (finding 11), so the
+  checkpoint's "learned procedure" comes from the seeded demo flows.
 
 ### The Agent Engine twin (interim, 2026-10-16)
 

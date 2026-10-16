@@ -68,8 +68,16 @@ memory:
   # and transcripts carry the recalled glossary, so the extractor tried to
   # re-learn dozens of seeded terms per snapshot and its JSON came back
   # truncated or malformed (dead-lettered tasks).
+  #
+  # No procedural extraction either: it never stored a procedure. The server
+  # asks for plain JSON mode without passing the schema; gpt-4o (also 4.1,
+  # 4.1-mini) names the field "name" instead of "procedure", so the extractor
+  # drops every procedure as an invalid name, and for a conversation without
+  # one gpt-4o often answers {} ("missing required key 'procedures'", then
+  # dead-lettered). A per-type 'prompt' can't fix it: this memory server
+  # reads it but never passes it to the extractor. The seeded procedures
+  # (demo flows, runbooks) are written by the agents and stay.
   extraction:
     enabled:
       - semantic
       - episodic
-      - procedural
