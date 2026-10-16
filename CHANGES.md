@@ -1,5 +1,164 @@
 # CHANGES.md
 
+## 2026-10-16
+
+### Self-healing network, step 1: the network notices by itself
+
+A store's morning rush can now be played as live telemetry: "☀ start the
+morning rush" (or the `start_morning_rush` tool) runs about 105 seconds of
+POS latency, uplink utilization, queue depth and guest throughput on a
+compressed 08:55–10:05 clock. Nobody declares a violation any more: an SLO
+monitor in the IBN dashboard watches the data, opens an incident when POS
+latency stays over the target, and closes it when it recovers, with the
+time to recover. A store that already has the latency runbook stays green
+through the same rush. Diagnosis now describes what was measured, not a
+fixed text. "Inject morning rush" still works as before. Next: the system
+diagnoses and fixes it by itself (`SELF_HEALING_PLAN.md`).
+
+### Subscriber identifiers redacted (Agent Engine migration, Phase 6)
+
+The Agent Engine agents no longer show subscriber identifiers. Ask for
+sample subscribers and the IMSIs and MSISDNs come back as `[BLOCKED]`,
+with the rest (market, network, cells) intact. A platform guardrail does
+it, on our three agents only; the agent code doesn't filter anything.
+The Kanopy demo is unchanged.
+
+### The Agent Engine twin of the demo
+
+The Agent Engine agents can now be demoed next to the Kanopy demo, which
+stays as it is. You chat with `noc-coordinator` in the Atlas Agent Engine
+UI, and `bin/twin.sh start` runs the IBN and DTW dashboards on :8160 and
+:8180 against the agents' cluster (`TWIN_MONGODB_URI`). `bin/twin.sh
+reset` puts the demo data back. Single user for now: everyone shares one
+lane, because the chat UI can't select a session lane.
+
+The twin runs without NOC approvals, since the chat UI has no way to
+approve a paused action; `NOC_REVIEW=on` brings them back. Its agents and
+memory extraction call gpt-4o through the Grove gateway instead of OpenAI
+directly.
+
+Memory extraction no longer looks for procedures in conversations: it
+never stored one, and on conversations without one it failed. The seeded
+demo flows and runbooks are still recalled.
+
+## 2026-10-15
+
+### Platform memory for the agents (Agent Engine migration, Phase 5)
+
+The three Agent Engine agents now use Agent Engine memory. Each turn starts
+with a recall for the user: what they said to remember, what the platform
+learned from earlier conversations, the procedures and a Telco glossary.
+The coordinator passes that recall to the agents it calls.
+- **Remember and recall:** "Remember that I look after the NYC market"
+  saves it for the user; "What do you remember about me?" lists it. A new
+  session the next day still knows it.
+- **Learned in the background:** after a conversation goes idle, the
+  platform extracts facts and episodes from it (OpenAI
+  gpt-4o). Facts it learns supersede the ones saved by hand. Verified
+  locally and deployed. Claude through the MongoDB AI Gateway extracted
+  locally but not on the deployed agents.
+- **Seeded once:** about 60 Telco terms (IBN, 3GPP, TM Forum), the three
+  demo flows and the ten IBN/DTW runbooks, shared across the project.
+
+The legacy runtime keeps its own memory (`agent_memories`,
+`user_preferences`) until the cut-over. The Reset button doesn't clear
+platform memory yet: there is no delete-by-user API.
+
+### NOC coordinator and A2A (Agent Engine migration, Phase 4)
+
+A third Agent Engine agent, `noc-coordinator`, is the front door for NOC
+requests. It picks the domain agents in scope (an explicit "ibn"/"dtw"
+mention plus gpt-4o-mini), ranks them by `$vectorSearch` over
+`agent_cards` when both are, splits the request, and calls the agents
+concurrently over A2A, forwarding the session's lane. A single answer
+passes through unchanged; two are combined (gpt-4o). The IBN and DTW
+agents can also `consult_agent` each other: two questions per turn, one
+level deep. The legacy runtime is unchanged.
+
+What the legacy side sees:
+- **`routing_decisions`** gets one document per coordinator turn
+  (`runtime: "agent-engine"`): Stage 1 domains and method, card ranking,
+  sub-tasks, the agents' execution IDs and status, synthesis time.
+- **`agent_cards`** documents gain an `a2a_name` field (`ibn-agent`,
+  `dtw-agent`). The coordinator upserts the cards itself, with the same
+  `_id`s and index as the legacy shell.
+- **`agent_approvals`** documents record the Agent Engine execution and
+  session that paused (`execution_id`, `session_id`), so a review behind a
+  delegated call can be found and resumed.
+
+Also fixed in the Phase 3 review gate: `parallel_tool_calls=False` was
+passed to `bind_tools`, where the SDK drops it, so a deployed model could
+emit two tool calls in one turn and only the first was reviewed. It is now
+an invocation option, and the review node also keeps only the first call.
+
+### NOC approval for blast-radius actions (Agent Engine migration, Phase 3)
+
+On Atlas Agent Engine, the IBN and DTW agents now pause before
+`activate_plan`, `apply_runbook`, `update_template_version`,
+`cancel_intent`, `delete_scenario` and `delete_all_scenarios`. A NOC
+reviewer approves or rejects in Agent Engine (Pending Reviews page, CLI or
+API), and a rejected action never runs. A template bump that affects more
+than one site can be approved as a **canary**: the first site is migrated,
+its compliance is re-checked, and a second review covers the rest. The
+legacy MCP runtime has no review step and behaves as before.
+
+What the legacy side sees:
+- **Dashboards.** While a review is pending, the documents it would change
+  carry a `pending_approval` marker, so the IBN intent card/tab and the DTW
+  scenario list show "⏸ awaiting NOC approval" through their existing
+  change streams.
+- **Audit trail.** Each review is a document in the session's
+  `agent_approvals` collection (action, arguments, blast radius, decision,
+  reviewer notes). Reset clears it with the other agent-state planes.
+- **`update_template_version`** takes an optional `intent_ids` to flag
+  only some intents (the staged rollout), and its successor policy doc is
+  now upserted. Before, a second bump of the same template, from another
+  session or a rerun, failed with a duplicate key on the shared
+  `ibn_knowledge_chunks`.
+- **`apply_runbook`** now restores POS latency to 70% of the target. The
+  old floor of 22 ms left intents with targets under ~31 ms (such as the
+  20 ms Marienplatz onboarding) violated after "Compliance restored".
+
+## 2026-10-14
+
+### IBN/DTW tool code moved to `oss_tools/` (Agent Engine migration, Phase 1)
+
+The 10 Telco MCP servers (`ibn_*`, `dtw_*`) are now ~25-line FastMCP shims.
+Their tool code lives in `oss_tools/{ibn,dtw}/*.py` as plain functions
+collected in a per-module `tools` ToolSet. The Atlas Agent Engine agents
+(`AGENT_ENGINE_PLAN.md`) can register the same functions with
+`@app.tool()`, so we get one implementation and two runtimes. Each shim keeps
+the full module docstring, because the registry embeds it for routing.
+The pre-move history of the tool code stays on the `mcp_servers/` paths,
+since the shims reuse them.
+
+**Prefix per call, not per process.** The servers bound `_PFX =
+os.environ["DEMO_PREFIX"]` and their collection handles at import time.
+That works for one subprocess per browser session, but not for an Agent
+Engine sandbox serving many sessions. `oss_tools._ctx.collection(name,
+mutable=…)` returns a proxy that resolves `<prefix><name>` on every
+attribute access. The prefix comes from the `demo-prefix` custom header
+inside Agent Engine (validated against the shell's `s_<token>_` shape, and
+anything else is rejected), else from `DEMO_PREFIX`. Reference collections
+are never prefixed. Tool bodies are unchanged: `intents.find(...)` still
+reads the same.
+
+**Hot reload.** The registry's file hash now also covers the `oss_tools/`
+modules a shim imports (plus `_ctx.py`), and the watcher watches
+`oss_tools/` too. Editing a tool body still evicts the running server.
+Non-shim servers hash exactly as before.
+
+Verified: tool schemas served over stdio are identical before/after (44
+tools: names, descriptions, input schemas). A throwaway session lane gives
+identical answers to `main` for IBN sites (reference), IBN intents
+(prefixed) and DTW markets, and an IBN `submit_intent` lands in the lane's
+`s_…_ibn_intents` with the shared `ibn_intents` untouched.
+
+Side finding, not changed here: on both `main` and this branch, the
+generic phrasings "list all sites" / "show all intents" without
+conversation context are routed away from IBN by Stage 1 (to `acc_*` /
+`analytics_service`). With "IBN" in the query they route correctly.
+
 ## 2026-08-10 (2)
 
 ### Fix: tool selection was sampled at temperature 1.0

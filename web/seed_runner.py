@@ -35,8 +35,8 @@ from pymongo import ASCENDING, DESCENDING, MongoClient
 
 # The mutable demo collections — the only ones a browser session needs
 # its own copy of (everything else is read-only reference data, shared
-# across sessions). Must match the DEMO_PREFIX-prefixed collections in
-# the MCP servers. See MULTI_SESSION_PLAN.md.
+# across sessions). Must match the `collection(..., mutable=True)` handles
+# in oss_tools/ (the IBN/DTW tool code). See MULTI_SESSION_PLAN.md.
 SESSION_MUTABLE_BASES = [
     "ibn_intents",
     "ibn_telemetry",            # time-series
@@ -60,6 +60,9 @@ SESSION_STATE_BASES = [
     "agent_conversations",
     "routing_decisions",
     "agent_history",        # per-web-session cursor-up recall
+    "agent_approvals",      # Agent Engine NOC reviews (oss_tools/approvals.py)
+    "ibn_incidents",        # self-healing incidents (web/ibn_assurance.py)
+    "ibn_sim_runs",         # morning-rush requests (start_morning_rush)
 ]
 
 
@@ -70,6 +73,7 @@ _IBN_PHASES = [
     ("IBN · telemetry timeseries", ibn_seed.ensure_telemetry_timeseries),
     ("IBN · indexes",              ibn_seed.ensure_indexes),
     ("IBN · fixtures",             ibn_seed.insert_all),
+    ("IBN · incident dates",       ibn_seed.refresh_incident_dates),
     ("IBN · baseline telemetry",   ibn_seed.seed_baseline_telemetry),
     ("IBN · vector index",         ibn_seed.create_vector_index),
 ]

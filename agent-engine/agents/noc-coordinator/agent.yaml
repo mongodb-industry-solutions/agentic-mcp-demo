@@ -1,0 +1,56 @@
+# NOC coordinator (Phase 4 of AGENT_ENGINE_PLAN.md). Built from the repo
+# root (monorepo agent.yaml) so telco-runtime/, oss_tools/ and
+# agents/catalog/ are in the build archive.
+name: noc-coordinator
+description: >-
+  NOC coordinator for the Telco OSS agents: routes each request to the IBN
+  and/or DTW agent over A2A, ranking them by Atlas vector search over agent
+  cards, and combines multi-agent answers.
+entrypoint: noc_coordinator.main:app
+framework: langgraph
+agent_card:
+  summary: Front door for NOC requests across intent-based networking and the digital twin.
+  capabilities:
+    - noc-routing
+    - multi-agent-synthesis
+features:
+  durable_workflow: true
+  # Agent Engine memory (Phase 5): recall per user message, preference
+  # saving, glossary/procedure seeding.
+  memory: true
+version: 0.1.0
+# A2A on, so the platform hands this agent a token to call the domain
+# agents. Nothing calls the coordinator itself: its allowed_callers names
+# only itself.
+a2a:
+  enabled: true
+  allowed_callers:
+    - c47ee072257dbccb667aec2b   # local dev (agentengine dev up)
+    - ws-6ad1060d6189a50fdc472a65   # JeffN
+  skills:
+    - name: noc-request
+      description: Route a NOC request to the right domain agents and combine their answers.
+  input_modes: ["text/plain"]
+  output_modes: ["text/plain"]
+# The agent sandbox runs the graph and `delegate` (A2A is only available
+# there); the tool sandbox holds the LLM key and egress for app.llm(), and
+# the agent-card ranking, routing record and review lookup (database
+# access).
+sandboxes:
+  agent:
+    secrets: ["LLM_API_KEY"]
+    tools: ["delegate"]
+    network:
+      egress_mode: deny_all
+  tool:
+    # LLM_BASE_URL/LLM_AUTH_HEADER pick the endpoint (graph._llm): OpenAI or
+    # the Grove gateway.
+    secrets: ["LLM_API_KEY", "LLM_BASE_URL", "LLM_AUTH_HEADER"]
+    tools: ["rank_agents", "record_routing", "pending_reviews"]
+    network:
+      egress_mode: allow_list
+      egress:
+        - fqdn: api.openai.com
+          ports: [443]
+        - fqdn: grove-gateway-prod.azure-api.net
+          ports: [443]
