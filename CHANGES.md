@@ -2,6 +2,14 @@
 
 ## 2026-10-16
 
+### Subscriber identifiers redacted (Agent Engine migration, Phase 6)
+
+The Agent Engine agents no longer show subscriber identifiers. Ask for
+sample subscribers and the IMSIs and MSISDNs come back as `[BLOCKED]`,
+with the rest (market, network, cells) intact. A platform guardrail does
+it, on our three agents only; the agent code doesn't filter anything.
+The Kanopy demo is unchanged.
+
 ### The Agent Engine twin of the demo
 
 The Agent Engine agents can now be demoed next to the Kanopy demo, which

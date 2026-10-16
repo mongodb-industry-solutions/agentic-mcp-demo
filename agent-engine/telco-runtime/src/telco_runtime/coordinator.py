@@ -52,6 +52,9 @@ SYNTHESIS_PROMPT = (
     "- Use ONLY facts from the specialist answers — do not invent data.\n"
     "- Keep concrete details: IDs, metrics, statuses, tables, runbook steps.\n"
     "- If a specialist reported an error or no data, say so plainly.\n"
+    "- [BLOCKED] marks a subscriber identifier (IMSI, MSISDN) that a "
+    "guardrail redacted. It is not an error: keep [BLOCKED] in its place "
+    "and report everything else.\n"
     "- Operational tone for NOC engineers; speak in third person about "
     "customers."
 )
