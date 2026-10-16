@@ -807,6 +807,49 @@ without a pause (IBN-007 active), and dtw-agent ran Flow A (9 cells over,
 `cell_NYC_Metro_01_B` BLOCK). Grove answered `gpt-4o`, `gpt-4o-mini`,
 tool calls (`tool_choice=required`) and the Responses API.
 
+### Phase 6 findings (in progress, CLI 0.1.119, SDK 0.11.8, 2026-10-16)
+
+Scope in JeffN: only what can be limited to our three workspaces. The
+"Policy denied" beat (org/project policy, a second project) waits for a
+decision, since a JeffN policy would apply to the other teams' agents.
+
+- **IMSI/MSISDN redaction:** `agent-engine/guardrails/subscriber-ids.json`,
+  an `output_validation` guardrail (`modify`, `on_fail: fix`, stage
+  `llm_output`) with `workspace_ids` set to our three workspaces, so no
+  other JeffN agent is affected. Patterns: `\d{15}` (IMSI) and
+  `\+[1-9]\d{7,14}` (E.164 MSISDN). The OE is Go (RE2), so no
+  lookarounds: a word boundary would miss `imsi_310999…` ids. Guardrails
+  have no CLI command; create it in the UI (Manage → Policies →
+  Guardrails) or with `POST /api/v1/projects/{project_id}/guardrails`
+  (JeffN had none). The local `dev up` OE enforces guardrails but has no
+  API to create them. Created in JeffN on 2026-10-16 (id
+  `6ad24467ed5110d25f379989`).
+  Verified deployed: for "3 sample subscribers on ACME M with their IMSI
+  and MSISDN" dtw-agent listed full ids before and `[BLOCKED]` in their
+  place after, with markets and cells intact. `fix` replaces each match
+  with the fixed token `[BLOCKED]`. Through the coordinator the
+  synthesis read `[BLOCKED]` as a failure ("cannot be fulfilled") and
+  dropped the subscribers, so `SYNTHESIS_PROMPT` now says it marks a
+  redacted identifier. The API's `trigger_count` stayed 0 after it
+  fired.
+- **Live Agent Log as custom events: deferred to Phase 8.** With
+  `features.use_custom_parser: true` the `invokeStream` endpoint carries
+  *only* custom events, no `text`/`step`/`done` frames (invoke docs,
+  "Stream Your Agent's Output"), so the Agent Engine chat UI the twin
+  depends on would lose its answers. `emit_custom_event` also raises on
+  the synchronous `invoke` path (CLI, A2A children). It belongs with the
+  shell, whose parser then has to emit the answer text as custom events
+  too. Custom events aren't model output, so the guardrails (stages
+  `llm_input`/`llm_output`) don't see them: they must not carry tool
+  results (subscriber ids).
+- **"View trace" links:** the docs don't give a URL scheme for a session's
+  trace; needs one copied from the Traces page.
+- **Phase 8 questions** (invoke-only role, what Atlas service account
+  pairing creates, per-user memory through a service account and "end-user
+  delegation", delete-by-user, custom events next to the normal stream)
+  are with the Agent Engine team:
+  https://mongodb.slack.com/archives/C0B7G8ZC2G6/p1792164957402519
+
 ### Spike resources (cleaned up 2026-10-15)
 
 - Atlas (BenLorenzPersonalOrg → project `telco-oss-spike`): Flex cluster
