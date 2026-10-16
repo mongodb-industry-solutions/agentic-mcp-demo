@@ -1,6 +1,6 @@
 # Self-Healing Network: from TM Forum Autonomy Level 3 to Level 4
 
-**Status:** plan, 2026-10-16. Nothing built yet.
+**Status:** plan, 2026-10-16. S1 (sense + detect) built on branch `self-healing/s1-sense-detect`, see "S1 as built" at the end.
 
 ## The pitch
 
@@ -81,8 +81,9 @@ incidents with no precedent.
   `guest_throughput_mbps`. The curve follows the seeded Schwabing incident
   (09:00–09:45 rush, latency to 51 ms at under 30 % uplink utilization,
   against the opener's 40 ms target).
-  45 minutes are compressed into about 90 seconds; the dashboard shows the
-  simulated clock (08:55 → 09:45) and labels it as compressed.
+  70 simulated minutes (08:55 → 10:05, the last 20 a cool-down so the
+  detector sees the SLO recover) play in about 105 seconds; the dashboard
+  shows the simulated clock and labels it as compressed.
 - **Configuration-aware.** Before every sample, the generator reads the
   intent's applied runbooks and policy snapshot. With the POS class still
   in the best-effort queue, latency climbs with load. With EF + PIR uplift
@@ -299,3 +300,24 @@ to show them is as a slice for one service.
   the top match at a sister site.
 - **Escalation:** an out-of-envelope incident escalates with its
   diagnosis attached and executes nothing.
+
+## S1 as built (2026-10-16, branch `self-healing/s1-sense-detect`)
+
+- **Sense:**
+  - **`oss_tools/ibn/rush.py`**, a pure model: four metrics at 1 Hz, 08:55 → 10:05 in about 105 s (the last 20 simulated minutes are a cool-down, so the monitor sees the SLO recover before the stream stops). The peak is the SLO + 11 ms at 10–26 % uplink utilization. With RB-007 in the intent's history, latency stays at 25–30 ms.
+  - **`start_morning_rush`** (IBN telemetry tools; added to the IBN prompt, the routing docstring and ibn-agent's `agent.yaml`) and the dashboard's **☀ Start morning rush** button both write an `ibn_sim_runs` request.
+- **Detect:**
+  - **`oss_tools/ibn/slo.py`** (pure): p95 over 20 s every 2 s; 3 breached windows open an incident, 3 windows below 0.95 × target close it.
+  - **`web/ibn_assurance.py`** runs the rush runner and the evaluator per lane inside the IBN dashboard (so only while a tab watches the lane).
+  - **Incidents** live in `ibn_incidents`, one open per intent (a unique partial index on `open`), TMF642-shaped, with a timeline. Opening raises the usual `violation` event and sets the intent to `violated`; closing writes `recovery` with the time to recover. Neither is repeated when `inject_event` or `apply_runbook` wrote one in the last 60 s.
+  - **Reset** clears both new collections.
+- **Diagnose input:** `diagnose_violation` builds the fingerprint from the measurements (open incident, else the last window) when uplink data exists, and keeps the old text for the `inject_event` path. It writes the diagnose stage, the probable cause and the top match onto the open incident.
+- **Verified** on the twin cluster, test lane `s_shs1test01_`, dashboard with the new code:
+  - **Unmitigated rushes:** 15 across IBN-001/002/003, each with exactly one incident, opened and then recovered by itself; detection 4.1–7.7 s after the first breached window; recovery 66–70 s after opening.
+  - **Mitigated rushes:** 5 on IBN-004 (RB-007), with no incident.
+  - **No duplicates:** 15 violation and 15 recovery events in total.
+  - **Tool path:** `start_morning_rush` → incident → measured diagnosis → recovery.
+  - **L3 path:** `inject_event` → incident without a duplicate alarm → `apply_runbook` → closed with one recovery event.
+  - **Similarity:** the measured fingerprint finds the same matches as the template (Schwabing 0.726 vs 0.74, Berlin 0.751 vs 0.758).
+- **Found on the way (fixed separately, #39):** the seeded incidents had aged out of the hero query's 180-day window, so Marienplatz got RB-003 instead of RB-007.
+- **Input for S2:** Berlin's nearest precedent is a camera-uplink/PoE incident (RB-005, similarity 0.75), a weak match. The envelope's similarity threshold (0.80) should escalate it, which makes it the natural "it knows what it doesn't know" case.

@@ -29,6 +29,7 @@ intents           = collection("ibn_intents", mutable=True)            # mutable
 sites             = collection("ibn_sites")                            # reference
 telemetry         = collection("ibn_telemetry", mutable=True)          # mutable
 compliance_events = collection("ibn_compliance_events", mutable=True)  # mutable
+sim_runs          = collection("ibn_sim_runs", mutable=True)           # mutable
 
 
 def _resolve_site(site_hint: str) -> dict | None:
@@ -263,6 +264,43 @@ def inject_event(scenario: str = "morning_rush",
         f"  Peak POS latency: {observed_peak:.1f}ms (SLA ≤{threshold}ms)\n"
         f"  Status: 🔴 violated\n"
         f"  Run diagnose_violation('{intent['_id']}') to surface root cause."
+    )
+
+
+@tools.tool
+def start_morning_rush(intent_id: str = None, site: str = None) -> str:
+    """
+    Start a realistic morning rush at a store: about 105 seconds of live
+    telemetry (POS latency, uplink utilization, queue depth, guest
+    throughput) on a compressed 08:55-10:05 clock. Unlike inject_event it
+    does not declare anything: the SLO monitor detects a violation from the
+    data, opens an incident, and closes it again when the SLO recovers. A
+    store with the latency runbook applied stays green. Played by the IBN
+    dashboard, which must be open on this session.
+
+    Args:
+        intent_id: The active intent to target, e.g. 'IBN-007'.
+        site:      Alternative: site-name fragment like 'Marienplatz'.
+
+    Pass either intent_id or site.
+    """
+    intent = _resolve_intent(intent_id, site)
+    if not intent:
+        return (
+            f"❌ No active intent found for "
+            f"{'intent_id ' + intent_id if intent_id else 'site ' + (site or '<unspecified>')}. "
+            f"Activate the intent first."
+        )
+    site_doc = sites.find_one({"_id": intent.get("site_id")})
+    site_name = site_doc["name"] if site_doc else intent["_id"]
+    sim_runs.insert_one({
+        "intent_id": intent["_id"], "kind": "morning_rush", "status": "requested",
+        "requested_at": datetime.datetime.now(), "requested_by": "tool",
+    })
+    return (
+        f"☀ Morning rush starting at {site_name} ({intent['_id']}): live telemetry on "
+        f"the IBN dashboard, 08:55 → 10:05 at demo speed (about 105 s). The SLO monitor "
+        f"will open an incident by itself if POS latency breaches the target."
     )
 
 

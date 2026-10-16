@@ -89,6 +89,7 @@ sandboxes:
       - list_runbooks
       # oss_tools.ibn.telemetry
       - inject_event
+      - start_morning_rush
       - seed_baseline
       - reset_telemetry
       # oss_tools.approvals (internal: called by the review node)

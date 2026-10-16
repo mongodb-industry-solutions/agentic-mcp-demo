@@ -15,6 +15,9 @@ picks up via Change Streams.
 Use this service when users say:
 - Inject:   "inject morning rush", "inject morning rush at <site>",
            "trigger violation", "simulate <scenario>", "stress test <site>"
+- Live rush: "start the morning rush", "start the morning rush at <site>",
+           "let the store open", "run a realistic rush" (live telemetry; the
+           SLO monitor detects any violation itself)
 - Baseline: "seed baseline telemetry", "seed telemetry for <intent>",
            "send healthy samples"
 - Reset:   "reset telemetry", "clear simulated data", "wipe telemetry"

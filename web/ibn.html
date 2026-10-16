@@ -592,6 +592,14 @@
     .aha-grid { grid-template-columns: 1fr; }
     .aha-arrow { transform: rotate(90deg); padding: 4px 0; text-align: center; }
   }
+  /* Self-healing S1: morning rush control + status (SELF_HEALING_PLAN.md) */
+  .rush-row { display: flex; align-items: center; gap: 12px; margin: 10px 0 4px; }
+  .rush-btn { background: transparent; color: var(--cyan); border: 1px solid var(--cyan);
+              border-radius: 6px; padding: 5px 12px; font-size: 14px; cursor: pointer; }
+  .rush-btn:disabled { opacity: 0.4; cursor: default; }
+  .rush-status { color: var(--text-dim); font-size: 14px; font-family: var(--mono); }
+  .rush-status .open { color: var(--red); }
+  .rush-status .ok { color: var(--green); }
 </style>
 </head>
 <body>
@@ -719,6 +727,8 @@ let state = {
   site: null,
   telemetry: [],
   events: [],
+  rush: {},       // intent_id → latest morning-rush tick {clock, load, status}
+  incident: {},   // intent_id → latest self-healing incident
 };
 
 // ── Formatting helpers ──
@@ -928,8 +938,15 @@ function renderAssurance() {
       </div>
     </div>` : '';
 
+  const rushHTML = isProvisioned ? `
+    <div class="rush-row">
+      <button class="rush-btn" id="rushBtn" onclick="startRush()">☀ Start morning rush</button>
+      <span class="rush-status" id="rushStatus"></span>
+    </div>` : '';
+
   body.innerHTML = `
     <div class="sla-table">${slaRows}</div>
+    ${rushHTML}
     ${gaugeHTML}
     ${bannerHTML}
     <div class="events-feed" style="margin-top: 8px;">
@@ -945,6 +962,34 @@ function renderAssurance() {
       }
     </div>
   `;
+  patchRush();
+}
+
+// ── Morning rush (self-healing S1) ──
+function startRush() {
+  if (!state.focused || !ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify({type: 'start_rush', intent_id: state.focused._id}));
+  state.rush[state.focused._id] = {clock: '08:55', load: 0, status: 'requested'};
+  patchRush();
+}
+
+function patchRush() {
+  const el = document.getElementById('rushStatus');
+  const btn = document.getElementById('rushBtn');
+  if (!el || !state.focused) return;
+  const r = state.rush[state.focused._id];
+  const inc = state.incident[state.focused._id];
+  const running = r && !['done', 'stopped', 'cancelled'].includes(r.status);
+  if (btn) btn.disabled = !!running;
+  let text = '';
+  if (running) text = `☀ ${esc(r.clock)} · load ${Math.round((r.load || 0) * 100)}%` +
+                      (r.mitigated ? ' · EF queue in place' : '');
+  if (inc && inc.status === 'open') {
+    text += ` <span class="open">● incident open since ${fmtTime(inc.opened_at)}</span>`;
+  } else if (inc && inc.status === 'recovered') {
+    text += ` <span class="ok">✓ recovered in ${Math.round(inc.mttr_s)} s</span>`;
+  }
+  el.innerHTML = text;
 }
 
 // ── Telemetry-only patch — updates live value + gauge without re-rendering the panel ──
@@ -1255,6 +1300,18 @@ function connect() {
         state.telemetry = msg.samples;
         patchAssuranceTelemetry();
       }
+      return;
+    }
+
+    if (msg.type === 'rush') {
+      state.rush[msg.intent_id] = {...(state.rush[msg.intent_id] || {}), ...msg};
+      patchRush();
+      return;
+    }
+
+    if (msg.type === 'incident') {
+      state.incident[msg.doc.intent_id] = msg.doc;
+      patchRush();
       return;
     }
 
