@@ -15,7 +15,9 @@ agent_card:
     - multi-agent-synthesis
 features:
   durable_workflow: true
-  memory: false
+  # Agent Engine memory (Phase 5): recall per user message, preference
+  # saving, glossary/procedure seeding.
+  memory: true
 version: 0.1.0
 # A2A on, so the platform hands this agent a token to call the domain
 # agents. Nothing calls the coordinator itself: its allowed_callers names

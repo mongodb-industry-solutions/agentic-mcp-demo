@@ -695,6 +695,68 @@ delete-all reject.
 | 5 | **Service accounts in JeffN need "Atlas service account pairing"**, which is off for the project (`PROJECT_READ_ONLY` refused; `AGENT_DEVELOPER` still refused everywhere). Until a project owner enables it, test with `agentengine invoke --session/--resume` as a human login, which has no custom-header flag and so runs in the default lane. The shell (Phase 8) needs the service account. |
 | 6 | A `secret set --sync` waits for the project runtime to roll, a few minutes in JeffN. Without `--sync` the value applies after a later `agentengine secret sync --workspace-scope`. |
 
+### Phase 5 findings (CLI 0.1.119, SDK 0.11.8, memory server 0.11.8/0.11.9, 2026-10-15)
+
+Built: `telco_runtime/memory.py` plus memory steps in both graphs.
+- **Coordinator `route`:** seeds once per project, recalls (`build_context`
+  over episodic/semantic/procedural/taxonomic, `max_tokens=2000`), and
+  classifies a `memory` action (`remember` → `save_semantic`, `recall` →
+  `search_semantic`) next to the domains. The recall goes into every
+  delegated message.
+- **Domain agents:** a `recall` node at START, skipped for A2A children
+  (the caller passes it).
+- **Seed:** 64 glossary terms (org visibility), the 3 demo flows and the
+  10 runbooks as procedures, then a `glossary-v1` marker.
+- **Config:** repo-root `project-config.yaml`. Extraction runs semantic,
+  episodic and procedural on OpenAI `gpt-4o`, with `base_url` pinned and
+  our OpenAI key in the project secret `CEREBRAS_API_KEY` (finding 2).
+  Local dev reads that name from the repo-root `.env`.
+
+Verified locally (`dev up --all`, user `noc-tester-1`, extraction then on
+`claude-sonnet-5-5` through the MongoDB AI Gateway): a stated
+preference is saved in session A and listed in new sessions B and C,
+together with four facts extraction learned from A (role, focus, current
+what-if). The DTW agent answers with the "bottom line first" the user
+asked for. A direct ibn-agent call recalls the same user's memory.
+Extraction: semantic, episodic and procedural succeeded for every snapshot.
+Again on OpenAI `gpt-4o` (2026-10-16, user `noc-tester-3`): a new session
+listed both facts from one turn three minutes earlier. `dev up` writes the
+config to `.agentengine/memory-config.yaml`; a running memory server picks
+it up only after a restart.
+
+Verified deployed (JeffN, CLI login, default lane): the first coordinator
+turn seeded 77 entries (64 terms, 13 procedures). A preference saved in
+one session is listed in later sessions. Coordinator turns recall about
+5k characters and pass them to ibn-agent and dtw-agent. With extraction
+on Claude through the AI Gateway, nothing was extracted deployed, not even
+16 hours later (locally it took a minute or two). The hosted memory server
+probably can't reach the gateway, or the gateway refuses it; its logs
+aren't exposed to us. After the switch to OpenAI (config generation 2,
+2026-10-16), a fresh session listed three facts extracted within 4
+minutes from a two-turn conversation (QBR next Tuesday, the NYC Saturday
+uplift as top priority, Northeast retail SLA compliance).
+
+| # | Finding |
+|---|---|
+| 1 | **The memory config is project-wide and has no read command.** `memory configure` stores it (ours stored generation 1 in JeffN, so no other team had one) and `memory apply` rolls the project's memory server, which every JeffN agent with memory shares. |
+| 2 | **The extraction key must be a project secret from a fixed list** (`LLM_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `CEREBRAS_API_KEY`). JeffN's `LLM_API_KEY`/`OPENAI_API_KEY` are other agents' keys, so our OpenAI key sits under the unused `CEREBRAS_API_KEY` name: the name doesn't have to match the provider. `base_url` is pinned to `api.openai.com`, since JeffN's project `OPENAI_BASE_URL` points at another gateway (finding 3 of Phase 4). The provider defaults (memory-server code) are `gpt-5.6-luna` and `claude-sonnet-5`; we pin `gpt-4o`, which the key is known to serve. A MongoDB AI Gateway key (`ANTHROPIC_API_KEY`, `base_url` `https://ai-gateway.corp.mongodb.com/anthropic`) extracted locally but never deployed; that secret is deleted. |
+| 3 | **Extraction supersedes hand-saved memories.** A preference saved with `metadata.kind=preference` was replaced (`is_latest: false`) by the extracted version without that metadata within a minute. `list_preferences` therefore returns the user's semantic memories as a whole, not a metadata filter. |
+| 4 | **Seed writes are create-only and don't raise.** A taxonomic term that exists returns 409 (the SDK logs it and returns unacknowledged). `save_procedure(update_existing=True)` fails on the server (`update_procedural()` rejects `trigger_conditions`). The seed checks `get_procedure` first and writes the marker only when every entry is present. |
+| 5 | **Procedure steps need the server's `ProceduralStep` shape** (`step_type` ∈ instruction/code/validation/prompt/human_input, `content`, `description`); other keys are rejected. |
+| 6 | **Taxonomic extraction is off.** Delegated messages carry the recalled glossary, so the extractor tried to re-learn dozens of seeded terms per snapshot, and the output came back truncated or malformed (5 dead-lettered tasks). We seed the glossary deliberately. |
+| 7 | **An LLM classifier copies prompt examples.** With "always show latency in microseconds" as an example, gpt-4o-mini saved it as a preference on a plain task. Two booleans (`preference`, `list_preferences`) also confused "remember X" with "what do you remember". Now one required enum `memory: none/remember/recall` and no examples. |
+| 8 | **Recall size.** Unbudgeted, `build_context` returned about 10k characters (mostly glossary) per turn, and the coordinator passes it into every delegated message. Now `max_tokens=2000`. |
+| 9 | **Memory identity.** A turn's memory belongs to the invoking user (`user_id` in the invoke body locally, the human login deployed). A service account invoking an agent makes every turn the service account's (`user_id` ignored), so the Phase 8 shell needs the standalone memory service for per-browser-session memory. |
+| 10 | **The project's memory store isn't on our cluster.** The memory server is per project, so it can't use our workspace `MONGODB_URI`; no `mdb_memory_6aa4558…` exists on any JeffN cluster we can reach. Most likely it uses the project-scoped `MONGODB_URI` (another team's), so our users' memories live in someone else's database (unverified: we can't read that secret). |
+
+Deviations:
+- **Episodic on workstream closure** (`save_episode`) moves to Phase 8 with
+  the shell. Platform extraction already writes episodes per idle
+  conversation.
+- **Reset** can't clear a user's platform memory: there is no
+  delete-by-user API in the SDK.
+- **Promotion/decay** is left to platform consolidation.
+
 ### Spike resources (cleaned up 2026-10-15)
 
 - Atlas (BenLorenzPersonalOrg → project `telco-oss-spike`): Flex cluster

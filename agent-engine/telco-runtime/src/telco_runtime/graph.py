@@ -26,9 +26,13 @@ domain agent over A2A (telco_runtime.a2a). Two per turn, and only at depth
 0: a consulted agent gets no consult tool and a 3-iteration budget, as in
 the legacy shell-mediated consultation.
 
-Not ported (later phases): the shell-injected workstream/memory/preference
-context and the replay recipe (Phase 5), and the VERBATIM short-circuit (no
-IBN/DTW tool returns VERBATIM).
+Added in Phase 5: when called directly (not over A2A), the agent recalls
+the user's Agent Engine memory once per user message and adds it to the
+system prompt (telco_runtime.memory). A2A children get it from the caller.
+
+Not ported (later phases): the shell-injected workstream context and the
+replay recipe (Phase 8), and the VERBATIM short-circuit (no IBN/DTW tool
+returns VERBATIM).
 """
 
 import datetime
@@ -53,7 +57,8 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 from pydantic import SecretStr
 
-from telco_runtime.a2a import A2A_TIMEOUT_S, AGENTS, call_agent, consult_depth
+from telco_runtime import memory as mem
+from telco_runtime.a2a import A2A_TIMEOUT_S, AGENTS, call_agent, consult_depth, is_a2a_child
 
 MAX_ITERATIONS = 5
 CONSULTED_MAX_ITERATIONS = 3
@@ -88,6 +93,8 @@ class AgentState(TypedDict, total=False):
     # Pending canary rollout of a template bump (JSON-safe): set by the
     # review node, consumed by the canary node after the canary call ran.
     canary: dict[str, Any] | None
+    # The user's recalled memory for the current user message ('' if none).
+    memory: str
 
 
 def register_tools(app: App, modules) -> None:
@@ -261,8 +268,16 @@ def build_domain_graph(
             + (APPROVAL_RULES if review else "")
             + (CONSULT_GUIDANCE if consult_offered(state) else "")
             + f"\n\nToday's date is {datetime.date.today().isoformat()}."
+            + (f"\n\n🧠 {mem.MEMORY_PREAMBLE}\n{state['memory']}"
+               if state.get("memory") else "")
         )
         return [system] + [m for m in state["messages"] if not isinstance(m, SystemMessage)]
+
+    def recall(state: AgentState) -> dict:
+        if is_a2a_child():
+            return {"memory": ""}
+        human = next(m for m in reversed(state["messages"]) if isinstance(m, HumanMessage))
+        return {"memory": mem.recall(app, str(human.content))}
 
     def agent(state: AgentState) -> dict:
         bound = with_consult if consult_offered(state) else without_consult
@@ -360,7 +375,9 @@ def build_domain_graph(
     builder.add_node("agent", agent)
     builder.add_node("tools", ToolNode(tools))
     builder.add_node("finalize", finalize)
-    builder.add_edge(START, "agent")
+    builder.add_node("recall", recall)
+    builder.add_edge(START, "recall")
+    builder.add_edge("recall", "agent")
     after_tools_paths: dict = {"agent": "agent", "finalize": "finalize"}
     if review:
         builder.add_node("review", review_node)

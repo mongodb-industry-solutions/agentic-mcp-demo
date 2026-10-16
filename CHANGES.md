@@ -2,6 +2,27 @@
 
 ## 2026-10-15
 
+### Platform memory for the agents (Agent Engine migration, Phase 5)
+
+The three Agent Engine agents now use Agent Engine memory. Each turn starts
+with a recall for the user: what they said to remember, what the platform
+learned from earlier conversations, the procedures and a Telco glossary.
+The coordinator passes that recall to the agents it calls.
+- **Remember and recall:** "Remember that I look after the NYC market"
+  saves it for the user; "What do you remember about me?" lists it. A new
+  session the next day still knows it.
+- **Learned in the background:** after a conversation goes idle, the
+  platform extracts facts, episodes and procedures from it (OpenAI
+  gpt-4o). Facts it learns supersede the ones saved by hand. Verified
+  locally and deployed. Claude through the MongoDB AI Gateway extracted
+  locally but not on the deployed agents.
+- **Seeded once:** about 60 Telco terms (IBN, 3GPP, TM Forum), the three
+  demo flows and the ten IBN/DTW runbooks, shared across the project.
+
+The legacy runtime keeps its own memory (`agent_memories`,
+`user_preferences`) until the cut-over. The Reset button doesn't clear
+platform memory yet: there is no delete-by-user API.
+
 ### NOC coordinator and A2A (Agent Engine migration, Phase 4)
 
 A third Agent Engine agent, `noc-coordinator`, is the front door for NOC
