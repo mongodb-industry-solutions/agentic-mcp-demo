@@ -33,17 +33,20 @@ memory:
   # Extraction reads a project-scoped secret from a fixed list of names
   # (LLM_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY,
   # CEREBRAS_API_KEY). In JeffN, LLM_API_KEY and OPENAI_API_KEY hold another
-  # agent's gateway key that OpenAI rejects, so our OpenAI key sits under
-  # the otherwise unused CEREBRAS_API_KEY name (the name doesn't have to
-  # match the provider). The base URL is pinned because JeffN's project
-  # OPENAI_BASE_URL points at that gateway. Claude through the MongoDB AI
-  # Gateway extracted locally but never deployed. The model is pinned to
-  # the one the agents already use with this key (the provider default,
-  # gpt-5.6-luna, can change with a platform upgrade).
+  # agent's gateway key, so our key sits under the otherwise unused
+  # CEREBRAS_API_KEY name (the name doesn't have to match the provider).
+  # It's a key for the Grove gateway on Azure API Management, which takes
+  # it in an `api-key` header; the memory server keeps a grove-foundry URL
+  # up to /v1. The base URL is explicit because JeffN's project
+  # OPENAI_BASE_URL points at another gateway. (Claude through the MongoDB
+  # AI Gateway extracted locally but never deployed.) The model is pinned
+  # to the one the agents use (the provider default, gpt-5.6-luna, can
+  # change with a platform upgrade).
   extraction_llm:
     provider: openai
     model: gpt-4o
-    base_url: https://api.openai.com/v1
+    base_url: https://grove-gateway-prod.azure-api.net/grove-foundry-prod/openai/v1
+    auth_header: api-key
     api_key_secret: CEREBRAS_API_KEY
 
   background_extraction:

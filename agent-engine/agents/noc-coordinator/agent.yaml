@@ -43,10 +43,14 @@ sandboxes:
     network:
       egress_mode: deny_all
   tool:
-    secrets: ["LLM_API_KEY"]
+    # LLM_BASE_URL/LLM_AUTH_HEADER pick the endpoint (graph._llm): OpenAI or
+    # the Grove gateway.
+    secrets: ["LLM_API_KEY", "LLM_BASE_URL", "LLM_AUTH_HEADER"]
     tools: ["rank_agents", "record_routing", "pending_reviews"]
     network:
       egress_mode: allow_list
       egress:
         - fqdn: api.openai.com
+          ports: [443]
+        - fqdn: grove-gateway-prod.azure-api.net
           ports: [443]

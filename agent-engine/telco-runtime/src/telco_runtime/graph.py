@@ -41,6 +41,7 @@ import os
 from types import ModuleType
 from typing import Annotated, Any, Literal, TypedDict
 
+import httpx
 from agent_engine_sdk_langgraph import App
 from langchain_core.messages import (
     AIMessage,
@@ -134,17 +135,39 @@ def register_consult(app: App, own: str) -> None:
 
 
 def _llm(model: str | None = None) -> ChatOpenAI:
+    """The OpenAI-compatible chat model, on OpenAI or on a gateway.
+
+    LLM_BASE_URL (default api.openai.com) and LLM_AUTH_HEADER come from
+    workspace secrets, so switching endpoints needs no redeploy. The URL is
+    always explicit: a shared project may hold an OPENAI_BASE_URL secret for
+    another agent's gateway, which the openai client would otherwise pick
+    up. LLM_AUTH_HEADER=api-key sends the key in an `api-key` header instead
+    of `Authorization: Bearer` (Grove on Azure API Management), set at send
+    time so it never sits in the client's configuration.
+    """
     api_key = os.environ.get("LLM_API_KEY", "")
     if not api_key:
         raise RuntimeError("LLM_API_KEY is missing; add it to .env or project secrets")
-    # Pinned: a shared project may hold an OPENAI_BASE_URL secret for
-    # another agent's gateway, which the openai client would otherwise pick
-    # up, and api.openai.com is the tool sandbox's only egress.
+    clients: dict[str, Any] = {}
+    if os.environ.get("LLM_AUTH_HEADER", "").lower() == "api-key":
+
+        def _auth(request: httpx.Request) -> None:
+            request.headers.pop("Authorization", None)
+            request.headers["api-key"] = api_key
+
+        async def _aauth(request: httpx.Request) -> None:
+            _auth(request)
+
+        clients = {
+            "http_client": httpx.Client(event_hooks={"request": [_auth]}),
+            "http_async_client": httpx.AsyncClient(event_hooks={"request": [_aauth]}),
+        }
     return ChatOpenAI(
         model=model or os.environ.get("OPENAI_MODEL", "gpt-4o"),
         temperature=0,
         api_key=SecretStr(api_key),
-        base_url="https://api.openai.com/v1",
+        base_url=os.environ.get("LLM_BASE_URL") or "https://api.openai.com/v1",
+        **clients,
     )
 
 

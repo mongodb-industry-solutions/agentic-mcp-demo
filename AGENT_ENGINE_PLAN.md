@@ -708,9 +708,10 @@ Built: `telco_runtime/memory.py` plus memory steps in both graphs.
 - **Seed:** 64 glossary terms (org visibility), the 3 demo flows and the
   10 runbooks as procedures, then a `glossary-v1` marker.
 - **Config:** repo-root `project-config.yaml`. Extraction runs semantic,
-  episodic and procedural on OpenAI `gpt-4o`, with `base_url` pinned and
-  our OpenAI key in the project secret `CEREBRAS_API_KEY` (finding 2).
-  Local dev reads that name from the repo-root `.env`.
+  episodic and procedural on `gpt-4o`, since 2026-10-16 through the Grove
+  gateway (twin section), with the key in the project secret
+  `CEREBRAS_API_KEY` (finding 2). Local dev reads that name from the
+  repo-root `.env`.
 
 Verified locally (`dev up --all`, user `noc-tester-1`, extraction then on
 `claude-sonnet-5-5` through the MongoDB AI Gateway): a stated
@@ -739,7 +740,7 @@ uplift as top priority, Northeast retail SLA compliance).
 | # | Finding |
 |---|---|
 | 1 | **The memory config is project-wide and has no read command.** `memory configure` stores it (ours stored generation 1 in JeffN, so no other team had one) and `memory apply` rolls the project's memory server, which every JeffN agent with memory shares. |
-| 2 | **The extraction key must be a project secret from a fixed list** (`LLM_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `CEREBRAS_API_KEY`). JeffN's `LLM_API_KEY`/`OPENAI_API_KEY` are other agents' keys, so our OpenAI key sits under the unused `CEREBRAS_API_KEY` name: the name doesn't have to match the provider. `base_url` is pinned to `api.openai.com`, since JeffN's project `OPENAI_BASE_URL` points at another gateway (finding 3 of Phase 4). The provider defaults (memory-server code) are `gpt-5.6-luna` and `claude-sonnet-5`; we pin `gpt-4o`, which the key is known to serve. A MongoDB AI Gateway key (`ANTHROPIC_API_KEY`, `base_url` `https://ai-gateway.corp.mongodb.com/anthropic`) extracted locally but never deployed; that secret is deleted. |
+| 2 | **The extraction key must be a project secret from a fixed list** (`LLM_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `CEREBRAS_API_KEY`). JeffN's `LLM_API_KEY`/`OPENAI_API_KEY` are other agents' keys, so our key sits under the unused `CEREBRAS_API_KEY` name (OpenAI's, since 2026-10-16 a Grove gateway key, see the twin section): the name doesn't have to match the provider. `base_url` is pinned to `api.openai.com`, since JeffN's project `OPENAI_BASE_URL` points at another gateway (finding 3 of Phase 4). The provider defaults (memory-server code) are `gpt-5.6-luna` and `claude-sonnet-5`; we pin `gpt-4o`, which the key is known to serve. A MongoDB AI Gateway key (`ANTHROPIC_API_KEY`, `base_url` `https://ai-gateway.corp.mongodb.com/anthropic`) extracted locally but never deployed; that secret is deleted. |
 | 3 | **Extraction supersedes hand-saved memories.** A preference saved with `metadata.kind=preference` was replaced (`is_latest: false`) by the extracted version without that metadata within a minute. `list_preferences` therefore returns the user's semantic memories as a whole, not a metadata filter. |
 | 4 | **Seed writes are create-only and don't raise.** A taxonomic term that exists returns 409 (the SDK logs it and returns unacknowledged). `save_procedure(update_existing=True)` fails on the server (`update_procedural()` rejects `trigger_conditions`). The seed checks `get_procedure` first and writes the marker only when every entry is present. |
 | 5 | **Procedure steps need the server's `ProceduralStep` shape** (`step_type` ∈ instruction/code/validation/prompt/human_input, `content`, `description`); other keys are rejected. |
@@ -762,9 +763,25 @@ Deviations:
 Until the web shell can call the agents (Phase 8 needs a service account,
 see Phase 4 finding 5, and per-user memory, Phase 5 finding 9), the demo
 runs as a twin next to the Kanopy demo, single user:
-- **Chat:** the Atlas Agent Engine UI, with `noc-coordinator` (or
-  `ibn-agent` directly, where a review shows inline). A human login keeps
-  the user's memory identity.
+- **Chat:** the Atlas Agent Engine UI, with `noc-coordinator`. A human
+  login keeps the user's memory identity.
+- **No NOC approvals.** The chat UI offers no way to approve a paused
+  run, and no Pending Reviews page turned up for a project owner. The
+  documented `/resume` endpoint refuses native `interrupt()` pauses anyway
+  (Phase 3 finding 5). The workspace secret `NOC_REVIEW=off` (ibn-agent,
+  dtw-agent) builds the graph without the review node; set it to `on` and
+  sync to bring the approvals back. The code is unchanged otherwise.
+- **LLM through the Grove gateway** (Azure API Management,
+  `grove-gateway-prod.azure-api.net/grove-foundry-prod/openai/v1`). It
+  takes the key in an `api-key` header; `Authorization: Bearer` alone gets
+  401. `graph._llm` reads `LLM_BASE_URL` and `LLM_AUTH_HEADER` (workspace
+  secrets, default OpenAI) and sets the header at send time, so switching
+  back to OpenAI is two secrets and a sync. Both hosts are in the tool
+  sandbox's egress. Extraction uses `auth_header: api-key`; the memory
+  server keeps a `grove-foundry` URL up to `/v1` (`_normalize_extraction_base_url`).
+  The key is in each workspace's `LLM_API_KEY` and the project's
+  `CEREBRAS_API_KEY`. Locally every secret a manifest declares must be
+  non-empty in `.env`, or the `.env` watcher refuses the change.
 - **Dashboards:** `bin/twin.sh start` runs the IBN and DTW dashboards on
   :8160/:8180 against `TWIN_MONGODB_URI`, the agents' cluster, default
   lane. The script refuses a URI on the legacy demo's cluster.
@@ -779,7 +796,11 @@ runs as a twin next to the Kanopy demo, single user:
 
 Verified: a deployed coordinator turn created DTW-SCN-001 and the twin DTW
 dashboard received it live; `bin/twin.sh reset` reseeded the default lane
-and the IBN dashboard picked it up live.
+and the IBN dashboard picked it up live. On Grove with approvals off
+(deployed): ibn-agent took the Munich onboarding through activation
+without a pause (IBN-007 active), and dtw-agent ran Flow A (9 cells over,
+`cell_NYC_Metro_01_B` BLOCK). Grove answered `gpt-4o`, `gpt-4o-mini`,
+tool calls (`tool_choice=required`) and the Responses API.
 
 ### Spike resources (cleaned up 2026-10-15)
 

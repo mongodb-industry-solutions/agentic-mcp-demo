@@ -11,6 +11,11 @@ UI, and `bin/twin.sh start` runs the IBN and DTW dashboards on :8160 and
 reset` puts the demo data back. Single user for now: everyone shares one
 lane, because the chat UI can't select a session lane.
 
+The twin runs without NOC approvals, since the chat UI has no way to
+approve a paused action; `NOC_REVIEW=on` brings them back. Its agents and
+memory extraction call gpt-4o through the Grove gateway instead of OpenAI
+directly.
+
 ## 2026-10-15
 
 ### Platform memory for the agents (Agent Engine migration, Phase 5)
