@@ -328,6 +328,29 @@ async def _get_or_start_session(db, prefix: str) -> DashSession:
         return sess
 
 
+def _refresh_incident_dates() -> int:
+    import seed.ibn_seed as ibn_seed   # needs MONGODB_URI, like this module
+    from pymongo import MongoClient
+    client = MongoClient(MONGO_URI)
+    try:
+        return ibn_seed.refresh_incident_dates(client[DB_NAME])
+    finally:
+        client.close()
+
+
+async def _incident_dates_loop():
+    """Keep the seeded incidents inside the hero query's 180-day window:
+    at startup, then daily (seed/ibn_seed.py, refresh_incident_dates)."""
+    while True:
+        try:
+            moved = await asyncio.to_thread(_refresh_incident_dates)
+            if moved:
+                log.info(f"rolled {moved} seeded incident dates to their designed age")
+        except Exception as e:
+            log.warning(f"incident date refresh failed ({e})")
+        await asyncio.sleep(24 * 3600)
+
+
 async def _reaper_loop():
     """Tear down a session's watcher tasks once its last tab has been gone
     past the idle TTL, so abandoned sessions don't leak change streams."""
@@ -355,9 +378,11 @@ async def lifespan(app: FastAPI):
     app.state.mongo = client
     app.state.db    = client[DB_NAME]
     reaper = asyncio.create_task(_reaper_loop())
+    dates = asyncio.create_task(_incident_dates_loop())
     log.info("Dashboard ready — http://localhost:8060")
     yield
     reaper.cancel()
+    dates.cancel()
     async with _guard:
         for sess in _sessions.values():
             for t in sess.tasks:

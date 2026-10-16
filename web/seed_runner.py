@@ -73,6 +73,7 @@ _IBN_PHASES = [
     ("IBN · telemetry timeseries", ibn_seed.ensure_telemetry_timeseries),
     ("IBN · indexes",              ibn_seed.ensure_indexes),
     ("IBN · fixtures",             ibn_seed.insert_all),
+    ("IBN · incident dates",       ibn_seed.refresh_incident_dates),
     ("IBN · baseline telemetry",   ibn_seed.seed_baseline_telemetry),
     ("IBN · vector index",         ibn_seed.create_vector_index),
 ]
