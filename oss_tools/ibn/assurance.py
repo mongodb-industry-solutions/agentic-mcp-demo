@@ -18,6 +18,7 @@ import logging
 import math
 from pymongo import DESCENDING
 from oss_tools._ctx import ToolSet, collection
+from oss_tools.ibn import slo
 
 
 tools  = ToolSet()
@@ -35,6 +36,7 @@ telemetry         = collection("ibn_telemetry", mutable=True)          # mutable
 compliance_events = collection("ibn_compliance_events", mutable=True)  # mutable
 knowledge_chunks  = collection("ibn_knowledge_chunks")                 # shared (see above)
 policy_snapshots  = collection("ibn_policy_snapshots", mutable=True)   # mutable
+incidents         = collection("ibn_incidents", mutable=True)          # mutable (self-healing)
 
 
 def _km_to_degrees(km: float, lat: float) -> tuple[float, float]:
@@ -129,8 +131,24 @@ def _last_known_metric(intent_id: str, metric: str) -> tuple[float, datetime.dat
     return (doc["value"], doc["ts"]) if doc else (None, None)
 
 
+def _measured(intent_id: str) -> dict | None:
+    """What the SLO monitor measured: the open incident's window, else the
+    last slo.WINDOW_S of telemetry. None without uplink data (inject_event
+    only writes POS latency), so that path keeps the template fingerprint."""
+    incident = incidents.find_one({"intent_id": intent_id, "open": True})
+    if incident and (incident.get("measured") or {}).get("uplink_util_avg_pct") is not None:
+        return incident["measured"]
+    since = datetime.datetime.now() - datetime.timedelta(seconds=slo.WINDOW_S)
+    metrics = slo.measurements(list(telemetry.aggregate(
+        slo.window_pipeline(since, intent_id)))).get(intent_id) or {}
+    if "uplink_util_pct" not in metrics or slo.LATENCY not in metrics:
+        return None
+    return slo.measured_summary(metrics)
+
+
 def _build_fingerprint(intent: dict, observed_pos_latency: float | None) -> str:
-    """Render a natural-language symptom fingerprint for vector search."""
+    """Render a natural-language symptom fingerprint for vector search
+    (the template used when there are no measurements, see _measured)."""
     site_name = "site"
     site = sites.find_one({"_id": intent.get("site_id")}) if intent.get("site_id") else None
     if site:
@@ -326,8 +344,14 @@ def diagnose_violation(intent_id: str = None, site: str = None,
     dlat, dlng = _km_to_degrees(radius_km, lat)
     cutoff = datetime.datetime.now() - datetime.timedelta(days=lookback_days)
 
-    observed = _latest_metric(intent_id, "pos_latency_ms")
-    fingerprint = _build_fingerprint(intent, observed)
+    measured = _measured(intent_id)
+    if measured:
+        targets = intent.get("parsed", {}).get("targets", {})
+        fingerprint = slo.fingerprint_text(
+            site_doc["name"], targets.get("pos_latency_ms", 40),
+            targets.get("segmentation", "strict"), measured)
+    else:
+        fingerprint = _build_fingerprint(intent, _latest_metric(intent_id, "pos_latency_ms"))
 
     # Try the full filter first (the WOW: vector + kind + time + geo box).
     # If empty (likely an index-config issue or geo box too tight), gracefully
@@ -391,6 +415,8 @@ def diagnose_violation(intent_id: str = None, site: str = None,
         "kind":        "diagnose",
         "ts":          datetime.datetime.now(),
         "fingerprint": fingerprint,
+        "fingerprint_source": "measured" if measured else "template",
+        "measured":    measured,
         "pipeline":    json.loads(json.dumps(pipeline, default=str)),
         "filter_level": filter_level,
         "matches":     [
@@ -401,6 +427,21 @@ def diagnose_violation(intent_id: str = None, site: str = None,
         "radius_km":   radius_km,
     }
     compliance_events.insert_one(event_doc)
+    if matches:
+        # The self-healing incident's timeline (web/ibn_assurance.py).
+        top = matches[0]
+        incidents.update_one({"intent_id": intent_id, "open": True}, {
+            "$set": {"alarm.probable_cause": "congestion" if measured else "unknown",
+                     "alarm.root_cause": slo.diagnosis(measured) if measured else None,
+                     "diagnosis": {"top_match": top.get("title"), "runbook_id": top.get("runbook_id"),
+                                   "similarity": round(top.get("score", 0), 3),
+                                   "filter_level": filter_level}},
+            "$push": {"timeline": {"ts": datetime.datetime.now(), "stage": "diagnose",
+                                   "by": "diagnose_violation",
+                                   "note": f"{top.get('site_name')}: {top.get('title')} "
+                                           f"(similarity {top.get('score', 0):.2f}, "
+                                           f"runbook {top.get('runbook_id') or '—'})"}},
+        })
 
     if not matches:
         return (

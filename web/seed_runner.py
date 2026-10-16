@@ -61,6 +61,8 @@ SESSION_STATE_BASES = [
     "routing_decisions",
     "agent_history",        # per-web-session cursor-up recall
     "agent_approvals",      # Agent Engine NOC reviews (oss_tools/approvals.py)
+    "ibn_incidents",        # self-healing incidents (web/ibn_assurance.py)
+    "ibn_sim_runs",         # morning-rush requests (start_morning_rush)
 ]
 
 

@@ -2,6 +2,19 @@
 
 ## 2026-10-16
 
+### Self-healing network, step 1: the network notices by itself
+
+A store's morning rush can now be played as live telemetry: "☀ start the
+morning rush" (or the `start_morning_rush` tool) runs about 105 seconds of
+POS latency, uplink utilization, queue depth and guest throughput on a
+compressed 08:55–10:05 clock. Nobody declares a violation any more: an SLO
+monitor in the IBN dashboard watches the data, opens an incident when POS
+latency stays over the target, and closes it when it recovers, with the
+time to recover. A store that already has the latency runbook stays green
+through the same rush. Diagnosis now describes what was measured, not a
+fixed text. "Inject morning rush" still works as before. Next: the system
+diagnoses and fixes it by itself (`SELF_HEALING_PLAN.md`).
+
 ### Subscriber identifiers redacted (Agent Engine migration, Phase 6)
 
 The Agent Engine agents no longer show subscriber identifiers. Ask for
