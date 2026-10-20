@@ -36,8 +36,9 @@ from openai import AsyncOpenAI
 class RegistryMixin:
 
     async def _watch_servers(self):
-        """Re-sync registry whenever a .py file in mcp_servers/ is added,
-        changed, or deleted. watchfiles debounces rapid saves automatically.
+        """Re-sync registry whenever a .py file in mcp_servers/ (or the
+        oss_tools/ code behind the shims) is added, changed, or deleted.
+        watchfiles debounces rapid saves automatically.
 
         Hot-reload is a local-dev convenience only — in a container image
         the code is immutable, so set DEMO_DISABLE_FILE_WATCH=1 in
@@ -47,8 +48,10 @@ class RegistryMixin:
         files once a second costs ~nothing."""
         if os.environ.get("DEMO_DISABLE_FILE_WATCH"):
             return
+        oss_dir = self.server_dir.resolve().parent / "oss_tools"
+        watch = [self.server_dir] + ([oss_dir] if oss_dir.is_dir() else [])
         try:
-            async for _ in awatch(self.server_dir,
+            async for _ in awatch(*watch,
                                   watch_filter=lambda _, p: p.endswith(".py"),
                                   force_polling=True, poll_delay_ms=1000):
                 await self._sync_registry()
@@ -175,11 +178,36 @@ class RegistryMixin:
         # leaves headroom while still keeping the embedding focused.
         return result[:1500]
 
-    def _compute_file_hash(self, file_path: Path) -> str:
-        """Compute hash of file content to detect changes"""
+    @staticmethod
+    def _oss_tools_deps(file_path: Path) -> List[Path]:
+        """oss_tools/ modules a shim server imports (plus _ctx.py, which every
+        one of them shares). Folded into the file hash so editing a tool body
+        still evicts the running server, as it did before the code moved out
+        of mcp_servers/ (AGENT_ENGINE_PLAN.md, Phase 1)."""
+        root = file_path.resolve().parent.parent
+        deps: List[Path] = []
         try:
-            with open(file_path, "rb") as f:
-                return hashlib.sha256(f.read()).hexdigest()
+            tree = ast.parse(file_path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError):
+            return deps
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("oss_tools"):
+                base = root.joinpath(*node.module.split("."))
+                for alias in node.names:
+                    candidate = base / f"{alias.name}.py"
+                    deps.append(candidate if candidate.exists() else base.with_suffix(".py"))
+        if deps:
+            deps.append(root / "oss_tools" / "_ctx.py")
+        return sorted({d for d in deps if d.exists()})
+
+    def _compute_file_hash(self, file_path: Path) -> str:
+        """Compute hash of file content (and any oss_tools/ code it imports)
+        to detect changes"""
+        try:
+            h = hashlib.sha256(file_path.read_bytes())
+            for dep in self._oss_tools_deps(file_path):
+                h.update(dep.read_bytes())
+            return h.hexdigest()
         except:
             return ""
 

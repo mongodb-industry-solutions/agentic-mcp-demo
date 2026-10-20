@@ -1,0 +1,104 @@
+# IBN domain agent (Phase 2 of AGENT_ENGINE_PLAN.md). Built from the repo
+# root (monorepo agent.yaml) so oss_tools/ and agents/catalog/ are in the
+# build archive.
+name: ibn-agent
+description: >-
+  Intent-Based Networking specialist for retail customer networks: intent
+  capture, feasibility, plan activation, live SLO compliance, hybrid
+  vector-search diagnosis of violations, runbooks, template folding.
+entrypoint: ibn_agent.main:app
+framework: langgraph
+agent_card:
+  summary: NOC assistant for the IBN intent lifecycle and service assurance.
+  capabilities:
+    - intent-lifecycle
+    - feasibility-and-activation
+    - slo-assurance
+    - incident-diagnosis
+    - telemetry-simulation
+features:
+  durable_workflow: true
+  # Agent Engine memory (Phase 5): recall when called directly, turn
+  # recording and extraction. Guardrails come in Phase 6.
+  memory: true
+version: 0.1.0
+# Every A2A call (coordinator delegation, consultation) opens a new
+# session, which holds a sandbox for the idle TTL (600 s). That TTL is
+# project-wide in the shared JeffN project, so capacity comes from replicas.
+scaling:
+  replicas: 8
+# A2A (Phase 4): called by the NOC coordinator and consulted by dtw-agent;
+# no other agent in the shared project may call it.
+a2a:
+  enabled: true
+  allowed_callers:
+    - c47ee072257dbccb667aec2b   # noc-coordinator, local dev
+    - ws-6ad1060d6189a50fdc472a65   # noc-coordinator, JeffN
+    - 79d67a29b594912b137675c2   # dtw-agent, local dev
+    - ws-6ad0efe7ea67bce171583766   # dtw-agent, JeffN
+  skills:
+    - name: intent-lifecycle
+      description: "Capture, list, inspect and cancel retail network intents (POS latency, segmentation, kiosks)."
+    - name: feasibility-and-activation
+      description: "Check an intent against site inventory, propose a plan and activate it (NOC-approved)."
+    - name: slo-assurance
+      description: "Report live SLO compliance per intent and site."
+    - name: incident-diagnosis
+      description: "Diagnose SLO violations with hybrid vector search and apply runbooks (NOC-approved)."
+  input_modes: ["text/plain"]
+  output_modes: ["text/plain"]
+# Least privilege. app.llm() calls execute in the TOOL sandbox (the SDK's
+# LLM protocol runs in the tool pod), so that sandbox holds the LLM key and
+# the only external egress (OpenAI); the linked Atlas cluster is part of
+# the platform base policy. The agent sandbox runs the graph and
+# consult_agent (A2A lives there); it needs the key only to construct the
+# client and gets no egress.
+sandboxes:
+  agent:
+    # NOC_REVIEW=off skips the NOC approval step (main.py).
+    secrets: ["LLM_API_KEY", "NOC_REVIEW"]
+    tools: ["consult_agent"]
+    network:
+      egress_mode: deny_all
+  tool:
+    # LLM_BASE_URL/LLM_AUTH_HEADER pick the endpoint (graph._llm): OpenAI or
+    # the Grove gateway.
+    secrets: ["LLM_API_KEY", "LLM_BASE_URL", "LLM_AUTH_HEADER"]
+    # Explicit (a "*" would also claim consult_agent): add new oss_tools
+    # functions here.
+    tools:
+      # oss_tools.ibn.intent
+      - submit_intent
+      - list_intents
+      - get_intent
+      - cancel_intent
+      # oss_tools.ibn.inventory
+      - list_sites
+      - list_resources
+      - get_topology
+      - find_nearby_spare
+      # oss_tools.ibn.feasibility
+      - check_feasibility
+      - propose_plan
+      - activate_plan
+      # oss_tools.ibn.assurance
+      - get_compliance
+      - diagnose_violation
+      - apply_runbook
+      - update_template_version
+      - list_runbooks
+      # oss_tools.ibn.telemetry
+      - inject_event
+      - start_morning_rush
+      - seed_baseline
+      - reset_telemetry
+      # oss_tools.approvals (internal: called by the review node)
+      - open_review
+      - close_review
+    network:
+      egress_mode: allow_list
+      egress:
+        - fqdn: api.openai.com
+          ports: [443]
+        - fqdn: grove-gateway-prod.azure-api.net
+          ports: [443]

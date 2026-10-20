@@ -1,0 +1,26 @@
+[project]
+name = "telco-runtime"
+version = "0.1.0"
+description = "Shared LangGraph domain-agent graph for the Telco OSS Agent Engine agents."
+requires-python = ">=3.11"
+dependencies = [
+    "agent-engine-runner-shared[mongodb]>=0.11.3,<1",
+    "agent-engine-sdk-langgraph>=0.11.3,<1",
+    "langchain>=1.0.0",
+    "httpx",
+    "langchain-openai>=1.1.12",
+    "oss-tools",
+    "telco-catalog",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/telco_runtime"]
+
+# Rebuild when the code changes, not only pyproject.toml (uv's default
+# cache key): the agents install this as a non-editable path dependency.
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "**/*.py" }]

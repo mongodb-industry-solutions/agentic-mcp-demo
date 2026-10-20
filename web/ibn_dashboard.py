@@ -35,6 +35,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from pymongo import AsyncMongoClient
 
+from web import ibn_assurance as assurance
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 log = logging.getLogger("ibn_dashboard")
 
@@ -60,6 +62,7 @@ class DashSession:
     clients: set = field(default_factory=set)
     tasks: list = field(default_factory=list)
     last_activity: float = 0.0
+    rushing: set = field(default_factory=set)   # intent ids a morning rush is playing for
 
 
 _sessions: dict[str, DashSession] = {}   # keyed by prefix ("" = default lane)
@@ -119,9 +122,11 @@ async def all_intents(db, pfx):
 
 
 async def recent_telemetry(db, pfx, intent_id, seconds=120):
+    # POS latency only: the page plots that one, and a morning rush writes
+    # four metrics per second (web/ibn_assurance.py).
     cutoff = datetime.datetime.now() - datetime.timedelta(seconds=seconds)
     cur = db[pfx + "ibn_telemetry"].find(
-        {"meta.intent_id": intent_id, "ts": {"$gte": cutoff}}
+        {"meta.intent_id": intent_id, "meta.metric": "pos_latency_ms", "ts": {"$gte": cutoff}}
     ).sort("ts", 1)
     return [d async for d in cur]
 
@@ -238,7 +243,8 @@ async def live_telemetry_writer(db, session: DashSession, interval_seconds: floa
     Write one telemetry sample per active intent every interval_seconds,
     into THIS session's prefixed telemetry collection. Keeps the gauge bar
     alive and visibly fluctuating during the demo. Skips violated intents
-    so the spike stays visible until diagnosed.
+    so the spike stays visible until diagnosed, and intents a morning rush
+    is playing for (the rush writes their telemetry).
     """
     pfx = session.prefix
     log.info(f"live telemetry writer started (prefix={pfx!r}, {interval_seconds:.1f}s)")
@@ -248,7 +254,7 @@ async def live_telemetry_writer(db, session: DashSession, interval_seconds: floa
         try:
             await asyncio.sleep(interval_seconds)
             cur = intents_coll.find({"status": "active"})
-            active = [d async for d in cur]
+            active = [d async for d in cur if d["_id"] not in session.rushing]
             if not active:
                 continue
             now = datetime.datetime.now()
@@ -298,17 +304,51 @@ async def _get_or_start_session(db, prefix: str) -> DashSession:
         sess = _sessions.get(prefix)
         if sess is None:
             sess = DashSession(prefix=prefix, last_activity=time.monotonic())
+            try:
+                await assurance.ensure_lane(db, prefix)
+            except Exception as e:
+                log.warning(f"assurance indexes not ensured (prefix={prefix!r}): {e}")
+
+            async def notify(msg, sess=sess):
+                await broadcast(sess, msg)
+
             sess.tasks = [
                 asyncio.create_task(watch_intents(db, sess)),
                 asyncio.create_task(watch_compliance(db, sess)),
                 asyncio.create_task(poll_telemetry(db, sess)),
                 asyncio.create_task(watch_plans(db, sess)),
                 asyncio.create_task(live_telemetry_writer(db, sess)),
+                # The self-healing loop's network side (SELF_HEALING_PLAN.md, S1).
+                asyncio.create_task(assurance.rush_runner(db, prefix, notify, sess.rushing)),
+                asyncio.create_task(assurance.slo_evaluator(db, prefix, notify, sess.rushing)),
             ]
             _sessions[prefix] = sess
             log.info(f"session lane started (prefix={prefix!r}, "
                      f"{len(_sessions)} active)")
         return sess
+
+
+def _refresh_incident_dates() -> int:
+    import seed.ibn_seed as ibn_seed   # needs MONGODB_URI, like this module
+    from pymongo import MongoClient
+    client = MongoClient(MONGO_URI)
+    try:
+        return ibn_seed.refresh_incident_dates(client[DB_NAME])
+    finally:
+        client.close()
+
+
+async def _incident_dates_loop():
+    """Keep the seeded incidents inside the hero query's 180-day window:
+    at startup, then daily (seed/ibn_seed.py, refresh_incident_dates)."""
+    while True:
+        try:
+            moved = await asyncio.to_thread(_refresh_incident_dates)
+            if moved:
+                log.info(f"rolled {moved} seeded incident dates to their designed age")
+        except Exception as e:
+            log.warning(f"incident date refresh failed ({e})")
+        await asyncio.sleep(24 * 3600)
 
 
 async def _reaper_loop():
@@ -338,9 +378,11 @@ async def lifespan(app: FastAPI):
     app.state.mongo = client
     app.state.db    = client[DB_NAME]
     reaper = asyncio.create_task(_reaper_loop())
+    dates = asyncio.create_task(_incident_dates_loop())
     log.info("Dashboard ready — http://localhost:8060")
     yield
     reaper.cancel()
+    dates.cancel()
     async with _guard:
         for sess in _sessions.values():
             for t in sess.tasks:
@@ -379,6 +421,24 @@ async def intent_snapshot(intent_id: str, session: str = ""):
     }))
 
 
+async def handle_client_message(db, pfx: str, text: str) -> None:
+    """Requests from the page. `start_rush` queues a morning rush for an
+    active intent; the lane's rush runner plays it."""
+    try:
+        msg = json.loads(text)
+    except ValueError:
+        return
+    if not isinstance(msg, dict) or msg.get("type") != "start_rush":
+        return
+    intent = await db[pfx + "ibn_intents"].find_one(
+        {"_id": str(msg.get("intent_id") or ""), "status": {"$in": ["active", "violated"]}})
+    if not intent:
+        return
+    await db[pfx + "ibn_sim_runs"].insert_one({
+        "intent_id": intent["_id"], "kind": "morning_rush", "status": "requested",
+        "requested_at": datetime.datetime.now(), "requested_by": "dashboard"})
+
+
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
@@ -397,7 +457,7 @@ async def ws_endpoint(ws: WebSocket):
 
     try:
         while True:
-            await ws.receive_text()
+            await handle_client_message(app.state.db, pfx, await ws.receive_text())
     except WebSocketDisconnect:
         pass
     finally:

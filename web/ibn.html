@@ -159,6 +159,15 @@
   .status-pill.planned    { background: var(--purple-dim);               color: var(--purple); }
   .status-pill.cancelled,
   .status-pill.closed     { background: var(--surface-2);                color: var(--text-dim); }
+  /* Phase 3 (Agent Engine): the agent is suspended on a NOC review of an
+     action that would change this intent (approval doc in agent_approvals). */
+  .status-pill.awaiting   { background: rgba(255,209,102,0.12);          color: var(--yellow);
+                            animation: awaiting-pulse 1.6s ease-in-out infinite; }
+  @keyframes awaiting-pulse { 50% { opacity: 0.55; } }
+  .approval-callout {
+    border-left: 3px solid var(--yellow); padding: 8px 12px; margin-bottom: 16px;
+    background: rgba(255,209,102,0.06); font-size: 15px; color: var(--text-2);
+  }
 
   .raw-text {
     font-style: italic; color: var(--text-2); font-size: 16px;
@@ -583,6 +592,14 @@
     .aha-grid { grid-template-columns: 1fr; }
     .aha-arrow { transform: rotate(90deg); padding: 4px 0; text-align: center; }
   }
+  /* Self-healing S1: morning rush control + status (SELF_HEALING_PLAN.md) */
+  .rush-row { display: flex; align-items: center; gap: 12px; margin: 10px 0 4px; }
+  .rush-btn { background: transparent; color: var(--cyan); border: 1px solid var(--cyan);
+              border-radius: 6px; padding: 5px 12px; font-size: 14px; cursor: pointer; }
+  .rush-btn:disabled { opacity: 0.4; cursor: default; }
+  .rush-status { color: var(--text-dim); font-size: 14px; font-family: var(--mono); }
+  .rush-status .open { color: var(--red); }
+  .rush-status .ok { color: var(--green); }
 </style>
 </head>
 <body>
@@ -710,6 +727,8 @@ let state = {
   site: null,
   telemetry: [],
   events: [],
+  rush: {},       // intent_id → latest morning-rush tick {clock, load, status}
+  incident: {},   // intent_id → latest self-healing incident
 };
 
 // ── Formatting helpers ──
@@ -755,8 +774,12 @@ function renderIntent() {
     <div class="intent-site">${esc(siteName)}</div>
     <div class="status-line">
       <span class="status-pill ${status}">${esc(status)}</span>
+      ${i.pending_approval ? `<span class="status-pill awaiting">⏸ awaiting NOC approval</span>` : ''}
       ${i.activated_at ? `<span style="color:var(--text-dim); font-size:14px;">activated ${fmtDate(i.activated_at)}</span>` : ''}
     </div>
+    ${i.pending_approval ? `<div class="approval-callout"><strong>${esc(i.pending_approval.approval_id)}</strong> ·
+      ${esc(i.pending_approval.title || i.pending_approval.action)}. The agent is paused until a
+      NOC reviewer decides in Agent Engine.</div>` : ''}
     <div class="raw-text">${esc(i.raw_text || '—')}</div>
     <div class="exec-callout">
       <strong>Intent understood.</strong> The customer's business outcome — captured verbatim above —
@@ -915,8 +938,15 @@ function renderAssurance() {
       </div>
     </div>` : '';
 
+  const rushHTML = isProvisioned ? `
+    <div class="rush-row">
+      <button class="rush-btn" id="rushBtn" onclick="startRush()">☀ Start morning rush</button>
+      <span class="rush-status" id="rushStatus"></span>
+    </div>` : '';
+
   body.innerHTML = `
     <div class="sla-table">${slaRows}</div>
+    ${rushHTML}
     ${gaugeHTML}
     ${bannerHTML}
     <div class="events-feed" style="margin-top: 8px;">
@@ -932,6 +962,34 @@ function renderAssurance() {
       }
     </div>
   `;
+  patchRush();
+}
+
+// ── Morning rush (self-healing S1) ──
+function startRush() {
+  if (!state.focused || !ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify({type: 'start_rush', intent_id: state.focused._id}));
+  state.rush[state.focused._id] = {clock: '08:55', load: 0, status: 'requested'};
+  patchRush();
+}
+
+function patchRush() {
+  const el = document.getElementById('rushStatus');
+  const btn = document.getElementById('rushBtn');
+  if (!el || !state.focused) return;
+  const r = state.rush[state.focused._id];
+  const inc = state.incident[state.focused._id];
+  const running = r && !['done', 'stopped', 'cancelled'].includes(r.status);
+  if (btn) btn.disabled = !!running;
+  let text = '';
+  if (running) text = `☀ ${esc(r.clock)} · load ${Math.round((r.load || 0) * 100)}%` +
+                      (r.mitigated ? ' · EF queue in place' : '');
+  if (inc && inc.status === 'open') {
+    text += ` <span class="open">● incident open since ${fmtTime(inc.opened_at)}</span>`;
+  } else if (inc && inc.status === 'recovered') {
+    text += ` <span class="ok">✓ recovered in ${Math.round(inc.mttr_s)} s</span>`;
+  }
+  el.innerHTML = text;
 }
 
 // ── Telemetry-only patch — updates live value + gauge without re-rendering the panel ──
@@ -996,7 +1054,7 @@ function renderTabs() {
       <div class="tab${isActive ? ' active' : ''}" id="tab-${id}"
            onclick="switchFocus('${id}')">
         <span class="tab-name">${esc(siteName)}</span>
-        <span class="tab-status ${status}">${status}</span>
+        <span class="tab-status ${status}">${status}</span>${intent.pending_approval ? ' <span title="awaiting NOC approval">⏸</span>' : ''}
       </div>`;
   }).join('');
 }
@@ -1242,6 +1300,18 @@ function connect() {
         state.telemetry = msg.samples;
         patchAssuranceTelemetry();
       }
+      return;
+    }
+
+    if (msg.type === 'rush') {
+      state.rush[msg.intent_id] = {...(state.rush[msg.intent_id] || {}), ...msg};
+      patchRush();
+      return;
+    }
+
+    if (msg.type === 'incident') {
+      state.incident[msg.doc.intent_id] = msg.doc;
+      patchRush();
       return;
     }
 

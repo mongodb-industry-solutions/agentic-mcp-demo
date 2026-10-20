@@ -1,0 +1,83 @@
+# Project-level settings go in this file.
+#
+# Telco OSS (AGENT_ENGINE_PLAN.md, Phase 5). Memory configuration is
+# project-scoped: `agentengine memory configure` applies this block to every
+# agent in the Agent Engine project (in the shared JeffN project, to the
+# other teams' agents too). Local dev (`agentengine dev up`) reads it from
+# here, the repo root.
+
+memory:
+  # Memory-server log level. One of: debug | info | warning | error | critical.
+  log_level: info
+
+  # Voyage AI embeddings.
+  # The Voyage API key is NOT set here — upload it as a project secret with:
+  #   agentengine secret set VOYAGE_API_KEY
+  voyage:
+    model: "voyage-4-large"
+    dimension: 1024
+
+  # Short-term memory write-path behaviour.
+  short_term:
+    # Embed each turn's content when it is written (only when the caller supplies
+    # no embedding), so it is searchable by relevance immediately instead of
+    # waiting for background embedding. Adds embedding latency to the write.
+    embed_on_write: false
+
+  # LLM the memory server uses for background extraction.
+  # Agents can use a different provider/model.
+  # After changing it, run:
+  #   agentengine memory configure && agentengine memory apply
+  # The API key is NOT set here. Upload it as a project secret:
+  #   agentengine secret set LLM_API_KEY --sync
+  # Extraction reads a project-scoped secret from a fixed list of names
+  # (LLM_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY,
+  # CEREBRAS_API_KEY). In JeffN, LLM_API_KEY and OPENAI_API_KEY hold another
+  # agent's gateway key, so our key sits under the otherwise unused
+  # CEREBRAS_API_KEY name (the name doesn't have to match the provider).
+  # It's a key for the Grove gateway on Azure API Management, which takes
+  # it in an `api-key` header; the memory server keeps a grove-foundry URL
+  # up to /v1. The base URL is explicit because JeffN's project
+  # OPENAI_BASE_URL points at another gateway. (Claude through the MongoDB
+  # AI Gateway extracted locally but never deployed.) The model is pinned
+  # to the one the agents use (the provider default, gpt-5.6-luna, can
+  # change with a platform upgrade).
+  extraction_llm:
+    provider: openai
+    model: gpt-4o
+    base_url: https://grove-gateway-prod.azure-api.net/grove-foundry-prod/openai/v1
+    auth_header: api-key
+    api_key_secret: CEREBRAS_API_KEY
+
+  background_extraction:
+    # Snapshot promotion
+    snapshot:
+      max_messages: 20
+      stale_minutes: 1
+
+  # Extraction pipeline. The 'enabled' list below selects which memory types are
+  # extracted in the background; it ships with a sensible default set. Edit the
+  # list to add or remove types, or set it to [] to turn extraction off entirely.
+  # Valid types: semantic, episodic, taxonomic, preferences, procedural.
+  # Each type may also take an optional 'prompt' to override the system default, e.g.
+  #   semantic:
+  #     prompt: "..."
+  # NOTE: removing the 'enabled' line entirely falls back to the server default;
+  # keep an explicit list (or []) to control exactly which types run.
+  # No taxonomic extraction: the glossary is seeded (telco_runtime.memory),
+  # and transcripts carry the recalled glossary, so the extractor tried to
+  # re-learn dozens of seeded terms per snapshot and its JSON came back
+  # truncated or malformed (dead-lettered tasks).
+  #
+  # No procedural extraction either: it never stored a procedure. The server
+  # asks for plain JSON mode without passing the schema; gpt-4o (also 4.1,
+  # 4.1-mini) names the field "name" instead of "procedure", so the extractor
+  # drops every procedure as an invalid name, and for a conversation without
+  # one gpt-4o often answers {} ("missing required key 'procedures'", then
+  # dead-lettered). A per-type 'prompt' can't fix it: this memory server
+  # reads it but never passes it to the extractor. The seeded procedures
+  # (demo flows, runbooks) are written by the agents and stay.
+  extraction:
+    enabled:
+      - semantic
+      - episodic

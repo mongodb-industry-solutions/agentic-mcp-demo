@@ -1,0 +1,109 @@
+# DTW domain agent (Phase 2 of AGENT_ENGINE_PLAN.md). Built from the repo
+# root (monorepo agent.yaml) so oss_tools/ and agents/catalog/ are in the
+# build archive.
+name: dtw-agent
+description: >-
+  Digital Twin specialist for ACME Mobile what-if simulations: QoS uplifts,
+  APN/PCRF changes, roaming, scenario lifecycle, $graphLookup impact walks,
+  per-cell load projection, and vector search over past incidents.
+entrypoint: dtw_agent.main:app
+framework: langgraph
+agent_card:
+  summary: NOC assistant for network what-if simulation on the ACME digital twin.
+  capabilities:
+    - qos-what-if
+    - policy-change-simulation
+    - topology-impact
+    - traffic-load-estimation
+    - scenario-lifecycle
+features:
+  durable_workflow: true
+  # Agent Engine memory (Phase 5): recall when called directly, turn
+  # recording and extraction. Guardrails come in Phase 6.
+  memory: true
+version: 0.1.0
+# Every A2A call (coordinator delegation, consultation) opens a new
+# session, which holds a sandbox for the idle TTL (600 s). That TTL is
+# project-wide in the shared JeffN project, so capacity comes from replicas.
+scaling:
+  replicas: 8
+# A2A (Phase 4): called by the NOC coordinator and consulted by ibn-agent;
+# no other agent in the shared project may call it.
+a2a:
+  enabled: true
+  allowed_callers:
+    - c47ee072257dbccb667aec2b   # noc-coordinator, local dev
+    - ws-6ad1060d6189a50fdc472a65   # noc-coordinator, JeffN
+    - 6dd3c9bae3ceecbce7b6d01d   # ibn-agent, local dev
+    - ws-6ad0efe66189a50fdc461f8d   # ibn-agent, JeffN
+  skills:
+    - name: qos-what-if
+      description: "Simulate QoS changes (e.g. downlink uplifts) on the ACME Mobile digital twin: per-cell load, bottlenecks."
+    - name: policy-change-simulation
+      description: "Simulate APN/PCRF and roaming changes: control-plane pressure on HSS/MME/PGW."
+    - name: topology-impact
+      description: "Walk the RAN/core dependency graph for a plan, market or element."
+    - name: scenario-lifecycle
+      description: "Create, list, compare and delete what-if scenarios."
+  input_modes: ["text/plain"]
+  output_modes: ["text/plain"]
+# Least privilege. app.llm() calls execute in the TOOL sandbox (the SDK's
+# LLM protocol runs in the tool pod), so that sandbox holds the LLM key and
+# the only external egress (OpenAI); the linked Atlas cluster is part of
+# the platform base policy. The agent sandbox runs the graph and
+# consult_agent (A2A lives there); it needs the key only to construct the
+# client and gets no egress.
+sandboxes:
+  agent:
+    # NOC_REVIEW=off skips the NOC approval step (main.py).
+    secrets: ["LLM_API_KEY", "NOC_REVIEW"]
+    tools: ["consult_agent"]
+    network:
+      egress_mode: deny_all
+  tool:
+    # LLM_BASE_URL/LLM_AUTH_HEADER pick the endpoint (graph._llm): OpenAI or
+    # the Grove gateway.
+    secrets: ["LLM_API_KEY", "LLM_BASE_URL", "LLM_AUTH_HEADER"]
+    # Explicit (a "*" would also claim consult_agent): add new oss_tools
+    # functions here.
+    tools:
+      # oss_tools.dtw.plan
+      - describe_plan
+      - get_qos_profile
+      - list_plans
+      - compare_qos_profiles
+      - subscribers_for_plan
+      # oss_tools.dtw.topology
+      - list_markets
+      - get_network_element
+      - find_cells_in_market
+      - traverse_dependencies
+      - find_path_between
+      # oss_tools.dtw.traffic
+      - list_time_windows
+      - get_traffic_model
+      - estimate_cell_load
+      - peak_hours_for_market
+      # oss_tools.dtw.scenario
+      - create_scenario
+      - update_scenario
+      - list_scenarios
+      - get_scenario
+      - cancel_scenario
+      - delete_scenario
+      - delete_all_scenarios
+      # oss_tools.dtw.simulation
+      - simulate_qos_change
+      - simulate_roaming_change
+      - diff_scenarios
+      - get_simulation_result
+      # oss_tools.approvals (internal: called by the review node)
+      - open_review
+      - close_review
+    network:
+      egress_mode: allow_list
+      egress:
+        - fqdn: api.openai.com
+          ports: [443]
+        - fqdn: grove-gateway-prod.azure-api.net
+          ports: [443]
