@@ -106,8 +106,13 @@ class ToolSet(list):
     """Ordered list of a module's tool functions. `@tools.tool` registers a
     function without binding it to a runtime; mcp_servers/ shims hand the
     list to FastMCP, and Agent Engine agents wrap each function with
-    `@app.tool()`."""
+    `@app.tool()`. `@tools.tool(timeout_s=…)` raises the Agent Engine tool
+    timeout (30 s by default) for a tool that waits."""
 
-    def tool(self, fn):
-        self.append(fn)
-        return fn
+    def tool(self, fn=None, *, timeout_s: int | None = None):
+        def register(fn):
+            if timeout_s:
+                fn.timeout_s = timeout_s
+            self.append(fn)
+            return fn
+        return register(fn) if fn else register

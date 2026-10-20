@@ -100,10 +100,12 @@ class AgentState(TypedDict, total=False):
 
 def register_tools(app: App, modules) -> None:
     """Register every function of each oss_tools module's ToolSet as an
-    Agent Engine tool running in the tool sandbox."""
+    Agent Engine tool running in the tool sandbox, with the tool's own
+    timeout when it waits (ToolSet.tool(timeout_s=…))."""
     for module in modules:
         for fn in module.tools:
-            app.tool(is_local=False)(fn)
+            timeout = getattr(fn, "timeout_s", None)
+            app.tool(is_local=False, **({"timeout": timeout} if timeout else {}))(fn)
 
 
 def register_consult(app: App, own: str) -> None:
@@ -328,6 +330,26 @@ def build_domain_graph(
                   if len(last.tool_calls) > 1 else [])
         if tool_call["name"] not in reviewed:
             return {"messages": single} if single else {}
+        if tool_call["name"] == "apply_runbook" and tool_call["args"].get("autonomous"):
+            # Self-healing (SELF_HEALING_PLAN.md, S2): inside the autonomy
+            # envelope the policy approves, recorded like a review; outside
+            # it a NOC reviewer decides, and an approved call then runs as
+            # an ordinary (non-autonomous) one.
+            args = tool_call["args"]
+            verdict = json.loads(call(
+                f"{tool_call['id']}:autonomy", "check_autonomy", runbook_id=args.get("runbook_id"),
+                intent_id=args.get("intent_id"), site=args.get("site")))
+            if verdict.get("decision") == "allow":
+                opened = json.loads(call(f"{tool_call['id']}:open", "open_review",
+                                         action="apply_runbook", arguments=args))
+                if not opened.get("skip"):
+                    call(f"{tool_call['id']}:close", "close_review",
+                         approval_id=opened["approval_id"], decision="approve",
+                         reviewer_notes="inside the autonomy envelope",
+                         decided_by=verdict["policy"])
+                return {"messages": single} if single else {}
+            tool_call = dict(tool_call, args={**args, "autonomous": False})
+            single = [AIMessage(content=last.content, tool_calls=[tool_call], id=last.id)]
         opened, decision, notes = ask(tool_call["id"], tool_call["name"], tool_call["args"])
         if opened is None or decision == "approve":
             return {"messages": single} if single else {}

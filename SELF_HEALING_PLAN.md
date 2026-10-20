@@ -1,6 +1,6 @@
 # Self-Healing Network: from TM Forum Autonomy Level 3 to Level 4
 
-**Status:** plan, 2026-10-16. S1 (sense + detect) built on branch `self-healing/s1-sense-detect`, see "S1 as built" at the end.
+**Status:** plan, 2026-10-16. S1 (sense + detect) and S2 (respond in the twin) are built, see "S1 as built" and "S2 as built" at the end. Work continues on `feature/agent-engine-migration` (ISTTH-969).
 
 ## The pitch
 
@@ -321,3 +321,35 @@ to show them is as a slice for one service.
   - **Similarity:** the measured fingerprint finds the same matches as the template (Schwabing 0.726 vs 0.74, Berlin 0.751 vs 0.758).
 - **Found on the way (fixed separately, #39):** the seeded incidents had aged out of the hero query's 180-day window, so Marienplatz got RB-003 instead of RB-007.
 - **Input for S2:** Berlin's nearest precedent is a camera-uplink/PoE incident (RB-005, similarity 0.75), a weak match. The envelope's similarity threshold (0.80) should escalate it, which makes it the natural "it knows what it doesn't know" case.
+
+## S2 as built (2026-10-20, branch `feature/agent-engine-migration`)
+
+- **The envelope as data:** `oss_tools/ibn/autonomy.py`.
+  - One policy document per lane in `ibn_autonomy_policy`. Defaults (v1): level **L3**, similarity ≥ 0.80, at most 3 autonomous actions per hour, no deny list, no change freeze. Reset clears it, so a lane starts at L3.
+  - `evaluate()` is the only decision point. It reads the open incident, its recorded diagnosis (top match, runbook, similarity), the knowledge base (the runbook resolved a past incident) and the lane's past actions, never the model's arguments.
+  - Each decision lands once on the incident's timeline (stage `decide`, by `autonomy-policy v1`). An escalation sets the status `escalated` with its reasons.
+- **The tools** (in `oss_tools/ibn/assurance.py`, so both runtimes get them):
+  - **`check_autonomy(runbook_id, intent_id)`:** returns JSON with allow/escalate and every check with its result.
+  - **`apply_runbook(…, autonomous=True)`:** runs the check again. Outside the envelope it applies nothing. Inside, it writes the `runbook_applied` history entry (which the rush model reads), sets the incident to `mitigating` and asserts nothing; the SLO monitor declares recovery. Without `autonomous` it behaves exactly as before.
+  - **`await_recovery(intent_id, timeout_s=60)`:** waits up to 75 s until the monitor closes the incident; on timeout it escalates. Its Agent Engine tool timeout is 90 s (`ToolSet.tool(timeout_s=…)`; the default is 30 s).
+- **On Agent Engine with the NOC review on:** for an autonomous `apply_runbook`, the review node calls `check_autonomy` first.
+  - Inside the envelope, it records the approval with `decided_by: autonomy-policy v1` and doesn't pause.
+  - Outside, a NOC reviewer decides as usual, and an approved call runs as an ordinary one.
+  - The twin runs with `NOC_REVIEW=off`, so there the tool's own check decides.
+- **The responder:** `bin/twin.sh autopilot [L4|L3]` (`agent-engine/autopilot.py`), a foreground process.
+  - It sets the lane's level (default L4) and watches the twin's `ibn_incidents` with a change stream. Each new open incident is claimed once (an `autopilot` field) and handed to the deployed ibn-agent via `agentengine invoke` with a fixed task: diagnose → check_autonomy → apply (autonomous) → await_recovery, or stop on escalate → three-line report.
+  - Session and execution ids, the answer and a `report` timeline stage are written back to the incident.
+  - Default lane only: the CLI can't send the `demo-prefix` header.
+- **Verified at the tool level** on the twin cluster (test lane `s_shs2test01_`, dashboard with the new code, both rushes in parallel at L4):
+  - **Hamburg (IBN-001):** top match Hamburg Altona RB-007 at 0.91 → allow → applied 2.7 s after detection → recovered 27.6 s later as seen by the monitor (time to recover 29 s). Timeline detect → diagnose → decide → act → verify; one violation and one recovery event.
+  - **Berlin (IBN-002):** RB-005 at 0.75 → escalate ("similarity 0.75 < 0.80"); `apply_runbook(autonomous)` refused, also for RB-007 ("top match recommends RB-005"); nothing applied; the incident recovered by itself in the cool-down (68.5 s).
+  - **Policy settings:** L3, deny list, change freeze and a rate limit of 0 each add their own reason.
+  - **Measured-fingerprint similarities:** Marienplatz 0.917 and Hamburg 0.907 (RB-007, allow); Berlin 0.750 (RB-005) and Stuttgart 0.725 (no runbook), both escalate.
+- **Verified end to end** through the deployed ibn-agent (JeffN, `deploy-b75a78b1`) on the twin's default lane: twin dashboards plus `bin/twin.sh autopilot L4`, rushes at Hamburg and Berlin started together, nobody typing.
+  - **Hamburg:** detect → diagnose (RB-007, 0.91) → decide (allow) → act → verify → report. The runbook went in 14 s after detection; the monitor confirmed recovery 38 s after detection. One agent session in Traces; its three-line report is on the incident.
+  - **Berlin:** detect → diagnose (RB-005, 0.75) → decide (escalate: "similarity 0.75 < 0.80") → report, with nothing applied. The rush's cool-down cleared it after 66 s.
+  - **No duplicate events:** one violation, one recovery and one diagnose event per incident.
+- **Found and fixed on the way:**
+  - **Clocks.** The tool sandboxes write UTC times (naive `datetime.now()`, like every writer here), while the twin's laptop processes wrote local time. That broke time comparisons across the two, such as the monitor's 60 s duplicate check, and it predates S2. `bin/twin.sh` now runs everything with `TZ=UTC`, so the twin dashboards show UTC. On Kanopy all processes share one timezone.
+  - **Concurrent invokes.** Two `agentengine invoke`s started together both refreshed the CLI login, and one failed with "session expired". The autopilot retries (2×, 3 s apart).
+  - **Stopping the autopilot.** `bin/twin.sh autopilot` now `exec`s Python, so stopping it doesn't leave an orphaned autopilot that keeps claiming incidents.
