@@ -6,7 +6,7 @@
 #
 aiohappyeyeballs==2.7.1
     # via aiohttp
-aiohttp==3.14.3
+aiohttp==3.14.4
     # via voyageai
 aiolimiter==1.2.1
     # via voyageai
@@ -248,7 +248,7 @@ xlsxwriter==3.2.9
     # via python-pptx
 xxhash==3.8.1
     # via langsmith
-yarl==1.24.5
+yarl==1.25.1
     # via aiohttp
 zstandard==0.25.0
     # via langsmith
