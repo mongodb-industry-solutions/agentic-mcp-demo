@@ -241,15 +241,18 @@ def open_review(action: str, arguments: dict) -> str:
 
 
 @tools.tool
-def close_review(approval_id: str, decision: str, reviewer_notes: str = "") -> str:
-    """Internal (not offered to the LLM). Record the reviewer's decision on
-    agent_approvals and clear the pending marker from the target documents."""
+def close_review(approval_id: str, decision: str, reviewer_notes: str = "",
+                 decided_by: str = "noc") -> str:
+    """Internal (not offered to the LLM). Record the decision on
+    agent_approvals and clear the pending marker from the target documents.
+    decided_by is "noc" for a reviewer, or the autonomy policy that allowed
+    an autonomous action (SELF_HEALING_PLAN.md, S2)."""
     doc = approvals.find_one({"_id": approval_id})
     if not doc:
         return json.dumps({"error": f"approval {approval_id} not found"})
     approvals.update_one({"_id": approval_id}, {"$set": {
         "status": "rejected" if decision == REJECT else "approved",
-        "decision": decision, "reviewer_notes": reviewer_notes,
+        "decision": decision, "reviewer_notes": reviewer_notes, "decided_by": decided_by,
         "decided_at": datetime.datetime.now(),
     }})
     _mark(doc.get("targets"), {"$unset": {"pending_approval": ""}})

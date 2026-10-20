@@ -16,6 +16,12 @@
 #   bin/twin.sh reset    reseed the default lane's demo collections and
 #                        clear its approvals/routing decisions (platform
 #                        memory stays: there is no delete-by-user API)
+#   bin/twin.sh autopilot [L4|L3]
+#                        foreground: set the autonomy level (default L4) and
+#                        hand every incident the SLO monitor opens to the
+#                        deployed ibn-agent, no human prompt (agent-engine/
+#                        autopilot.py, SELF_HEALING_PLAN.md S2). The monitor
+#                        runs in the IBN dashboard, so keep a tab open.
 #
 # TWIN_MONGODB_URI is the agents' cluster (the workspace MONGODB_URI).
 
@@ -36,6 +42,11 @@ TWIN_SERVICES=(
 )
 
 export PYTHONUNBUFFERED=1
+# The agents' tool sandboxes run in UTC and every writer stores naive
+# datetime.now() times, so the twin's processes use UTC too: otherwise
+# windows such as the SLO monitor's 60 s duplicate check compare local
+# time with UTC. The twin dashboards therefore show UTC.
+export TZ=UTC
 mkdir -p "$LOGDIR" "$RUNDIR"
 
 start() {
@@ -109,10 +120,16 @@ finally:
     echo "↺ Reload the dashboard tabs (a dropped scenario stays on screen until then)."
 }
 
+autopilot() {
+    # exec: Ctrl-C and kill reach the autopilot, not just this shell.
+    MONGODB_URI="$TWIN_MONGODB_URI" exec "$PYTHON" "$ROOT/agent-engine/autopilot.py" "$@"
+}
+
 case "${1:-}" in
     start)  start ;;
     stop)   stop ;;
     status) status ;;
     reset)  reset ;;
-    *) echo "usage: bin/twin.sh start|stop|status|reset"; exit 2 ;;
+    autopilot) shift; autopilot "$@" ;;
+    *) echo "usage: bin/twin.sh start|stop|status|reset|autopilot [L4|L3]"; exit 2 ;;
 esac

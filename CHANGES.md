@@ -1,5 +1,20 @@
 # CHANGES.md
 
+## 2026-10-20
+
+### Self-healing network, step 2: the system fixes it by itself (Agent Engine twin)
+
+On the Agent Engine twin, `bin/twin.sh autopilot` hands every incident
+the SLO monitor opens to the IBN agent, with no human prompt. The agent
+diagnoses it, asks the autonomy policy whether it may act, applies the
+runbook if it may, and waits until the monitor sees the network recover.
+Hamburg's morning rush is back within its target 38 seconds after it was
+detected, with nobody typing anything. Berlin's closest past incident is only a weak match, so it goes
+to the NOC with the diagnosis attached and nothing is changed. The policy
+is data per lane: level L3 (recommend only, the default) or L4 (act within
+the limits), a change freeze, a deny list and at most 3 actions per hour.
+The Kanopy demo gets the new tools but no autopilot yet.
+
 ## 2026-10-16
 
 ### Self-healing network, step 1: the network notices by itself
