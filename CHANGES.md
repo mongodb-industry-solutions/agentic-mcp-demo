@@ -2,6 +2,19 @@
 
 ## 2026-10-21
 
+### The web shell on Atlas Agent Engine (twin)
+
+The twin has its own web shell now, the same page as the Kanopy demo's, at
+http://localhost:8170 (`bin/twin.sh start`). You type into it as before,
+and the deployed coordinator answers, keeping the conversation across
+turns. The Agent Log on the right shows what the agents do while they
+work: which domains the coordinator picked, how Atlas ranked the agents,
+the sub-task each agent got, every tool call with a preview of its result,
+when one agent consults another, and how long each took. It reads all of
+that from the platform's own traces in MongoDB. Reset reseeds the twin's
+data and starts a new conversation. It runs on the presenter's laptop with
+their Agent Engine login, for one presenter at a time.
+
 ### Self-healing network, step 4: watch the loop on the dashboard
 
 The IBN dashboard has a new "Self-healing loop" panel. For the store in

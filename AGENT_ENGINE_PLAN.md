@@ -768,8 +768,9 @@ Deviations:
 Until the web shell can call the agents (Phase 8 needs a service account,
 see Phase 4 finding 5, and per-user memory, Phase 5 finding 9), the demo
 runs as a twin next to the Kanopy demo, single user:
-- **Chat:** the Atlas Agent Engine UI, with `noc-coordinator`. A human
-  login keeps the user's memory identity.
+- **Chat:** the twin's web shell (Phase 8a, below) or the Atlas Agent
+  Engine UI, with `noc-coordinator`. A human login keeps the user's memory
+  identity.
 - **No NOC approvals.** The chat UI offers no way to approve a paused
   run, and no Pending Reviews page turned up for a project owner. The
   documented `/resume` endpoint refuses native `interrupt()` pauses anyway
@@ -793,6 +794,26 @@ runs as a twin next to the Kanopy demo, single user:
 - **Reset:** `bin/twin.sh reset` reseeds the default lane's demo
   collections and clears its approvals and routing decisions. Platform
   memory stays (no delete-by-user API).
+- **Web shell (Phase 8a, 2026-10-21):** `web/twin_shell.py` on :8170
+  (`bin/twin.sh start`, loopback only) serves the same `shell.html`, which
+  switches to Agent Engine mode when `hello` carries
+  `runtime: "agent_engine"` (title, an Agents tab instead of MCP Servers,
+  no Workstreams tab, dashboard links without a session token). A turn is
+  `agentengine invoke --json --session <id>` on the coordinator with the
+  presenter's CLI login; the session is reused until Reset. The Agent Log
+  comes from the platform's OpenTelemetry spans on the agents' cluster
+  (`mdb_store_<project>.traces`, one `trace_id` across the coordinator and
+  its A2A children), watched with a change stream: the `route` span's
+  output carries the routing turn (Stage 1, recalled memory, card ranking,
+  sub-tasks), the domain agents' `TOOL` spans the tool calls and results,
+  `a2a.invoke_agent` the consults, `aer.execute` the totals. Spans land in
+  batches of about 5 s, so the log trails the agents by up to that much.
+  Tool results are redacted with the guardrail's patterns (the guardrail
+  only sees answers). `web/shell.py` doesn't import it. What remains for
+  the hosted Phase 8 is the credential (a service account would be Project
+  Owner on JeffN's linked Atlas project, see the Phase 8 questions below)
+  and the lanes: the CLI sends no custom headers, so the twin shell has one
+  lane and one presenter.
 - **The Kanopy demo stays as it is.** Every push to `main` redeploys
   production (`.drone.yml`), and PRs #31–#35 change legacy code
   (`mcp_servers/`, `web/*.html`, `seed_runner.py`). They stay unmerged
@@ -848,7 +869,15 @@ decision, since a JeffN policy would apply to the other teams' agents.
   pairing creates, per-user memory through a service account and "end-user
   delegation", delete-by-user, custom events next to the normal stream)
   are with the Agent Engine team:
-  https://mongodb.slack.com/archives/C0B7G8ZC2G6/p1792164957402519
+  https://mongodb.slack.com/archives/C0B7G8ZC2G6/p1792164957402519.
+  Answers (Walter Tan): `user_id` *is* honored for service-account invokes
+  (the docs banner is out of date), so one service account can keep memory
+  per browser session; there is no delete-by-user, so Reset should switch
+  to a fresh `user_id` (`user-<session>-<n>`); there is no invoke-only
+  role (invoke needs the deploy permission, `PROJECT_OWNER`), and pairing
+  creates an Atlas service account with Project Owner on the linked Atlas
+  project, with no narrower option. In JeffN, whose linked project holds
+  other teams' production clusters, he advises holding off on pairing.
 
 ### Spike resources (cleaned up 2026-10-15)
 

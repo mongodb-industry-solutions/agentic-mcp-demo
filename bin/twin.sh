@@ -4,13 +4,15 @@
 # Author: Benjamin Lorenz <benjamin.lorenz@mongodb.com>
 #
 # The Agent Engine twin of the browser demo (AGENT_ENGINE_PLAN.md, until
-# Phase 8): you chat with the deployed noc-coordinator (or ibn-agent /
-# dtw-agent) in the Atlas Agent Engine UI, and these two dashboards watch
-# the agents' cluster. Single user, default lane (the chat UI can't send
-# the demo-prefix header). The Kanopy demo and bin/start.sh are untouched:
+# Phase 8): you chat with the deployed noc-coordinator in the twin's web
+# shell (web/twin_shell.py, through `agentengine invoke` with your CLI
+# login) or in the Atlas Agent Engine UI, and the two dashboards watch the
+# agents' cluster. Single user, default lane (neither can send the
+# demo-prefix header). The Kanopy demo and bin/start.sh are untouched:
 # other ports, other pidfiles, and a guard against the legacy database.
 #
-#   bin/twin.sh start    IBN dashboard :8160, DTW dashboard :8180 (detached)
+#   bin/twin.sh start    web shell :8170, IBN dashboard :8160, DTW dashboard
+#                        :8180 (detached, localhost only)
 #   bin/twin.sh stop
 #   bin/twin.sh status
 #   bin/twin.sh reset    reseed the default lane's demo collections and
@@ -37,6 +39,7 @@ if [ -n "${MONGODB_URI:-}" ] && [ "$(_host "$TWIN_MONGODB_URI")" = "$(_host "$MO
 fi
 
 TWIN_SERVICES=(
+  "twin_shell|8170|web.twin_shell:app"
   "twin_ibn_dashboard|8160|web.ibn_dashboard:app"
   "twin_dtw_dashboard|8180|web.dtw_dashboard:app"
 )
@@ -79,7 +82,8 @@ start() {
     done
     [ "$ok" = 1 ] || exit 1
     echo
-    echo "✓ Twin dashboards up. Chat with noc-coordinator in the Atlas Agent Engine UI."
+    echo "✓ Twin up. Chat with noc-coordinator in the web shell (or the Atlas Agent Engine UI)."
+    echo "  Web shell:      http://localhost:8170   (your agentengine CLI login: agentengine auth status)"
     echo "  IBN dashboard:  http://localhost:8160   (?mode=exec for the exec view)"
     echo "  DTW dashboard:  http://localhost:8180"
 }
