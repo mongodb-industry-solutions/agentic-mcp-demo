@@ -1,6 +1,6 @@
 # Self-Healing Network: from TM Forum Autonomy Level 3 to Level 4
 
-**Status:** plan, 2026-10-16. S1 (sense + detect), S2 (respond in the twin) and S3 (learn + prevent) are built, see "S1 as built", "S2 as built" and "S3 as built" at the end. Work continues on `feature/agent-engine-migration` (ISTTH-969).
+**Status:** plan, 2026-10-16. S1 (sense + detect), S2 (respond in the twin), S3 (learn + prevent) and S4 (the dashboard) are built, see the "as built" sections at the end. Work continues on `feature/agent-engine-migration` (ISTTH-969).
 
 ## The pitch
 
@@ -382,3 +382,21 @@ to show them is as a slice for one service.
   - **Hamburg:** detect → diagnose (RB-007, 0.91) → decide (allow) → act → verify → learn → prevent → report. The runbook went in 16 s after detection; the monitor confirmed recovery after 40 s; the learned chunk landed 1 s later; the agent proposed the canary (Berlin Mitte, then Stuttgart; evidence 3 incidents, 1 learned) and said so in its report.
   - **Berlin:** escalated (similarity 0.75 < 0.80), nothing applied, nothing learned or proposed; the cool-down cleared it after 69 s.
   - One violation, one recovery and one diagnose event per incident; markers on IBN-002/003 only, no migration queued. `bin/twin.sh reset` then removed the learned chunk.
+
+## S4 as built (2026-10-21, branch `feature/agent-engine-migration`)
+
+- **The page:** a "Self-healing loop" panel under the three IBN panels, for the intent in focus (`web/ibn.html`).
+  - **Ribbon:** sense → detect → diagnose → decide → act → verify → learn → prevent, each lit from the incident's timeline with its time. While the incident is open, the next stage pulses. An escalation turns decide and act amber ("→ NOC"), and so does an `await_recovery` timeout on verify.
+  - **Clock:** seconds since detection while open, then "MTTR 40 s · 0 human actions", or "recovered by itself after 69 s · escalated to the NOC". It runs on the data's clock: the dashboard sends `server_now`, because the twin stores UTC and the browser runs on local time.
+  - **Alarm card (TMF642):** severity, type, probable cause, problem, root cause, the precedent (with its similarity only in `?mode=eng`), status; then the decision (allowed by the policy, or the recommendation for the NOC with its reasons) and the agent's report. The incident and trace session ids are shown in eng mode only.
+  - **Latency chart:** the last two minutes of POS latency with the SLO line and markers for "breach detected", "runbook applied" and "recovered" from the timeline.
+  - **Proposal:** "The system proposes, the NOC approves" with the canary, the rest and the evidence; sister intents get 📋 on their tab and a note in the panel.
+  - **Switch:** L3 · recommend / L4 · act.
+- **The dashboard** (`web/ibn_dashboard.py`): change streams on the lane's `ibn_incidents` (every stage, from any writer) and `ibn_autonomy_policy` (the switch, the autopilot, Reset); the snapshot adds the newest incident per intent, the autonomy state and `server_now`; the page's `set_autonomy` message sets the level.
+- **The L4 gate:** L4 can only be set where `SELF_HEALING_L4=1`, checked by `autonomy.set_level` (the autopilot) and the page's switch. `bin/twin.sh` exports it; the Kanopy environment files don't, so the Kanopy demo stays at L3, never acts on its own and never learns (see S3, prod safety). The tools read the level as stored, so the Agent Engine tool sandboxes need no setting.
+- **Verified** on the twin cluster:
+  - **The gate** (scratch dashboards with and without the setting, test lanes): without it the page shows L4 disabled, a `set_autonomy` L4 request changes nothing, and `set_level("L4")` raises; with it the switch sets L4 and every open tab is told.
+  - **Tool level** (test lane, screenshots via headless Chrome over CDP): L3 at Hamburg stops at decide with the recommendation; after Reset, L4 lights all eight stages; Berlin at L4 escalates with its reason and shows the 📋 proposal for its own site; no JS errors.
+  - **The storyboard with the real autopilot** and the deployed ibn-agent, on the twin's default lane: L3 at Hamburg: detect → diagnose → decide (escalate: level L3) → report, nothing applied, the clock shows "awaiting the NOC". Reset, L4: all eight stages plus the report, MTTR 40 s, 0 human actions, the canary proposal for Berlin and Stuttgart. "Tomorrow": the same rush peaks at 86 % load and stays green, no incident. `bin/twin.sh reset` afterwards.
+- **Not in S4:** approving the proposal from the page (the NOC still asks for `update_template_version`), and the legacy runtime's responder (S5).
+
