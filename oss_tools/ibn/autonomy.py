@@ -21,6 +21,7 @@ Level L4 means act inside the envelope. The default is L3.
 """
 
 import datetime
+import os
 
 from oss_tools._ctx import collection, demo_prefix
 from oss_tools.ibn import learning
@@ -35,6 +36,7 @@ POLICY_V1 = {
     "change_freeze": False,
 }
 LEVELS = ("L3", "L4")
+L4_ENV = "SELF_HEALING_L4"
 AUTONOMOUS_BY = "ibn-agent (autonomous)"
 
 policies = collection("ibn_autonomy_policy", mutable=True)    # mutable (per lane)
@@ -51,9 +53,20 @@ def policy_name(pol: dict) -> str:
     return f"autonomy-policy {pol['version']}"
 
 
+def l4_allowed() -> bool:
+    """L4 is only switched on where SELF_HEALING_L4=1: bin/twin.sh sets it
+    for the twin cluster. The Kanopy demo shares its database with the live
+    production code, which has no lane filter for learned incidents
+    (learning.py), so it must never act, and therefore never learn, on its
+    own. Only setting the level is gated; the tools read it as stored."""
+    return os.environ.get(L4_ENV) == "1"
+
+
 def set_level(level: str) -> dict:
     if level not in LEVELS:
         raise ValueError(f"level must be one of {LEVELS}, got {level!r}")
+    if level == "L4" and not l4_allowed():
+        raise PermissionError(f"L4 needs {L4_ENV}=1 (the Agent Engine twin only)")
     policies.update_one({"_id": POLICY_ID}, {"$set": {"level": level}}, upsert=True)
     return policy()
 

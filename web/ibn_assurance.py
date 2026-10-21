@@ -23,6 +23,8 @@ them without a new service.
 - learn (S3): an incident the system mitigated on its own becomes a
   learned precedent in the shared ibn_knowledge_chunks, tagged with the
   lane (oss_tools/ibn/learning.py).
+- the dashboard's view (S4): the lane's autonomy level and its switch,
+  and the newest incident per intent.
 
 Several dashboard processes can watch the same lane: runs are claimed
 atomically, and the index and conditional updates make open/close
@@ -34,7 +36,7 @@ import datetime
 import logging
 from collections.abc import Awaitable, Callable
 
-from oss_tools.ibn import learning, rush, slo
+from oss_tools.ibn import autonomy, learning, rush, slo
 from pymongo import ASCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
@@ -215,6 +217,36 @@ async def close_incident(db, pfx: str, intent: dict, incident: dict, metrics: di
     if res.get("action"):
         res = await learn(db, pfx, intent, res) or res
     await notify({"type": "incident", "doc": res})
+
+
+# ─── The dashboard's view of the loop (S4) ──────────────────────────────────
+
+async def autonomy_state(db, pfx: str) -> dict:
+    """The lane's autonomy level for the page's L3/L4 switch, and whether
+    L4 may be switched on in this deployment (autonomy.l4_allowed)."""
+    doc = await db[pfx + "ibn_autonomy_policy"].find_one({"_id": autonomy.POLICY_ID}) or {}
+    pol = {**autonomy.POLICY_V1, **{k: v for k, v in doc.items() if k != "_id"}}
+    return {"level": pol["level"], "policy": autonomy.policy_name(pol),
+            "l4_allowed": autonomy.l4_allowed()}
+
+
+async def set_autonomy_level(db, pfx: str, level: str) -> bool:
+    """The page's switch; the same gate as autonomy.set_level."""
+    if level not in autonomy.LEVELS or (level == "L4" and not autonomy.l4_allowed()):
+        return False
+    await db[pfx + "ibn_autonomy_policy"].update_one(
+        {"_id": autonomy.POLICY_ID}, {"$set": {"level": level}}, upsert=True)
+    return True
+
+
+async def latest_incidents(db, pfx: str) -> list[dict]:
+    """The newest incident of every intent in the lane."""
+    cursor = await db[pfx + "ibn_incidents"].aggregate([
+        {"$sort": {"opened_at": -1}},
+        {"$group": {"_id": "$intent_id", "doc": {"$first": "$$ROOT"}}},
+        {"$replaceWith": "$doc"},
+    ])
+    return await cursor.to_list(None)
 
 
 # ─── Learn: a verified autonomous fix becomes a precedent ───────────────────
