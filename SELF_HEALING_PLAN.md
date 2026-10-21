@@ -1,6 +1,6 @@
 # Self-Healing Network: from TM Forum Autonomy Level 3 to Level 4
 
-**Status:** plan, 2026-10-16. S1 (sense + detect) and S2 (respond in the twin) are built, see "S1 as built" and "S2 as built" at the end. Work continues on `feature/agent-engine-migration` (ISTTH-969).
+**Status:** plan, 2026-10-16. S1 (sense + detect), S2 (respond in the twin) and S3 (learn + prevent) are built, see "S1 as built", "S2 as built" and "S3 as built" at the end. Work continues on `feature/agent-engine-migration` (ISTTH-969).
 
 ## The pitch
 
@@ -353,3 +353,32 @@ to show them is as a slice for one service.
   - **Clocks.** The tool sandboxes write UTC times (naive `datetime.now()`, like every writer here), while the twin's laptop processes wrote local time. That broke time comparisons across the two, such as the monitor's 60 s duplicate check, and it predates S2. `bin/twin.sh` now runs everything with `TZ=UTC`, so the twin dashboards show UTC. On Kanopy all processes share one timezone.
   - **Concurrent invokes.** Two `agentengine invoke`s started together both refreshed the CLI login, and one failed with "session expired". The autopilot retries (2×, 3 s apart).
   - **Stopping the autopilot.** `bin/twin.sh autopilot` now `exec`s Python, so stopping it doesn't leave an orphaned autopilot that keeps claiming incidents.
+
+## S3 as built (2026-10-21, branch `feature/agent-engine-migration`)
+
+- **Learn: the SLO monitor writes it, not the agent.** The monitor is where recovery is verified, so `close_incident` (`web/ibn_assurance.py`) writes the precedent as soon as it closes an incident the system fixed on its own (the incident has `action`, set by `apply_runbook(autonomous=True)`). That doesn't depend on `await_recovery` returning in time.
+  - **The document** (`oss_tools/ibn/learning.py`): a `kind: incident` chunk in the shared `ibn_knowledge_chunks`, `_id` `INC-L-<incident>`, shaped like the seeded ones (title, site, customer, ts, lng/lat, fingerprint, runbook_id, outcome, mttr_s) plus `learned`, `lane`, `incident_id`.
+  - **Its text opens with the measured fingerprint** the hero query searches with (`slo.fingerprint_text`), then root cause, runbook, time to act and time to recover. A narrative text only tied with the seeded Hamburg incident (0.913 vs 0.910); this one ranks clearly first (0.931).
+  - Upserted by id, so several watchers of a lane write it once; the incident's timeline gets a `learn` stage.
+  - Only autonomous fixes are learned. A NOC fix via `apply_runbook` asserts its recovery, so it isn't evidence of the same kind.
+- **Lanes without touching the index:** learned chunks carry the lane (the session prefix, `''` for the default lane).
+  - The hero query keeps its four pre-filters and adds `$match` on lane after `$vectorSearch` (limit 10, then `$limit` 3). The track-record check in `autonomy.evaluate` counts the same set.
+  - Reset deletes the lane's learned chunks; `refresh_incident_dates` already leaves them alone.
+- **Prevent:** a new tool, `propose_prevention(intent_id)`, the autopilot's step 4 after a recovery.
+  - It works from data only: the runbook of the incident's autonomous action; when that runbook is a template-level fix (`rush.MITIGATING_RUNBOOKS`), the other live intents on the same template without it, and the runbook's lane-scoped track record as evidence.
+  - It records the proposal on the incident (`prevention`: canary site, the rest, evidence, and the exact `update_template_version(…, intent_ids=[canary])` call), adds a `prevent` stage, and sets a `proposed_change` marker on the sister intents. It changes nothing on the network, and calling it again changes nothing.
+  - The NOC decides: running that `update_template_version` marks the proposal `approved` and clears the canary's marker. On Agent Engine with the NOC review on, that call pauses for the reviewer as before. The twin runs without the review, so there the decision is the NOC engineer asking for it.
+  - The marker is not `pending_approval`, because the dashboard renders that one as "the agent is paused"; S4 renders proposals.
+- **Prod safety (Kanopy runs the old code until the BIG SWITCH, on the same database as staging):** only `bin/twin.sh autopilot` sets L4, and only on the twin cluster. Kanopy staging therefore never acts autonomously, never learns, and the live prod code (no lane filter) never sees a learned chunk. **S4's L3/L4 switch and S5 have to keep it that way** until prod has the lane filter, for example by refusing L4 on the shared cluster.
+- **What "sister site" can mean here:** the hero query's geo box is 10 km, and the only seeded sites that close are Marienplatz and Schwabing (3 km, and Schwabing already has RB-007). So a learned incident is the top match for the next rush at the same site or in the same city. The chain-wide step is the template proposal, which is the plan's "prevent".
+- **Verified** on the twin cluster (test lane `s_shs3test01_`, dashboard with the S3 code, tools called in the autopilot's order), twice:
+  - **Learn:** Hamburg at L4, fixed 4 s after detection, recovered in 28 s; timeline detect → diagnose → decide → act → verify → learn. The learned chunk was searchable 3 s after the monitor closed the incident.
+  - **Prevent:** evidence "RB-007 resolved 3 incident(s) at Hamburg Altona, Munich Schwabing (1 learned)"; canary Berlin Mitte, then Stuttgart; Schwabing (has RB-007) left out; markers on IBN-002/003; no `migration_queued` anywhere until the NOC call.
+  - **Lanes:** the raw hero query in this lane returns the learned chunk first (0.932, seeded 0.909); another lane and the default lane don't see it.
+  - **Next rush at Hamburg without the fix:** the diagnosis's top match is the learned incident (0.93, "learned by the self-healing loop"), the track record counts it (3 past incidents), and a second chunk is learned.
+  - **Approval:** `update_template_version(intent_ids=['IBN-002'])` marked both proposals approved, cleared IBN-002's marker and queued its migration; IBN-003's marker stays.
+  - **Reset:** removed the lane's 2 learned chunks and none of anyone else's. One violation and one recovery event per incident.
+- **Verified end to end** through the deployed ibn-agent (JeffN, `deploy-1301b889`) on the twin's default lane: twin dashboards plus `bin/twin.sh autopilot L4`, rushes at Hamburg and Berlin started together, nobody typing.
+  - **Hamburg:** detect → diagnose (RB-007, 0.91) → decide (allow) → act → verify → learn → prevent → report. The runbook went in 16 s after detection; the monitor confirmed recovery after 40 s; the learned chunk landed 1 s later; the agent proposed the canary (Berlin Mitte, then Stuttgart; evidence 3 incidents, 1 learned) and said so in its report.
+  - **Berlin:** escalated (similarity 0.75 < 0.80), nothing applied, nothing learned or proposed; the cool-down cleared it after 69 s.
+  - One violation, one recovery and one diagnose event per incident; markers on IBN-002/003 only, no migration queued. `bin/twin.sh reset` then removed the learned chunk.

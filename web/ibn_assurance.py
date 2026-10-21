@@ -20,6 +20,9 @@ them without a new service.
   `open`). Opening raises the alarm the dashboard already renders (a
   `violation` compliance event, intent status `violated`); closing
   records the recovery and the time to recover.
+- learn (S3): an incident the system mitigated on its own becomes a
+  learned precedent in the shared ibn_knowledge_chunks, tagged with the
+  lane (oss_tools/ibn/learning.py).
 
 Several dashboard processes can watch the same lane: runs are claimed
 atomically, and the index and conditional updates make open/close
@@ -31,7 +34,7 @@ import datetime
 import logging
 from collections.abc import Awaitable, Callable
 
-from oss_tools.ibn import rush, slo
+from oss_tools.ibn import learning, rush, slo
 from pymongo import ASCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
@@ -209,7 +212,39 @@ async def close_incident(db, pfx: str, intent: dict, incident: dict, metrics: di
         {"$set": {"status": "active"},
          "$push": {"history": {"ts": now, "event": "recovered", "by": "slo-detector",
                                "incident_id": incident["_id"], "note": note}}})
+    if res.get("action"):
+        res = await learn(db, pfx, intent, res) or res
     await notify({"type": "incident", "doc": res})
+
+
+# ─── Learn: a verified autonomous fix becomes a precedent ───────────────────
+
+async def learn(db, pfx: str, intent: dict, incident: dict) -> dict | None:
+    """Write the closed incident to the shared knowledge base as a learned
+    chunk of this lane (oss_tools/ibn/learning.py). Only incidents the
+    system mitigated on its own (`action`, set by apply_runbook(autonomous))
+    are learned: their recovery was verified by this monitor, not asserted.
+    Upserted by id, so several watchers of the lane write it once."""
+    site = await db["ibn_sites"].find_one({"_id": intent.get("site_id")})
+    runbook = await db["ibn_knowledge_chunks"].find_one(
+        {"_id": incident["action"]["runbook_id"], "kind": "runbook"})
+    if not site or not runbook:
+        return None
+    customer = await db["ibn_customers"].find_one({"_id": site.get("customer_id")}) or {}
+    segmentation = ((intent.get("parsed") or {}).get("targets") or {}).get("segmentation", "strict")
+    doc = learning.chunk(incident, site, customer.get("name"), runbook, pfx, segmentation)
+    res = await db["ibn_knowledge_chunks"].update_one(
+        {"_id": doc["_id"]}, {"$setOnInsert": doc}, upsert=True)
+    if not res.upserted_id:
+        return None   # another watcher learned it
+    log.info(f"incident learned (prefix={pfx!r}, {intent['_id']}, {doc['_id']})")
+    return await db[pfx + "ibn_incidents"].find_one_and_update(
+        {"_id": incident["_id"]},
+        {"$set": {"learned_chunk_id": doc["_id"]},
+         "$push": {"timeline": {"ts": _now(), "stage": "learn", "by": learning.LEARNED_BY,
+                                "note": f"new precedent {doc['_id']} in the knowledge base "
+                                        f"({runbook['_id']}, recovered in {doc['mttr_s']:.0f} s)"}}},
+        return_document=ReturnDocument.AFTER)
 
 
 async def slo_evaluator(db, pfx: str, notify: Notify, rushing: set) -> None:

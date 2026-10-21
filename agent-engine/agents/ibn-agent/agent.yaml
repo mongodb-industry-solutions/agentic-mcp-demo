@@ -87,6 +87,7 @@ sandboxes:
       - apply_runbook
       - check_autonomy
       - await_recovery
+      - propose_prevention
       - update_template_version
       - list_runbooks
       # oss_tools.ibn.telemetry

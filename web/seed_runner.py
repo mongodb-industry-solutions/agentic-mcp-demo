@@ -174,6 +174,11 @@ def _seed_session_sync(db, prefix: str, emit) -> None:
         if n:
             emit(f"    cleared {n} from {base}")
     emit("    workstreams, memories, preferences, consult log, analytics cleared")
+    # The self-healing loop's learned incidents (SELF_HEALING_PLAN.md, S3)
+    # live in the shared knowledge base, tagged with their lane.
+    n = db["ibn_knowledge_chunks"].delete_many({"learned": True, "lane": P}).deleted_count
+    if n:
+        emit(f"    removed {n} learned incident(s) from ibn_knowledge_chunks")
 
     emit(f"━━ session {prefix} · telemetry timeseries ━━")
     db.create_collection(
