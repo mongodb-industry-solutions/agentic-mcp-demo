@@ -16,10 +16,11 @@ import datetime
 import json
 import logging
 import math
+import re
 import time
 from pymongo import DESCENDING
-from oss_tools._ctx import ToolSet, collection
-from oss_tools.ibn import autonomy, slo
+from oss_tools._ctx import ToolSet, collection, demo_prefix
+from oss_tools.ibn import autonomy, learning, rush, slo
 
 
 tools  = ToolSet()
@@ -31,6 +32,7 @@ logger = logging.getLogger("ibn_assurance_service")
 # ibn_knowledge_chunks stays SHARED even though update_template_version
 # inserts a policy doc into it — keeping it shared avoids a per-session
 # vector index; that write is rare and additive (see MULTI_SESSION_PLAN).
+# Learned incidents (S3) are lane-tagged instead (oss_tools/ibn/learning.py).
 intents           = collection("ibn_intents", mutable=True)            # mutable
 sites             = collection("ibn_sites")                            # reference
 telemetry         = collection("ibn_telemetry", mutable=True)          # mutable
@@ -367,6 +369,10 @@ def diagnose_violation(intent_id: str = None, site: str = None,
     filter_no_geo = {"kind": {"$eq": "incident"}, "ts": {"$gte": cutoff}}
     filter_kind   = {"kind": {"$eq": "incident"}}
 
+    # Learned incidents (S3) carry their lane; the index has no lane
+    # field, so other lanes' are dropped after the search.
+    lane = learning.lane_filter(demo_prefix())
+
     def _build_pipeline(flt):
         return [
             {
@@ -376,14 +382,16 @@ def diagnose_violation(intent_id: str = None, site: str = None,
                     "query":   fingerprint,
                     "filter":  flt,
                     "numCandidates": 200,
-                    "limit": 3,
+                    "limit": 10,
                 }
             },
+            {"$match": lane},
+            {"$limit": 3},
             {
                 "$project": {
                     "_id":         0, "title": 1, "site_name": 1, "ts": 1,
                     "fingerprint": 1, "runbook_id": 1, "text": 1,
-                    "lng": 1, "lat": 1,
+                    "lng": 1, "lat": 1, "learned": 1,
                     "score":       {"$meta": "vectorSearchScore"},
                 }
             },
@@ -460,7 +468,8 @@ def diagnose_violation(intent_id: str = None, site: str = None,
         "",
         f"**Top match — {top['site_name']}, "
         f"{top['ts'].strftime('%Y-%m-%d') if isinstance(top['ts'], datetime.datetime) else top['ts']}** "
-        f"· similarity {top['score']:.2f}",
+        f"· similarity {top['score']:.2f}"
+        + (" · learned by the self-healing loop" if top.get("learned") else ""),
         "",
         f"> {top['title']}",
         "",
@@ -692,6 +701,115 @@ def await_recovery(intent_id: str = None, site: str = None, timeout_s: int = 60)
     return f"⏱ {intent['_id']} {note}. The incident stays open."
 
 
+def _next_version(template_id: str) -> str:
+    """strict-retail-v3 → strict-retail-v4 (the update_template_version default)."""
+    m = re.search(r"v(\d+)$", template_id)
+    return f"{template_id[:m.start()]}v{int(m.group(1)) + 1}" if m else f"{template_id}-next"
+
+
+@tools.tool
+def propose_prevention(intent_id: str = None, site: str = None) -> str:
+    """
+    Autonomous mode only, after await_recovery reported a recovery: propose
+    protecting the sister sites before their next rush. Finds the other
+    live intents on the same segmentation template that don't have the fix
+    yet, and the knowledge base's evidence for the runbook, then records a
+    canary proposal (update_template_version for one sister site) on the
+    incident and marks the sister intents. It changes nothing on the
+    network: the proposal changes the fleet, so a NOC engineer decides.
+
+    Args:
+        intent_id: The intent that just recovered, e.g. 'IBN-001'.
+        site:      Alternative: site name fragment like 'Hamburg'.
+    """
+    intent = _resolve_intent(intent_id, site)
+    if not intent:
+        return (f"❌ No matching intent found for "
+                f"intent_id={intent_id!r}, site={site!r}.")
+    incident = incidents.find_one({"intent_id": intent["_id"]}, sort=[("opened_at", DESCENDING)])
+    if not incident or incident.get("open") or not incident.get("action"):
+        return (f"❌ Nothing to propose for {intent['_id']}: it needs an incident the system "
+                f"fixed on its own and the SLO monitor closed.")
+    if incident.get("prevention"):
+        return _prevention_text(intent["_id"], incident["prevention"])
+
+    runbook_id = incident["action"]["runbook_id"]
+    template = intent.get("template")
+    now = datetime.datetime.now()
+    if runbook_id not in rush.MITIGATING_RUNBOOKS or not template:
+        prevention = {"status": "none", "runbook_id": runbook_id, "proposed_at": now,
+                      "reason": f"{runbook_id} is a fix for this site, not for its template"}
+    else:
+        sisters = [it for it in intents.find(
+            {"template": template, "status": {"$in": ["active", "violated"]},
+             "_id": {"$ne": intent["_id"]}}).sort("_id", 1) if not rush.mitigated(it)]
+        names = {s["_id"]: s["name"] for s in sites.find(
+            {"_id": {"$in": [it.get("site_id") for it in sisters]}}, {"name": 1})}
+        evidence = list(knowledge_chunks.find(
+            {"kind": "incident", "runbook_id": runbook_id, "outcome": {"$ne": "failed"},
+             **learning.lane_filter(demo_prefix())},
+            {"site_name": 1, "learned": 1}).sort("ts", 1))
+        new_version = _next_version(template)
+        sister_rows = [{"intent_id": it["_id"], "site": names.get(it.get("site_id"), it.get("site_id"))}
+                       for it in sisters]
+        prevention = {
+            "status": "proposed" if sisters else "none", "runbook_id": runbook_id,
+            "template": template, "new_version": new_version, "proposed_at": now,
+            "proposed_by": autonomy.AUTONOMOUS_BY, "sisters": sister_rows,
+            "evidence": {"incidents": len(evidence),
+                         "sites": sorted({e["site_name"] for e in evidence}),
+                         "learned": sum(1 for e in evidence if e.get("learned"))},
+        }
+        if sisters:
+            prevention["canary"] = sister_rows[0]
+            prevention["action"] = {"tool": "update_template_version",
+                                    "arguments": {"template_id": template, "new_version": new_version,
+                                                  "intent_ids": [sisters[0]["_id"]]}}
+        else:
+            prevention["reason"] = f"every live intent on {template} already has {runbook_id}"
+
+    res = incidents.update_one({"_id": incident["_id"], "prevention": {"$exists": False}}, {
+        "$set": {"prevention": prevention},
+        "$push": {"timeline": {"ts": now, "stage": "prevent", "by": autonomy.AUTONOMOUS_BY,
+                               "note": _prevention_note(prevention)}},
+    })
+    if res.modified_count and prevention["status"] == "proposed":
+        canary = prevention["canary"]["intent_id"]
+        for row in prevention["sisters"]:
+            intents.update_one({"_id": row["intent_id"]}, {"$set": {"proposed_change": {
+                "incident_id": incident["_id"], "action": "update_template_version",
+                "title": f"{template} → {prevention['new_version']}"
+                         + (" (canary)" if row["intent_id"] == canary else " (after the canary)"),
+                "proposed_at": now, "awaiting": "NOC decision"}}})
+    return _prevention_text(intent["_id"], prevention)
+
+
+def _prevention_note(p: dict) -> str:
+    if p["status"] != "proposed":
+        return f"no fleet change proposed: {p['reason']}"
+    return (f"proposed {p['template']} → {p['new_version']} as a canary at {p['canary']['site']}, "
+            f"then {len(p['sisters']) - 1} more site(s); awaiting the NOC")
+
+
+def _prevention_text(intent_id: str, p: dict) -> str:
+    if p["status"] != "proposed":
+        return f"No sister-site change proposed for {intent_id}: {p['reason']}."
+    ev = p["evidence"]
+    args = p["action"]["arguments"]
+    return (
+        f"📋 Proposed, NOT applied (a fleet change: the NOC decides).\n"
+        f"  Evidence: {p['runbook_id']} resolved {ev['incidents']} incident(s) at "
+        f"{', '.join(ev['sites'])} ({ev['learned']} learned by this loop): a pattern of template "
+        f"{p['template']}, not of one site.\n"
+        f"  At risk before the next rush: {', '.join(s['site'] for s in p['sisters'])}.\n"
+        f"  Proposal: {p['template']} → {p['new_version']} as a canary at {p['canary']['site']} "
+        f"({p['canary']['intent_id']}), the rest after it holds through a rush.\n"
+        f"  To approve, a NOC engineer asks for update_template_version("
+        f"template_id='{args['template_id']}', new_version='{args['new_version']}', "
+        f"intent_ids=['{args['intent_ids'][0]}'])."
+    )
+
+
 @tools.tool
 def update_template_version(template_id: str = "strict-retail-v3",
                             new_version: str = "strict-retail-v4",
@@ -744,7 +862,8 @@ def update_template_version(template_id: str = "strict-retail-v3",
         ),
     }}, upsert=True)
 
-    # Flag affected intents for migration
+    # Flag affected intents for migration (this decides a self-healing
+    # proposal for them, if there was one: propose_prevention)
     for it in affected:
         intents.update_one(
             {"_id": it["_id"]},
@@ -753,8 +872,14 @@ def update_template_version(template_id: str = "strict-retail-v3",
                 "event": "migration_queued",
                 "note":  f"Pending migration {template_id} → {new_version} "
                          f"in next change window.",
-            }}}
+            }}, "$unset": {"proposed_change": ""}}
         )
+    if affected:
+        incidents.update_many(
+            {"prevention.status": "proposed",
+             "prevention.canary.intent_id": {"$in": [it["_id"] for it in affected]}},
+            {"$set": {"prevention.status": "approved",
+                      "prevention.approved_at": datetime.datetime.now()}})
 
     return (
         f"✓ Template `{template_id}` → `{new_version}` "

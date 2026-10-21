@@ -58,7 +58,8 @@ Work through these steps, one tool call at a time:
 2. check_autonomy(intent_id="{intent_id}", runbook_id=<the runbook of the top match>)
 3. If the decision is "allow": apply_runbook(runbook_id=<that runbook>, intent_id="{intent_id}", autonomous=true), then await_recovery(intent_id="{intent_id}").
    If it is "escalate": apply nothing.
-4. Answer in at most three lines: what was detected, what you did or why it went to the NOC, and the outcome."""
+4. If await_recovery reported a recovery: propose_prevention(intent_id="{intent_id}"). It only proposes; never apply the proposal yourself.
+5. Answer in at most four lines: what was detected, what you did or why it went to the NOC, the outcome, and what you proposed for the sister sites."""
 
 
 def _log(msg: str) -> None:

@@ -22,7 +22,8 @@ Level L4 means act inside the envelope. The default is L3.
 
 import datetime
 
-from oss_tools._ctx import collection
+from oss_tools._ctx import collection, demo_prefix
+from oss_tools.ibn import learning
 
 POLICY_ID = "policy"
 POLICY_V1 = {
@@ -95,7 +96,8 @@ def evaluate(intent: dict, runbook_id: str, incident: dict | None) -> dict:
                                 f"{pol['similarity_min']:.2f}")
 
     successes = knowledge_chunks.count_documents(
-        {"kind": "incident", "runbook_id": runbook_id, "outcome": {"$ne": "failed"}})
+        {"kind": "incident", "runbook_id": runbook_id, "outcome": {"$ne": "failed"},
+         **learning.lane_filter(demo_prefix())})
     check("track_record", successes > 0,
           f"{runbook_id} resolved {successes} past incident(s)" if successes
           else f"{runbook_id} has no recorded success on a past incident")
