@@ -108,7 +108,7 @@ lxml==6.1.1
     # via python-pptx
 markdown-it-py==4.2.0
     # via rich
-mcp==1.29.0
+mcp==1.30.0
     # via -r requirements.in
 mdurl==0.1.2
     # via markdown-it-py
