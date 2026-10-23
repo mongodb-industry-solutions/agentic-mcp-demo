@@ -11,7 +11,9 @@ Agent Engine memory for the Telco OSS agents (Phase 5 of AGENT_ENGINE_PLAN.md).
 - **Procedural:** the three demo flows plus the IBN runbooks and DTW
   mitigation playbooks from the knowledge chunks.
 - **Semantic:** what the user asks to remember (the legacy
-  preferences_service plane), plus the facts extraction learns.
+  preferences_service plane), plus the facts extraction learns, plus what
+  the self-healing loop learned (save_lesson, org-visible: every user of
+  the project recalls it).
 - **Episodic:** extracted from the recorded turns by the platform.
 
 Taxonomic extraction is off (project-config.yaml): it only re-learned the
@@ -26,11 +28,13 @@ All calls go through app.memory in the agent sandbox; the platform records
 them as durable activities, so a replay doesn't repeat a write.
 """
 
+import re
 from collections.abc import Callable
 from typing import Any
 
 from agent_engine_sdk_langgraph import App
 from agent_engine_sdk_memory import MemoryAPIError, MemoryClientError, MemoryIdentityError
+from oss_tools.ibn.learning import LESSON_MARK
 
 GLOSSARY_DOMAIN = "telco-oss"
 GLOSSARY_VERSION = "1"  # bump to re-seed after editing GLOSSARY or FLOWS
@@ -278,6 +282,28 @@ def recall(app: App, query: str) -> str:
         return ""
     text = getattr(ctx, "formatted_context", ctx)
     return text.strip() if isinstance(text, str) else ""
+
+
+_LESSON = re.compile(rf"^{re.escape(LESSON_MARK)} \(([\w.:-]+)\): (.+)$", re.MULTILINE)
+
+
+def lessons(tool_output: str) -> list[tuple[str, str]]:
+    """(label, text) for each lesson line in a tool result (await_recovery
+    adds one after an autonomous fix, oss_tools.ibn.learning.lesson)."""
+    return _LESSON.findall(tool_output)
+
+
+def save_lesson(app: App, label: str, text: str) -> bool:
+    """What the network learned, as an org-visible semantic memory: shared
+    by every user of the project, upserted by label so a repeat is a no-op."""
+    try:
+        result = app.memory.save_semantic(text=text, label=label, source="self-healing loop",
+                                          visibility="org",
+                                          metadata={"kind": "learned_incident"})
+    except (MemoryIdentityError, MemoryClientError, MemoryAPIError) as e:
+        print(f"⚠️ lesson {label} not saved to memory: {type(e).__name__}: {e}")
+        return False
+    return bool(getattr(result, "acknowledged", result))
 
 
 def save_preference(app: App, label: str, text: str) -> bool:

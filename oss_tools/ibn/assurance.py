@@ -689,9 +689,19 @@ def await_recovery(intent_id: str = None, site: str = None, timeout_s: int = 60)
     if not incident.get("open"):
         verify = next((s for s in reversed(incident.get("timeline") or [])
                        if s.get("stage") == "verify"), {})
-        return (f"✓ {intent['_id']} recovered, verified by the SLO monitor: "
+        text = (f"✓ {intent['_id']} recovered, verified by the SLO monitor: "
                 f"{verify.get('note', 'incident closed')}. "
                 f"Time to recover {incident.get('mttr_s', '—')} s.")
+        if incident.get("action") and incident.get("recovered_at"):
+            # The agent's graph saves this line to platform memory (Agent
+            # Engine; learning.lesson); the legacy runtime just shows it.
+            runbook = knowledge_chunks.find_one({"_id": incident["action"]["runbook_id"]}) or {
+                "_id": incident["action"]["runbook_id"]}
+            site = sites.find_one({"_id": intent.get("site_id")}) or {}
+            text += (f"\n{learning.LESSON_MARK} ({learning.lesson_label(incident['_id'])}): "
+                     + learning.lesson(incident, site.get("name", intent.get("site_id", "?")),
+                                       runbook))
+        return text
     now = datetime.datetime.now()
     note = f"not recovered {wait_s} s after the action: escalated to the NOC"
     incidents.update_one({"_id": incident["_id"], "open": True}, {

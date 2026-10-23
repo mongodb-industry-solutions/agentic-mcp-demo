@@ -59,7 +59,14 @@ from langgraph.types import interrupt
 from pydantic import SecretStr
 
 from telco_runtime import memory as mem
-from telco_runtime.a2a import A2A_TIMEOUT_S, AGENTS, call_agent, consult_depth, is_a2a_child
+from telco_runtime.a2a import (
+    A2A_TIMEOUT_S,
+    AGENTS,
+    call_agent,
+    consult_depth,
+    is_a2a_child,
+    message_depth,
+)
 
 MAX_ITERATIONS = 5
 CONSULTED_MAX_ITERATIONS = 3
@@ -283,8 +290,19 @@ def build_domain_graph(
              decision=decision, reviewer_notes=notes)
         return opened, decision, notes
 
+    def turn_depth(state: AgentState) -> int | None:
+        """This turn's A2A depth (None: a user's own turn). Read from the
+        turn's message, which a replay after a NOC-review pause sees
+        unchanged; the consult-depth header, which the pause loses, only
+        for callers that don't mark their message."""
+        human = next((m for m in reversed(state["messages"]) if isinstance(m, HumanMessage)), None)
+        depth = message_depth(str(human.content)) if human else None
+        if depth is None and is_a2a_child():
+            depth = consult_depth()
+        return depth
+
     def consult_offered(state: AgentState) -> bool:
-        return (can_consult and consult_depth() == 0
+        return (can_consult and (turn_depth(state) or 0) == 0
                 and _turn_consults(state["messages"]) < CONSULT_BUDGET)
 
     def prompt(state: AgentState) -> list[AnyMessage]:
@@ -299,7 +317,7 @@ def build_domain_graph(
         return [system] + [m for m in state["messages"] if not isinstance(m, SystemMessage)]
 
     def recall(state: AgentState) -> dict:
-        if is_a2a_child():
+        if turn_depth(state) is not None:
             return {"memory": ""}
         human = next(m for m in reversed(state["messages"]) if isinstance(m, HumanMessage))
         return {"memory": mem.recall(app, str(human.content))}
@@ -408,10 +426,23 @@ def build_domain_graph(
         # A rejection left a ToolMessage in place of the call.
         return "agent" if isinstance(state["messages"][-1], ToolMessage) else "tools"
 
+    def remember(state: AgentState) -> dict:
+        """Save what an autonomous fix taught to platform memory: the lesson
+        line of an await_recovery result (SELF_HEALING_PLAN.md, S3). A
+        durable memory activity, upserted by label, so a replay or a repeat
+        doesn't duplicate it."""
+        for m in reversed(state["messages"]):
+            if not isinstance(m, ToolMessage):
+                break
+            if m.name == "await_recovery":
+                for label, text in mem.lessons(str(m.content)):
+                    mem.save_lesson(app, label, text)
+        return {}
+
     def after_tools(state: AgentState) -> Literal["canary", "agent", "finalize"]:
         if state.get("canary"):
             return "canary"
-        limit = CONSULTED_MAX_ITERATIONS if consult_depth() >= 1 else MAX_ITERATIONS
+        limit = CONSULTED_MAX_ITERATIONS if (turn_depth(state) or 0) >= 1 else MAX_ITERATIONS
         if _turn_tool_iterations(state["messages"]) >= limit:
             return "finalize"
         return "agent"
@@ -421,6 +452,7 @@ def build_domain_graph(
     builder.add_node("tools", ToolNode(tools))
     builder.add_node("finalize", finalize)
     builder.add_node("recall", recall)
+    builder.add_node("remember", remember)
     builder.add_edge(START, "recall")
     builder.add_edge("recall", "agent")
     after_tools_paths: dict = {"agent": "agent", "finalize": "finalize"}
@@ -433,6 +465,7 @@ def build_domain_graph(
         after_tools_paths["canary"] = "canary"
     else:
         builder.add_conditional_edges("agent", after_agent, {"tools": "tools", "end": END})
-    builder.add_conditional_edges("tools", after_tools, after_tools_paths)
+    builder.add_edge("tools", "remember")
+    builder.add_conditional_edges("remember", after_tools, after_tools_paths)
     builder.add_edge("finalize", END)
     return builder.compile(checkpointer=app.checkpointer())

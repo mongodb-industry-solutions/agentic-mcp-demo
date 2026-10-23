@@ -364,6 +364,10 @@ to show them is as a slice for one service.
 - **Lanes without touching the index:** learned chunks carry the lane (the session prefix, `''` for the default lane).
   - The hero query keeps its four pre-filters and adds `$match` on lane after `$vectorSearch` (limit 10, then `$limit` 3). The track-record check in `autonomy.evaluate` counts the same set.
   - Reset deletes the lane's learned chunks; `refresh_incident_dates` already leaves them alone.
+- **Also in platform memory (Agent Engine, 2026-10-22):** after an autonomous fix, `await_recovery` adds a "Lesson for memory" line (`learning.lesson`: site, measured symptom, runbook, policy, time to recover), and the domain agent's graph saves it as an org-visible semantic memory (`telco_runtime.memory.save_lesson`, label `learned-incident-<incident>`, upserted, `metadata.kind: learned_incident`; a `remember` node after the tool node).
+  - The chunk stays the system of record: the hero query needs its time and geo filters, which memory search doesn't have. The memory is the agents' recollection: the coordinator recalls the fix in plain conversation ("have we seen this before?").
+  - `org` visibility means the whole Agent Engine project (memory never crosses projects), so in JeffN other teams' agents with memory could recall it too. Memory isn't lane-scoped, and Reset can't delete it (no delete-by-user API).
+  - Needs an ibn-agent redeploy; not yet verified deployed.
 - **Prevent:** a new tool, `propose_prevention(intent_id)`, the autopilot's step 4 after a recovery.
   - It works from data only: the runbook of the incident's autonomous action; when that runbook is a template-level fix (`rush.MITIGATING_RUNBOOKS`), the other live intents on the same template without it, and the runbook's lane-scoped track record as evidence.
   - It records the proposal on the incident (`prevention`: canary site, the rest, evidence, and the exact `update_template_version(…, intent_ids=[canary])` call), adds a `prevent` stage, and sets a `proposed_change` marker on the sister intents. It changes nothing on the network, and calling it again changes nothing.

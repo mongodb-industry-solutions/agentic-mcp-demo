@@ -189,10 +189,27 @@ in brackets.
   - *Workaround:* our own `agent_approvals` documents, watched with a
     change stream.
   - *Ask:* a webhook or an event stream for suspend and resume.
-- **The CLI's `--resume` has no way to resend custom headers**, and the
-  platform doesn't keep them across a pause:
-  - *Effect:* a resumed run loses the demo lane (`demo-prefix`) unless
-    the caller resends it. The HTTP API can; the CLI can't.
+- **Custom headers don't survive a pause, and the CLI's `--resume` can't
+  resend them:**
+  - *Effect:* a resumed run loses the demo lane (`demo-prefix`) and any
+    other header the graph reads. A graph that branches on a header takes
+    a different path on replay and fails ("workflow conflict: activity
+    step 2 does not match next step 8").
+  - *Workaround:* we put the A2A depth into the message itself, which is
+    durable. The lane still needs the default lane (one presenter).
+  - *Ask:* persist custom headers with the execution, or let the resume
+    call carry them.
+- **An HTTP `invoke` with `session_id` and `resume_map` didn't resume:**
+  - *Gap:* the request was accepted, but it started a new, empty turn on
+    the session while the paused execution stayed suspended. The CLI's
+    `--resume` uses the same endpoint and works. The HTTP form that
+    resumes isn't documented.
+  - *Ask:* document the resume request for the HTTP API.
+- **The tool sandbox doesn't know its workspace id**
+  (`get_current_workspace_id()` is empty there):
+  - *Effect:* the review document can't name the paused agent's
+    workspace.
+  - *Workaround:* the shell maps the action to the agent.
 
 ### 2.3 Memory
 
