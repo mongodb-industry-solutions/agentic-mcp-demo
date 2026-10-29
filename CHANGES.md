@@ -16,8 +16,9 @@ so a follow-up continues from there. If you are in the middle of a turn,
 the run waits until it ends, and a query you send during a run waits for
 the run. Where L4 is enabled, as in the Agent Engine twin, the same panel
 shows the full repair: the runbook applied, recovery verified by the
-monitor, and a canary proposed for the sister stores. The help page has the
-two new steps. `SELF_HEALING_RESPONDER=0` turns the responder off.
+monitor, and a canary proposed for the sister stores. The twin's own web
+shell shows the twin autopilot's runs as the same panels. The help page has
+the two new steps. `SELF_HEALING_RESPONDER=0` turns the responder off.
 
 ## 2026-10-21
 

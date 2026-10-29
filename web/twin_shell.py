@@ -17,6 +17,10 @@
 # `agentengine invoke --resume`, keyed by the interrupt id from the
 # platform's GET /executions/{id}.
 #
+# Self-healing: the twin autopilot's runs (bin/twin.sh autopilot) show as the
+# same panels as the browser shell's responder, from the incidents' change
+# stream.
+#
 # Single presenter, default lane, like the twin dashboards: the CLI can't
 # send the demo-prefix header, and the invoke runs as the presenter. So it
 # only serves loopback clients. Run it with bin/twin.sh start (:8170).
@@ -42,6 +46,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from pymongo import MongoClient
 
+from oss_tools.ibn import autonomy
 from web import seed_runner
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
@@ -395,6 +400,45 @@ def _watch_approvals(loop: asyncio.AbstractEventLoop, stop: threading.Event) -> 
            on_doc, stop)
 
 
+def _watch_autopilot(loop: asyncio.AbstractEventLoop, stop: threading.Event) -> None:
+    """The twin autopilot's runs (agent-engine/autopilot.py) as the page's
+    self-healing panels, like the browser shell's own responder
+    (web/self_healing.py): `started` when it claims an incident, `done` with
+    its report. The autopilot writes both onto the incident."""
+    sent: dict[str, str] = {}
+    levels: dict[str, str] = {}
+
+    def on_doc(doc: dict) -> None:
+        run = doc.get("autopilot") or {}
+        phase = {"running": "started", "done": "done", "failed": "done"}.get(run.get("status"))
+        key = str(doc["_id"])
+        if not phase or sent.get(key) == phase:
+            return
+        sent[key] = phase
+        msg = {"type": "autonomous", "phase": phase, "incident_id": key,
+               "intent_id": doc.get("intent_id"), "site": doc.get("site_name") or "",
+               "level": (doc.get("decision") or {}).get("level")}
+        if phase == "started":
+            client = MongoClient(os.environ["MONGODB_URI"])
+            try:
+                pol = autonomy.merge(client[DEMO_DB]["ibn_autonomy_policy"].find_one(
+                    {"_id": autonomy.POLICY_ID}))
+            finally:
+                client.close()
+            levels[key] = pol["level"]
+            msg.update(level=pol["level"],
+                       note=(doc.get("alarm") or {}).get("specific_problem", "SLO breach"))
+        else:
+            took = (run["finished_at"] - run["started_at"]).total_seconds() \
+                if run.get("finished_at") and run.get("started_at") else None
+            msg["level"] = msg["level"] or levels.get(key, "?")
+            msg.update(ok=run["status"] == "done", markdown=_redact(run.get("answer") or ""),
+                       elapsed=round(took, 1) if took is not None else "?")
+        asyncio.run_coroutine_threadsafe(_send_all(msg), loop)
+    _watch(DEMO_DB, "ibn_incidents", [{"$match": {"operationType": {"$in": ["insert", "update"]}}}],
+           on_doc, stop)
+
+
 async def _api(method: str, path: str, *, timeout: float = 20, **kw) -> httpx.Response:
     """An Agent Engine API call with the CLI login's token (a 401 makes the
     CLI refresh it, then the call is repeated once)."""
@@ -570,6 +614,8 @@ async def lifespan(app: FastAPI):
                                daemon=True)
     watcher.start()
     threading.Thread(target=_watch_approvals, args=(asyncio.get_running_loop(), stop),
+                     daemon=True).start()
+    threading.Thread(target=_watch_autopilot, args=(asyncio.get_running_loop(), stop),
                      daemon=True).start()
     pump = asyncio.create_task(_log_pump(queue))
     log.info("Twin shell ready on Atlas Agent Engine (noc-coordinator)")

@@ -291,6 +291,14 @@ in brackets.
   - *Workaround:* the shell retries a busy answer three times.
   - *Ask:* rolling updates without a capacity gap, or a distinct
     "restarting" error.
+  - *Again on 2026-10-29* (from 19:24Z, still at 19:30Z), with no change
+    of ours: ibn-agent and dtw-agent refused every invoke ("No runtime is
+    available for a new session", then the `503`), while `status` showed
+    them healthy with 8 agent-sandbox replicas and `workspace sessions
+    list` showed no session holding capacity. In the shared project a
+    secret sync by another team restarts the orchestration engine for
+    every workspace (Walter, the AE team), which would fit. The twin
+    autopilot now retries this answer every 10 s, six times.
 - **Not yet verified:** how many concurrent sessions the preview allows
   for our three agents under real load, with service-account invokes, the
   lane header and a `user_id` per visitor.

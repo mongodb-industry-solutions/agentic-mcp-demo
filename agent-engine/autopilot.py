@@ -49,7 +49,11 @@ INVOKE_TIMEOUT = "5m"
 # slower one then holds a refresh token the other just used up. A retry
 # picks up the token the other process stored.
 AUTH_RACE = ("session expired", "refresh token")
-AUTH_RETRIES, AUTH_RETRY_S = 2, 3
+# An agent scaled down (or still starting) answers "no capacity is
+# available ... retry after" (10 s) instead of queueing the request.
+COLD_START = ("no capacity is available",)
+RETRIES = 6
+RETRY_S = {AUTH_RACE: 3, COLD_START: 10}
 CATCH_UP = datetime.timedelta(minutes=5)   # open incidents this young are picked up at start
 
 
@@ -65,14 +69,18 @@ def respond(incidents, incident: dict) -> None:
     cmd = ["agentengine", "invoke", "--json", "--timeout", INVOKE_TIMEOUT, "--quiet"]
     for flag, value in TARGET.items():
         cmd += [flag, value]
-    for attempt in range(AUTH_RETRIES + 1):
+    for attempt in range(RETRIES + 1):
         proc = subprocess.run(cmd + [task], capture_output=True, text=True, check=False)
         try:
             out = json.loads(proc.stdout)
         except json.JSONDecodeError:
             out = {"success": False, "error": (proc.stderr or proc.stdout).strip()[-500:]}
-        if attempt < AUTH_RETRIES and any(s in (out.get("error") or "") for s in AUTH_RACE):
-            time.sleep(AUTH_RETRY_S)
+        error = out.get("error") or ""
+        kind = next((k for k in RETRY_S if any(s in error for s in k)), None)
+        if attempt < RETRIES and kind:
+            if kind is COLD_START:
+                _log(f"   ibn-agent has no free instance yet; retrying in {RETRY_S[kind]}s")
+            time.sleep(RETRY_S[kind])
             continue
         break
     ok = proc.returncode == 0 and str(out.get("success")).lower() == "true"
