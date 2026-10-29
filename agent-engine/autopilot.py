@@ -15,7 +15,8 @@ the deployed ibn-agent through `agentengine invoke` with the presenter's
 CLI login. Each run is its own session in Agent Engine Traces; its ids are
 recorded on the incident.
 
-The agent gets a short, fixed task. What it may do on its own is decided by
+The agent gets a short, fixed task (autonomy.TASK, which the browser shell
+sends its own IBN agent too). What it may do on its own is decided by
 the lane's autonomy policy, checked inside the tools (oss_tools/ibn/
 autonomy.py): at L3 it diagnoses and recommends, at L4 it also applies a
 runbook inside the envelope and waits for the monitor to verify recovery.
@@ -51,16 +52,6 @@ AUTH_RACE = ("session expired", "refresh token")
 AUTH_RETRIES, AUTH_RETRY_S = 2, 3
 CATCH_UP = datetime.timedelta(minutes=5)   # open incidents this young are picked up at start
 
-TASK = """AUTONOMOUS MODE ({policy}, level {level}). No human is in the loop: do not ask questions.
-The SLO monitor opened incident {incident_id} for intent {intent_id} at {site}: {note}.
-Work through these steps, one tool call at a time:
-1. diagnose_violation(intent_id="{intent_id}")
-2. check_autonomy(intent_id="{intent_id}", runbook_id=<the runbook of the top match>)
-3. If the decision is "allow": apply_runbook(runbook_id=<that runbook>, intent_id="{intent_id}", autonomous=true), then await_recovery(intent_id="{intent_id}").
-   If it is "escalate": apply nothing.
-4. If await_recovery reported a recovery: propose_prevention(intent_id="{intent_id}"). It only proposes; never apply the proposal yourself.
-5. Answer in at most four lines: what was detected, what you did or why it went to the NOC, the outcome, and what you proposed for the sister sites."""
-
 
 def _log(msg: str) -> None:
     print(f"{datetime.datetime.now():%H:%M:%S}  {msg}", flush=True)
@@ -68,10 +59,7 @@ def _log(msg: str) -> None:
 
 def respond(incidents, incident: dict) -> None:
     pol = autonomy.policy()
-    task = TASK.format(policy=autonomy.policy_name(pol), level=pol["level"],
-                       incident_id=incident["_id"], intent_id=incident["intent_id"],
-                       site=incident.get("site_name", "the site"),
-                       note=(incident.get("alarm") or {}).get("specific_problem", "SLO breach"))
+    task = autonomy.task(incident, pol)
     _log(f"🤖 {incident['intent_id']} at {incident.get('site_name')}: invoking ibn-agent "
          f"({pol['level']})")
     cmd = ["agentengine", "invoke", "--json", "--timeout", INVOKE_TIMEOUT, "--quiet"]

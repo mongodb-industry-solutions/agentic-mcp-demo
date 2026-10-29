@@ -361,6 +361,15 @@
     padding: 10px 14px; color: var(--red); margin: 8px 0; font-size: 14px;
   }
 
+  /* ── Self-healing run (no human prompt) ── */
+  .response-panel.autonomous { border-color: var(--cyan); }
+  .response-panel.autonomous .response-panel-title {
+    background: rgba(0,212,255,0.07); color: var(--cyan);
+    border-bottom-color: rgba(0,212,255,0.15);
+  }
+  .response-panel.autonomous.failed { border-color: var(--red); }
+  .auto-hint { color: var(--dim); font-size: 13px; margin-top: 8px; }
+
   /* ── NOC approval card (Agent Engine twin) ── */
   .approval-card {
     border: 1px solid var(--yellow); border-radius: 6px;
@@ -667,6 +676,11 @@ function connect() {
         `<div class="response-panel-body">${marked.parse(msg.markdown)}</div>`;
       historyEl.appendChild(panel);
       scrollChat();
+      return;
+    }
+
+    if (msg.type === 'autonomous') {
+      renderAutonomous(msg);
       return;
     }
 
@@ -998,6 +1012,46 @@ function appendTable(caption, headers, rows) {
     `<tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr>` +
     rows.map(r=>`<tr>${r.map(c=>`<td>${esc(c||'')}</td>`).join('')}</tr>`).join('');
   historyEl.appendChild(t);
+  scrollChat();
+}
+
+// ── Self-healing run (SELF_HEALING_PLAN.md, S5) ────────────────────────────
+// The SLO monitor opened an incident and the IBN agent handles it with no
+// human prompt. A run waiting for the current turn is announced in the Agent
+// Log; its panel is created when it starts (any earlier turn has answered by
+// then) and filled in place with the report, so it stays where the run began.
+function renderAutonomous(m) {
+  const where = `${m.intent_id}${m.site ? ' · ' + m.site : ''}`;
+  if (m.phase === 'queued') {
+    const ts = new Date().toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit'});
+    appendLog('AGENT', `🤖 ${ts} [AGENT] ⏳ self-healing run for ${where} starts after the current turn`);
+    return;
+  }
+  let panel = document.getElementById('auto-' + m.incident_id);
+  if (!panel) {
+    historyEl.appendChild(Object.assign(document.createElement('hr'), {className: 'turn-sep'}));
+    panel = document.createElement('div');
+    panel.id = 'auto-' + m.incident_id;
+    panel.className = 'response-panel autonomous';
+    panel.innerHTML = '<div class="response-panel-title"></div><div class="response-panel-body"></div>';
+    historyEl.appendChild(panel);
+  }
+  const title = panel.querySelector('.response-panel-title');
+  const body = panel.querySelector('.response-panel-body');
+  if (m.phase === 'started') {
+    title.textContent = `🤖 Self-healing · no human prompt · ${where} · autonomy ${m.level}`;
+    const mode = m.level === 'L4' ? 'acts inside the autonomy envelope'
+                                  : 'diagnoses and recommends; a NOC engineer decides';
+    body.innerHTML = `<p>The SLO monitor opened an incident: ${esc(m.note)}.</p>` +
+      `<p><span class="thinking-dot">▌</span> The IBN agent ${mode}…</p>`;
+  } else {
+    title.textContent = `🤖 Self-healing report · ${where} · autonomy ${m.level} ` +
+      `(time needed: ${m.elapsed} seconds)`;
+    panel.classList.toggle('failed', !m.ok);
+    body.innerHTML = marked.parse(m.markdown || 'No report.') + (m.ok && m.level !== 'L4'
+      ? '<div class="auto-hint">Autonomy L3: nothing was applied. Say <b>apply runbook</b> ' +
+        'to apply the recommendation.</div>' : '');
+  }
   scrollChat();
 }
 
