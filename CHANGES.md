@@ -1,5 +1,21 @@
 # CHANGES.md
 
+## 2026-10-21
+
+### Self-healing network, step 3: it learns, and proposes protecting the sister stores (Agent Engine twin)
+
+When the system fixes an incident by itself and the SLO monitor sees the
+store recover, the incident becomes a new entry in the knowledge base,
+written from what was measured. The next time the same thing happens at
+that store, the diagnosis finds this entry first ("learned by the
+self-healing loop"), and the autonomy policy counts it as a proven fix.
+After the recovery the agent also proposes protecting the other stores on
+the same network template: a canary at one store first, with the evidence
+from the knowledge base. Nothing changes until the NOC agrees, because a
+template change affects the whole chain. What one demo session learns
+stays in that session, and Reset removes it. The Kanopy demo never acts by
+itself, so it doesn't learn either.
+
 ## 2026-10-20
 
 ### Self-healing network, step 2: the system fixes it by itself (Agent Engine twin)
