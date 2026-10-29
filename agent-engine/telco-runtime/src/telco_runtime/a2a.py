@@ -13,9 +13,17 @@ in the execution log.
 The demo lane travels as the `demo-prefix` custom header. A2A does not
 forward it by itself, so each call passes it on explicitly, together with
 `consult-depth`, which keeps consultations one level deep.
+
+The depth also travels in the message itself (`[a2a depth=N] …`), because
+the platform doesn't keep custom headers across a NOC-review pause: a
+resume without them would replay a different path through the graph
+(recall skipped or not) and fail with "workflow conflict". The message is
+the run's durable input, so message_depth() gives the same answer on the
+first attempt and on every replay.
 """
 
 import json
+import re
 from typing import Any
 
 import httpx
@@ -37,6 +45,20 @@ def consult_depth() -> int:
         return int((get_current_custom_headers() or {}).get("consult-depth", "0"))
     except ValueError:
         return 0
+
+
+_DEPTH_MARK = re.compile(r"^\[a2a depth=(\d+)\] ")
+
+
+def mark_depth(message: str, depth: int) -> str:
+    return f"[a2a depth={depth}] {message}"
+
+
+def message_depth(text: str) -> int | None:
+    """The A2A depth a caller marked on its message; None for a message
+    from a user (or from a caller that predates the mark)."""
+    m = _DEPTH_MARK.match(text)
+    return int(m.group(1)) if m else None
 
 
 def is_a2a_child() -> bool:
@@ -72,7 +94,8 @@ def call_agent(app: App, name: str, message: str, depth: int) -> dict[str, Any]:
         return {"agent": name, "status": "failed",
                 "error": f"agent {name!r} is not deployed or not allowed for this caller"}
     try:
-        resp = client.invoke_agent(agent_id=agent_id, message=message, timeout=A2A_TIMEOUT_S,
+        resp = client.invoke_agent(agent_id=agent_id, message=mark_depth(message, depth),
+                                   timeout=A2A_TIMEOUT_S,
                                    custom_headers=forward_headers(depth))
     except httpx.HTTPError as e:  # incl. a 401 after the 5-min A2A token lifetime
         return {"agent": name, "status": "failed", "error": f"{type(e).__name__}: {e}"}

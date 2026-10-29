@@ -14,6 +14,12 @@ shaped like the seeded ones (title, site, ts, lng/lat, fingerprint,
 runbook_id, text), so the hero query finds it and Atlas embeds its text.
 Its text is written from the measurements, not from a template.
 
+On Agent Engine the same lesson also goes into platform memory (lesson()):
+await_recovery adds it to its result, and the domain agent's graph saves it
+as an org-visible semantic memory, so the coordinator recalls the fix in
+plain conversation ("have we seen this before?"). The chunk stays the
+system of record for the hero query; the memory is the agents' recollection.
+
 ibn_knowledge_chunks is shared by every lane and by the live Kanopy demo,
 and its vector index stays as it is. A learned chunk therefore carries its
 lane (the session prefix, '' for the default lane), every reader of
@@ -30,6 +36,36 @@ LEARNED_BY = "self-healing loop"
 
 def learned_id(incident_id) -> str:
     return f"INC-L-{incident_id}"
+
+
+def lesson_label(incident_id) -> str:
+    return f"learned-incident-{incident_id}"
+
+
+LESSON_MARK = "Lesson for memory"   # the line await_recovery adds, read by the graph
+
+
+def lesson(incident: dict, site_name: str, runbook: dict) -> str:
+    """One sentence about a closed, autonomously mitigated incident, for
+    platform memory."""
+    measured = incident.get("measured") or {}
+    action = incident["action"]
+    p95, util = measured.get("pos_latency_p95_ms"), measured.get("uplink_util_avg_pct")
+    symptom = "POS latency"
+    if p95 is not None:
+        symptom += f" of {p95:.0f} ms p95"
+        if incident.get("threshold") is not None:
+            symptom += f" against a {incident['threshold']} ms target"
+    if util is not None:
+        symptom += f", uplink {util:.0f}% busy"
+    mttr_s = incident.get("mttr_s") or round(
+        (incident["recovered_at"] - incident["opened_at"]).total_seconds())
+    return (f"Learned on {incident['recovered_at']:%Y-%m-%d}: in a morning rush at {site_name} "
+            f"({incident['intent_id']}), {symptom}, was fixed autonomously with runbook "
+            f"{runbook['_id']} ({runbook.get('title', '')}) under "
+            f"{action.get('policy', 'the autonomy policy')}; the SLO monitor verified the "
+            f"recovery {mttr_s:.0f} s after detection, with no human action. Sister sites on "
+            f"the same segmentation template are exposed to the same pattern.")
 
 
 def lane_filter(prefix: str) -> dict:

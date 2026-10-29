@@ -15,6 +15,25 @@ that from the platform's own traces in MongoDB. Reset reseeds the twin's
 data and starts a new conversation. It runs on the presenter's laptop with
 their Agent Engine login, for one presenter at a time.
 
+When an agent wants to make a change that needs the NOC's sign-off, such
+as activating a store's service, applying a runbook or rolling a template
+out to several stores, the shell shows an approval card in the chat: what
+would change, where, and how many stores it touches. You approve, reject
+or (for a rollout) approve one store first as a canary, with an optional
+note, and the agent carries on from where it paused. This also works
+when the coordinator handed the change to an agent. The twin's two agents
+have these reviews on (`NOC_REVIEW=on`).
+
+### The agents remember what the network learned (Agent Engine twin)
+
+When the system fixes an incident on its own, the agents now also remember
+it: a one-sentence lesson (where, what was measured, which runbook, how
+fast it recovered) goes into the platform's memory next to the learned
+incident in the knowledge base. Ask the coordinator "have we seen POS
+latency problems like this before?" and it can tell you from memory, while
+the diagnosis keeps searching the knowledge base with its time and
+location filters. Takes effect with the next ibn-agent deploy.
+
 ### Self-healing network, step 4: watch the loop on the dashboard
 
 The IBN dashboard has a new "Self-healing loop" panel. For the store in

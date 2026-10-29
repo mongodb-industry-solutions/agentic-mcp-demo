@@ -361,6 +361,42 @@
     padding: 10px 14px; color: var(--red); margin: 8px 0; font-size: 14px;
   }
 
+  /* ── NOC approval card (Agent Engine twin) ── */
+  .approval-card {
+    border: 1px solid var(--yellow); border-radius: 6px;
+    margin: 10px 0 4px; overflow: hidden;
+  }
+  .approval-card-title {
+    background: rgba(255,215,0,0.07); color: var(--yellow);
+    font-size: 13px; font-weight: 600; padding: 5px 14px;
+    border-bottom: 1px solid rgba(255,215,0,0.15);
+  }
+  .approval-card-body { padding: 10px 16px; font-size: 14px; line-height: 1.45; }
+  .approval-card-body .apr-headline { color: var(--text); font-weight: 600; font-size: 15px; }
+  .approval-card-body .apr-summary { color: var(--text); margin: 4px 0 8px; }
+  .approval-card-body table { border-collapse: collapse; margin: 4px 0 10px; font-size: 13px; }
+  .approval-card-body td { border: 1px solid var(--border); padding: 3px 8px; vertical-align: top; }
+  .approval-card-body td:first-child { color: var(--cyan); white-space: nowrap; }
+  .apr-notes {
+    width: 100%; background: transparent; border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text); font-family: var(--mono); font-size: 13px; padding: 5px 8px; margin-bottom: 8px;
+  }
+  .apr-notes:focus { outline: none; border-color: var(--yellow); }
+  .apr-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .apr-actions button {
+    font-family: var(--mono); font-size: 13px; padding: 5px 12px; border-radius: 4px;
+    cursor: pointer; background: transparent; border: 1px solid #333; color: var(--text);
+  }
+  .apr-actions .apr-approve { border-color: var(--green); color: var(--green); }
+  .apr-actions .apr-approve_canary { border-color: var(--cyan); color: var(--cyan); }
+  .apr-actions .apr-reject { border-color: var(--red); color: var(--red); }
+  .apr-actions button:hover:not(:disabled) { background: rgba(255,255,255,0.05); }
+  .apr-actions button:disabled { opacity: 0.4; cursor: default; }
+  .apr-status { margin-top: 8px; color: var(--dim); font-size: 13px; }
+  .approval-card.decided { border-color: var(--border); }
+  .approval-card.decided .approval-card-title { color: var(--dim); background: transparent; }
+  .approval-card.decided .apr-notes, .approval-card.decided .apr-actions { display: none; }
+
   .info-table { border-collapse: collapse; margin: 8px 0 12px; font-size: 14px; min-width: 280px; }
   .info-table caption { text-align: left; color: var(--cyan); font-weight: 600; margin-bottom: 6px; font-size: 14px; }
   .info-table th, .info-table td { border: 1px solid var(--border); padding: 4px 10px; }
@@ -627,10 +663,24 @@ function connect() {
       const panel = document.createElement('div');
       panel.className = 'response-panel';
       panel.innerHTML =
-        `<div class="response-panel-title">🤖 Agent Response (time needed: ${msg.elapsed} seconds)</div>` +
+        `<div class="response-panel-title">${esc(msg.title || '🤖 Agent Response')} (time needed: ${msg.elapsed} seconds)</div>` +
         `<div class="response-panel-body">${marked.parse(msg.markdown)}</div>`;
       historyEl.appendChild(panel);
       scrollChat();
+      return;
+    }
+
+    if (msg.type === 'approval') {
+      renderApproval(msg.review);
+      return;
+    }
+
+    if (msg.type === 'approval_failed') {
+      const card = document.getElementById('apr-' + msg.approval_id);
+      if (card) {
+        card.querySelectorAll('.apr-actions button').forEach(b => { b.disabled = false; });
+        card.querySelector('.apr-status').textContent = '❌ ' + msg.message;
+      }
       return;
     }
 
@@ -949,6 +999,58 @@ function appendTable(caption, headers, rows) {
     rows.map(r=>`<tr>${r.map(c=>`<td>${esc(c||'')}</td>`).join('')}</tr>`).join('');
   historyEl.appendChild(t);
   scrollChat();
+}
+
+// ── NOC approval card (Agent Engine twin) ──────────────────────────────────
+const APR_LABELS = {approve: '✓ Approve', approve_canary: '◐ Approve as canary', reject: '✕ Reject'};
+
+function aprValue(v) {
+  if (v == null || typeof v !== 'object') return esc(v ?? '');
+  if (Array.isArray(v)) return v.map(x => typeof x === 'object' ? esc(Object.values(x).join(' · ')) : esc(x)).join('<br>');
+  return Object.entries(v).map(([k, x]) => `${esc(k)}: ${esc(typeof x === 'object' ? JSON.stringify(x) : x)}`).join('<br>');
+}
+
+function renderApproval(r) {
+  let card = document.getElementById('apr-' + r.approval_id);
+  const isNew = !card;
+  if (isNew) {
+    card = document.createElement('div');
+    card.id = 'apr-' + r.approval_id;
+    card.className = 'approval-card';
+    const rows = Object.entries(r.details || {}).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${aprValue(v)}</td></tr>`).join('');
+    const canary = r.canary ? ` · canary: ${esc(r.canary.site)}` : '';
+    const buttons = (r.allowed_decisions || []).map(d =>
+      `<button class="apr-${esc(d)}" data-decision="${esc(d)}">${esc(APR_LABELS[d] || d)}</button>`).join('');
+    card.innerHTML =
+      `<div class="approval-card-title">⏸ NOC approval ${esc(r.approval_id)} · ${esc(r.agent)} · blast radius ${esc(r.blast_radius ?? 1)}${canary}</div>` +
+      `<div class="approval-card-body">` +
+        `<div class="apr-headline">${esc(r.title)}</div>` +
+        `<div class="apr-summary">${esc(r.summary)}</div>` +
+        (rows ? `<table>${rows}</table>` : '') +
+        `<input class="apr-notes" placeholder="Reviewer notes (optional)" maxlength="500">` +
+        `<div class="apr-actions">${buttons}</div>` +
+        `<div class="apr-status"></div>` +
+      `</div>`;
+    card.querySelectorAll('.apr-actions button').forEach(b => b.addEventListener('click', () => {
+      card.querySelectorAll('.apr-actions button').forEach(x => { x.disabled = true; });
+      card.querySelector('.apr-status').textContent = `Sending “${b.dataset.decision}” and resuming ${r.agent}…`;
+      ws.send(JSON.stringify({type: 'approval_decision', approval_id: r.approval_id,
+        decision: b.dataset.decision, notes: card.querySelector('.apr-notes').value}));
+    }));
+    if (r.status !== 'pending' && !r.decided_by) return;   // not shown before: nothing to update
+    historyEl.appendChild(card);
+    scrollChat();
+  }
+  if (r.status === 'pending') {
+    if (!r.resumable) card.querySelector('.apr-status').textContent = 'This review names no paused run: decide it in the Agent Engine UI.';
+    return;
+  }
+  card.classList.add('decided');
+  const verdict = {approved: '✓ Approved', rejected: '⛔ Rejected', expired: '⌛ Expired'}[r.status] || r.status;
+  const how = r.decision === 'approve_canary' ? ' as canary' : '';
+  card.querySelector('.approval-card-title').textContent = `${verdict}${how} · ${r.approval_id} · ${r.agent}`;
+  card.querySelector('.apr-status').textContent =
+    `${verdict}${how} by ${r.decided_by || 'noc'}` + (r.reviewer_notes ? ` — ${r.reviewer_notes}` : '');
 }
 
 // ── Tab switching ──────────────────────────────────────────────────────────

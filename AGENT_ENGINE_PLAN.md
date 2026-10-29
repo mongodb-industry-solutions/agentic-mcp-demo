@@ -11,6 +11,9 @@ footprint."* We migrate without breaking the live demos at any point.
 > 2026-10-14) and the product page. Agent Engine is in **Public Preview**:
 > no SLA, breaking changes expected. Every "⚠ verify" below is an
 > assumption we have not yet confirmed against a running workspace.
+>
+> What's still open for the hosted demo, split into organizational TODOs
+> and missing Agent Engine features: `AGENT_ENGINE_TODO.md`.
 
 ---
 
@@ -115,7 +118,7 @@ one memory identity**.
              │  OAuth client-credentials token (service account)       ▲
              │  POST /invokeStream  X-Session-ID: <token>              │ Change
              │  X-Mdb-Agent-Engine-Custom-Demo-Prefix: s_<token>_      │ Streams
-             │  POST /executions/{id}/resume  (approval card)          │
+             │  POST /invoke  session + resume_map  (approval card)    │
              ▼                                                         │
  ┌──────────── Atlas Agent Engine project "telco-oss" ───────────────┐ │
  │  Policy Engine (org ⊃ project)   Guardrails   Traces   Memory     │ │
@@ -771,12 +774,14 @@ runs as a twin next to the Kanopy demo, single user:
 - **Chat:** the twin's web shell (Phase 8a, below) or the Atlas Agent
   Engine UI, with `noc-coordinator`. A human login keeps the user's memory
   identity.
-- **No NOC approvals.** The chat UI offers no way to approve a paused
-  run, and no Pending Reviews page turned up for a project owner. The
-  documented `/resume` endpoint refuses native `interrupt()` pauses anyway
-  (Phase 3 finding 5). The workspace secret `NOC_REVIEW=off` (ibn-agent,
-  dtw-agent) builds the graph without the review node; set it to `on` and
-  sync to bring the approvals back. The code is unchanged otherwise.
+- **NOC approvals in the twin shell only.** The chat UI offers no way to
+  approve a paused run, and no Pending Reviews page turned up for a
+  project owner. The documented `/resume` endpoint refuses native
+  `interrupt()` pauses anyway (Phase 3 finding 5). The twin shell's
+  approval card resumes them (below). The workspace secret `NOC_REVIEW`
+  (ibn-agent, dtw-agent) switches the review node: `off` builds the graph
+  without it, `on` brings the approvals back (`agentengine secret set
+  NOC_REVIEW --workspace-id <ws> --sync`).
 - **LLM through the Grove gateway** (Azure API Management,
   `grove-gateway-prod.azure-api.net/grove-foundry-prod/openai/v1`). It
   takes the key in an `api-key` header; `Authorization: Bearer` alone gets
@@ -814,6 +819,36 @@ runs as a twin next to the Kanopy demo, single user:
   Owner on JeffN's linked Atlas project, see the Phase 8 questions below)
   and the lanes: the CLI sends no custom headers, so the twin shell has one
   lane and one presenter.
+- **Approval card (Phase 8a, 2026-10-21):** the shell watches the lane's
+  `agent_approvals` with a change stream and shows each pending review as
+  a card in the chat (title, summary, details, blast radius, the
+  `allowed_decisions` as buttons, reviewer notes); the page also gets the
+  pending ones on connect, and a decided review updates its card, also
+  when the autonomy policy decided it. A review always pauses a domain
+  agent (the coordinator delegates; A2A can't resume a child), and its doc
+  names that agent's `execution_id`/`session_id` (`execution_context()`).
+  The tool sandbox doesn't know its workspace id, so the shell derives the
+  agent from the action (`ACTION_WORKSPACE`: IBN actions → ibn-agent,
+  scenario deletes → dtw-agent). A decision reads the interrupt id from
+  `GET /executions/{id}` (`suspend_context.interrupts[].id`, matched on the
+  payload's `approval_id`; the CLI has no command for it, so the shell
+  uses the CLI login's token from `~/.agentengine/auth.json`, and a 401
+  makes the CLI refresh it), then resumes with `agentengine invoke
+  --workspace-id <agent> --session <session> --resume '{<id>: {decision,
+  reviewer_notes}}'`. The agent's answer appears as a response panel; a
+  canary's second review arrives as a new card. A review whose run is
+  gone (404 or a terminal status) is set to `expired` and its markers are
+  cleared. The coordinator's conversation doesn't learn the outcome.
+  The platform doesn't keep custom headers across a pause, and the CLI
+  can't resend them, so whatever the graph decides from a header must be
+  in the durable input instead: `call_agent` marks the A2A depth in the
+  message (`[a2a depth=N] …`, `telco_runtime.a2a.mark_depth`) and the
+  graph reads it from there (`graph.turn_depth`, the header only as a
+  fallback). Without it a delegated review's replay skipped a different
+  set of steps and failed with "workflow conflict: activity step 2 does
+  not match next step 8". An HTTP `invoke` with `session_id` and
+  `resume_map` (which could resend the headers) started a new, empty turn
+  instead of resuming, so the shell resumes through the CLI.
 - **The Kanopy demo stays as it is.** Every push to `main` redeploys
   production (`.drone.yml`), and PRs #31–#35 change legacy code
   (`mcp_servers/`, `web/*.html`, `seed_runner.py`). They stay unmerged

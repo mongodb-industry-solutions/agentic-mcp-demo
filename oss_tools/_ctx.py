@@ -64,7 +64,13 @@ def execution_context() -> dict:
         return {}
     ids = {"execution_id": get_current_execution_id(), "session_id": get_current_session_id(),
            "workspace_id": get_current_workspace_id()}
-    return {k: v for k, v in ids.items() if v}
+    ctx = {k: v for k, v in ids.items() if v}
+    # The platform doesn't keep custom headers across a pause, so whoever
+    # resumes the run must resend them (the lane, and consult-depth, which
+    # tells the graph it runs as an A2A child).
+    headers = get_current_custom_headers() or {}
+    ctx["headers"] = {k: headers[k] for k in ("demo-prefix", "consult-depth") if k in headers}
+    return ctx
 
 
 def db():
