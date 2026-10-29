@@ -244,15 +244,18 @@ def _review_payload(action: str, review: dict, extra: dict | None = None) -> dic
 
 
 def build_domain_graph(
-    app: App, spec: dict, review: ModuleType | None = None
+    app: App, spec: dict, review: ModuleType | None = None, noc_review: bool = True
 ) -> CompiledStateGraph:
     """Build the agent graph for one catalog spec ({name, system_prompt, …}).
     `review` is the oss_tools.approvals module (registered with
-    register_tools); its tools stay internal to the review node.
+    register_tools); its tools stay internal to the review node, and are
+    never offered to the model, also when noc_review=False turns the NOC
+    approval step off.
     consult_agent is offered when the agent registered it (register_consult).
     Call from inside the agent's @app.entrypoint (app.llm needs it)."""
     internal = {fn.__name__ for fn in review.tools} if review else set()
-    reviewed = set(review.REVIEWED_ACTIONS) if review else set()
+    gate = review if noc_review else None
+    reviewed = set(gate.REVIEWED_ACTIONS) if gate else set()
     model = app.llm(_llm())
     schemas = [t for t in app.get_tool_schemas() if t.name not in internal]
     can_consult = any(t.name == "consult_agent" for t in schemas)
@@ -311,7 +314,7 @@ def build_domain_graph(
     def prompt(state: AgentState) -> list[AnyMessage]:
         system = SystemMessage(
             content=spec["system_prompt"]
-            + (APPROVAL_RULES if review else "")
+            + (APPROVAL_RULES if gate else "")
             + (CONSULT_GUIDANCE if consult_offered(state) else "")
             + f"\n\nToday's date is {datetime.date.today().isoformat()}."
             + (f"\n\n🧠 {mem.MEMORY_PREAMBLE}\n{state['memory']}"
@@ -423,7 +426,7 @@ def build_domain_graph(
         last = state["messages"][-1]
         if not (isinstance(last, AIMessage) and last.tool_calls):
             return "end"
-        return "review" if review else "tools"
+        return "review" if gate else "tools"
 
     def after_review(state: AgentState) -> Literal["tools", "agent"]:
         # A rejection left a ToolMessage in place of the call.
@@ -459,7 +462,7 @@ def build_domain_graph(
     builder.add_edge(START, "recall")
     builder.add_edge("recall", "agent")
     after_tools_paths: dict = {"agent": "agent", "finalize": "finalize"}
-    if review:
+    if gate:
         builder.add_node("review", review_node)
         builder.add_node("canary", canary_node)
         builder.add_conditional_edges("agent", after_agent, {"review": "review", "end": END})

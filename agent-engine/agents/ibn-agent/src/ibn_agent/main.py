@@ -26,8 +26,9 @@ register_tools(app, [intent, inventory, feasibility, assurance, telemetry, appro
 def build_agent() -> CompiledStateGraph:
     # NOC_REVIEW=off (a workspace secret) skips the NOC approval step: the
     # Agent Engine twin's chat UI has no way to approve (plan, twin section).
-    review = None if os.environ.get("NOC_REVIEW", "on").lower() == "off" else approvals
-    return build_domain_graph(app, IBN_AGENT, review=review)
+    # The approval tools stay internal either way.
+    noc_review = os.environ.get("NOC_REVIEW", "on").lower() != "off"
+    return build_domain_graph(app, IBN_AGENT, review=approvals, noc_review=noc_review)
 
 
 def main() -> None:
