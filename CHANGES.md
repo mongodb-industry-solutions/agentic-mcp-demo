@@ -2,6 +2,20 @@
 
 ## 2026-10-21
 
+### Self-healing network, step 4: watch the loop on the dashboard
+
+The IBN dashboard has a new "Self-healing loop" panel. For the store in
+focus it lights up each step as it happens (sense, detect, diagnose,
+decide, act, verify, learn, prevent) with its time, counts the seconds
+since the alarm, and ends with "MTTR 28 s · 0 human actions". Next to it:
+the alarm (severity, probable cause, root cause, the past incident it
+matched), what the autonomy policy decided, the agent's own three-line
+report, a latency chart marking the breach, the fix and the recovery, and
+the proposal for the sister stores. A switch sets the level: L3 stops at a
+recommendation for the NOC, L4 fixes it. Stores with a pending proposal
+get a 📋 on their tab. On the Kanopy demo the switch stays at L3: acting
+on its own runs only on the Agent Engine twin for now.
+
 ### Self-healing network, step 3: it learns, and proposes protecting the sister stores (Agent Engine twin)
 
 When the system fixes an incident by itself and the SLO monitor sees the

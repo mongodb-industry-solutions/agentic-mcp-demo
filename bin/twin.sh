@@ -47,6 +47,9 @@ export PYTHONUNBUFFERED=1
 # windows such as the SLO monitor's 60 s duplicate check compare local
 # time with UTC. The twin dashboards therefore show UTC.
 export TZ=UTC
+# The twin's cluster is the only place the system may act on its own (L4):
+# the dashboards' autonomy switch and the autopilot check this.
+export SELF_HEALING_L4=1
 mkdir -p "$LOGDIR" "$RUNDIR"
 
 start() {

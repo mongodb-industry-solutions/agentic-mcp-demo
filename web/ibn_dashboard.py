@@ -152,6 +152,11 @@ async def build_snapshot(db, pfx):
         "site":    None,
         "telemetry": [],
         "events":  [],
+        # The self-healing loop (S4): newest incident per intent, the lane's
+        # autonomy level, and the data's clock.
+        "incidents": [_serializable(d) for d in await assurance.latest_incidents(db, pfx)],
+        "autonomy": await assurance.autonomy_state(db, pfx),
+        "server_now": _now_iso(),
     }
     if focused:
         plan = await latest_plan_for(db, pfx, focused["_id"])
@@ -206,6 +211,49 @@ async def watch_compliance(db, session: DashSession):
         except Exception as e:
             log.warning(f"compliance stream error ({e}); retrying in 2s")
             await asyncio.sleep(2)
+
+
+async def watch_self_healing(db, session: DashSession):
+    """The self-healing loop's incidents (SELF_HEALING_PLAN.md, S4): every
+    stage the monitor, the tools and the autopilot write lands on the
+    incident's timeline, and the page's ribbon follows it."""
+    pfx = session.prefix
+    coll = db[pfx + "ibn_incidents"]
+    while True:
+        try:
+            stream = await coll.watch(full_document="updateLookup")
+            async with stream:
+                async for change in stream:
+                    doc = change.get("fullDocument")
+                    if change["operationType"] in ("insert", "update", "replace") and doc:
+                        await broadcast(session, {"type": "incident", "doc": _serializable(doc),
+                                                  "server_now": _now_iso()})
+        except Exception as e:
+            log.warning(f"incident stream error ({e}); retrying in 2s")
+            await asyncio.sleep(2)
+
+
+async def watch_autonomy(db, session: DashSession):
+    """The lane's autonomy level, set by the page's switch, the twin's
+    autopilot, or Reset (which deletes the policy: back to L3)."""
+    pfx = session.prefix
+    coll = db[pfx + "ibn_autonomy_policy"]
+    while True:
+        try:
+            stream = await coll.watch()
+            async with stream:
+                async for _ in stream:
+                    await broadcast(session, {"type": "autonomy",
+                                              **await assurance.autonomy_state(db, pfx)})
+        except Exception as e:
+            log.warning(f"autonomy stream error ({e}); retrying in 2s")
+            await asyncio.sleep(2)
+
+
+def _now_iso() -> str:
+    # The data's clock (naive datetime.now(), like every writer), so the page
+    # can time a running incident without trusting the browser's timezone.
+    return datetime.datetime.now().isoformat()
 
 
 async def poll_telemetry(db, session: DashSession, interval_seconds: float = 1.0):
@@ -321,6 +369,8 @@ async def _get_or_start_session(db, prefix: str) -> DashSession:
                 # The self-healing loop's network side (SELF_HEALING_PLAN.md, S1).
                 asyncio.create_task(assurance.rush_runner(db, prefix, notify, sess.rushing)),
                 asyncio.create_task(assurance.slo_evaluator(db, prefix, notify, sess.rushing)),
+                asyncio.create_task(watch_self_healing(db, sess)),
+                asyncio.create_task(watch_autonomy(db, sess)),
             ]
             _sessions[prefix] = sess
             log.info(f"session lane started (prefix={prefix!r}, "
@@ -423,12 +473,19 @@ async def intent_snapshot(intent_id: str, session: str = ""):
 
 async def handle_client_message(db, pfx: str, text: str) -> None:
     """Requests from the page. `start_rush` queues a morning rush for an
-    active intent; the lane's rush runner plays it."""
+    active intent; the lane's rush runner plays it. `set_autonomy` is the
+    L3/L4 switch (L4 only where it's allowed, see autonomy.l4_allowed)."""
     try:
         msg = json.loads(text)
     except ValueError:
         return
-    if not isinstance(msg, dict) or msg.get("type") != "start_rush":
+    if not isinstance(msg, dict):
+        return
+    if msg.get("type") == "set_autonomy":
+        if not await assurance.set_autonomy_level(db, pfx, str(msg.get("level") or "")):
+            log.info(f"autonomy level {msg.get('level')!r} refused (prefix={pfx!r})")
+        return
+    if msg.get("type") != "start_rush":
         return
     intent = await db[pfx + "ibn_intents"].find_one(
         {"_id": str(msg.get("intent_id") or ""), "status": {"$in": ["active", "violated"]}})

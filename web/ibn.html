@@ -595,11 +595,60 @@
   /* Self-healing S1: morning rush control + status (SELF_HEALING_PLAN.md) */
   .rush-row { display: flex; align-items: center; gap: 12px; margin: 10px 0 4px; }
   .rush-btn { background: transparent; color: var(--cyan); border: 1px solid var(--cyan);
-              border-radius: 6px; padding: 5px 12px; font-size: 14px; cursor: pointer; }
+              border-radius: 6px; padding: 5px 12px; font-size: 14px; cursor: pointer; white-space: nowrap; }
   .rush-btn:disabled { opacity: 0.4; cursor: default; }
   .rush-status { color: var(--text-dim); font-size: 14px; font-family: var(--mono); }
   .rush-status .open { color: var(--red); }
   .rush-status .ok { color: var(--green); }
+
+  /* ── Self-healing loop (SELF_HEALING_PLAN.md, S4) ───────────────── */
+  .heal-panel { margin-bottom: 16px; min-height: 0; }
+  .heal-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
+  .heal-head h2 { margin: 0; }
+  .autonomy-switch { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .autonomy-switch button {
+    background: transparent; color: var(--text-dim); border: 0; padding: 6px 12px;
+    font-family: var(--mono); font-size: 13px; cursor: pointer;
+  }
+  .autonomy-switch button + button { border-left: 1px solid var(--border); }
+  .autonomy-switch button.on[data-level="L3"] { background: rgba(255,209,102,0.12); color: var(--yellow); }
+  .autonomy-switch button.on[data-level="L4"] { background: var(--green-dim); color: var(--green); }
+  .autonomy-switch button:disabled { opacity: 0.35; cursor: not-allowed; }
+  .heal-clock { margin-left: auto; font-family: var(--mono); font-size: 15px; color: var(--text-dim); }
+  .heal-clock strong { font-size: 22px; color: var(--text); font-weight: 500; }
+  .heal-clock.ok strong { color: var(--green); }
+  .heal-clock.warn strong { color: var(--yellow); }
+
+  .ribbon { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 6px; margin-bottom: 16px; }
+  .stage {
+    border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px;
+    background: var(--surface); color: var(--text-dim); min-width: 0;
+  }
+  .stage .name { font-family: var(--heading); font-weight: 600; font-size: 15px; }
+  .stage .when { font-family: var(--mono); font-size: 12px; margin-top: 2px; white-space: nowrap; }
+  .stage.done   { border-color: rgba(0,255,163,0.35); background: var(--green-dim); color: var(--green); }
+  .stage.warn   { border-color: rgba(255,209,102,0.45); background: rgba(255,209,102,0.08); color: var(--yellow); }
+  .stage.active { border-color: var(--cyan); color: var(--cyan); animation: awaiting-pulse 1.6s ease-in-out infinite; }
+
+  .heal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .heal-card { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; font-size: 14px; }
+  .heal-card h3 { font-family: var(--heading); font-size: 15px; font-weight: 600; margin-bottom: 8px; color: var(--text-2); }
+  .heal-card dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; }
+  .heal-card dt { color: var(--text-dim); font-family: var(--mono); font-size: 12px; padding-top: 2px; }
+  .heal-card dd { color: var(--text-2); overflow-wrap: anywhere; }
+  .heal-note { margin-top: 10px; padding: 8px 12px; border-left: 3px solid var(--cyan);
+               background: var(--cyan-dim); color: var(--text-2); white-space: pre-wrap; }
+  .heal-note.warn { border-left-color: var(--yellow); background: rgba(255,209,102,0.06); }
+  .heal-note.ok { border-left-color: var(--green); background: var(--green-dim); }
+  .heal-chart svg { width: 100%; height: auto; display: block; }
+  .heal-empty { color: var(--text-dim); font-size: 14px; }
+  body.exec-mode .eng-only { display: none; }
+
+  @media (max-width: 900px) {
+    .ribbon { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .heal-grid { grid-template-columns: 1fr; }
+    .heal-clock { margin-left: 0; }
+  }
 </style>
 </head>
 <body>
@@ -644,6 +693,16 @@
         <div class="plan-empty">Activate an intent to see live telemetry.</div>
       </div>
     </div>
+  </div>
+
+  <!-- ── Self-healing loop (S4) ── -->
+  <div class="panel heal-panel" id="healPanel">
+    <div class="heal-head">
+      <h2>Self-healing loop</h2>
+      <div class="autonomy-switch" id="autonomySwitch"></div>
+      <div class="heal-clock" id="healClock"></div>
+    </div>
+    <div id="healBody"></div>
   </div>
 
   <div class="events-bar">
@@ -729,6 +788,8 @@ let state = {
   events: [],
   rush: {},       // intent_id → latest morning-rush tick {clock, load, status}
   incident: {},   // intent_id → latest self-healing incident
+  autonomy: null, // {level, policy, l4_allowed} of this lane
+  clockOffset: 0, // data clock − browser clock (ms); the twin stores UTC
 };
 
 // ── Formatting helpers ──
@@ -992,6 +1053,183 @@ function patchRush() {
   el.innerHTML = text;
 }
 
+// ── Self-healing loop (S4): ribbon, clock, switch, alarm card, chart ──
+const STAGES = [['sense', 'Sense'], ['detect', 'Detect'], ['diagnose', 'Diagnose'], ['decide', 'Decide'],
+                ['act', 'Act'], ['verify', 'Verify'], ['learn', 'Learn'], ['prevent', 'Prevent']];
+
+function dataNow() { return Date.now() + state.clockOffset; }
+function syncClock(serverNow) { if (serverNow) state.clockOffset = Date.parse(serverNow) - Date.now(); }
+function secondsBetween(a, b) { return Math.max(0, Math.round((Date.parse(b) - Date.parse(a)) / 1000)); }
+
+function stageInfo(inc, key) {
+  const entry = [...(inc.timeline || [])].reverse().find(s => s.stage === key);
+  const escalated = (inc.decision || {}).decision === 'escalate';
+  if (key === 'sense') return {cls: 'done', when: 'telemetry', note: 'live four-metric telemetry from the store'};
+  if (key === 'act' && escalated && !entry) return {cls: 'warn', when: '→ NOC', note: 'outside the envelope: nothing applied'};
+  if (!entry) return {cls: '', when: '', note: ''};
+  const warn = (key === 'decide' && escalated) || (key === 'verify' && entry.by === 'await_recovery');
+  return {cls: warn ? 'warn' : 'done', when: fmtTime(entry.ts), note: `${entry.by}: ${entry.note}`};
+}
+
+function renderAutonomySwitch() {
+  const el = document.getElementById('autonomySwitch');
+  const a = state.autonomy;
+  if (!a) { el.innerHTML = ''; return; }
+  const btn = (level, label, disabled, title) =>
+    `<button data-level="${level}" class="${a.level === level ? 'on' : ''}" ${disabled ? 'disabled' : ''}
+       title="${esc(title)}" onclick="setAutonomy('${level}')">${level} · ${label}</button>`;
+  el.innerHTML = btn('L3', 'recommend', false, 'Detect, diagnose and recommend; a NOC engineer decides') +
+    btn('L4', 'act', !a.l4_allowed, a.l4_allowed ? 'Act on its own inside the autonomy envelope'
+        : 'Acting on its own runs only on the Agent Engine twin');
+}
+
+function setAutonomy(level) {
+  if (!ws || ws.readyState !== 1 || !state.autonomy || state.autonomy.level === level) return;
+  ws.send(JSON.stringify({type: 'set_autonomy', level}));
+}
+
+function patchHealClock() {
+  const el = document.getElementById('healClock');
+  const inc = state.focused && state.incident[state.focused._id];
+  if (!el) return;
+  if (!inc) { el.className = 'heal-clock'; el.innerHTML = ''; return; }
+  const autonomous = !!inc.action;
+  const escalated = (inc.decision || {}).decision === 'escalate' || inc.status === 'escalated';
+  if (inc.open) {
+    const s = Math.max(0, Math.round((dataNow() - Date.parse(inc.opened_at)) / 1000));
+    el.className = 'heal-clock' + (escalated ? ' warn' : '');
+    el.innerHTML = `<strong>${s} s</strong> since detection · ` +
+      (escalated ? 'awaiting the NOC' : autonomous ? 'verifying, 0 human actions' : '0 human actions so far');
+  } else {
+    const mttr = Math.round(inc.mttr_s || secondsBetween(inc.opened_at, inc.recovered_at));
+    el.className = 'heal-clock' + (autonomous ? ' ok' : ' warn');
+    el.innerHTML = autonomous ? `MTTR <strong>${mttr} s</strong> · 0 human actions`
+      : escalated ? `recovered by itself after <strong>${mttr} s</strong> · escalated to the NOC`
+      : `recovered after <strong>${mttr} s</strong>`;
+  }
+}
+
+function latencyChart(inc, threshold) {
+  const pts = state.telemetry.filter(s => s.meta && s.meta.metric === 'pos_latency_ms')
+                .map(s => [Date.parse(s.ts), s.value]);
+  if (pts.length < 2 || threshold == null) return '<div class="heal-empty">Waiting for telemetry…</div>';
+  const W = 600, H = 170, L = 34, R = 8, T = 38, B = 18;
+  const t0 = pts[0][0], t1 = pts[pts.length - 1][0];
+  const vmax = Math.max(threshold * 1.4, ...pts.map(p => p[1]));
+  const x = t => L + (W - L - R) * (t - t0) / Math.max(1, t1 - t0);
+  const y = v => T + (H - T - B) * (1 - v / vmax);
+  const line = pts.map(p => `${x(p[0]).toFixed(1)},${y(p[1]).toFixed(1)}`).join(' ');
+  // Labels in two rows (breach and its fix are seconds apart), right-aligned near the edge.
+  const marks = [['detect', 'breach detected', 'var(--red)', 12], ['act', 'runbook applied', 'var(--cyan)', 28],
+                 ['verify', 'recovered', 'var(--green)', 12]].map(([stage, label, color, ly]) => {
+    const e = inc && (inc.timeline || []).find(s => s.stage === stage && s.by !== 'await_recovery');
+    const t = e && Date.parse(e.ts);
+    if (!t || t < t0 || t > t1) return '';
+    return `<line x1="${x(t)}" x2="${x(t)}" y1="${T}" y2="${H - B}" stroke="${color}" stroke-dasharray="3 3"/>
+            <text x="${x(t) > W - 110 ? x(t) - 3 : x(t) + 3}" y="${ly}" fill="${color}" font-size="11"
+              text-anchor="${x(t) > W - 110 ? 'end' : 'start'}">${label}</text>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="POS latency, last two minutes">
+    <line x1="${L}" x2="${W - R}" y1="${y(threshold)}" y2="${y(threshold)}" stroke="var(--yellow)" stroke-dasharray="6 4"/>
+    <text x="2" y="${y(threshold) + 4}" fill="var(--yellow)" font-size="11">${threshold}</text>
+    <text x="2" y="${H - B + 4}" fill="var(--text-dim)" font-size="11">0</text>
+    ${marks}
+    <polyline points="${line}" fill="none" stroke="var(--text)" stroke-width="1.6"/>
+  </svg>`;
+}
+
+function renderHeal() {
+  renderAutonomySwitch();
+  patchHealClock();
+  const body = document.getElementById('healBody');
+  const i = state.focused;
+  const inc = i && state.incident[i._id];
+  if (!i) { body.innerHTML = ''; return; }
+  const threshold = ((i.parsed || {}).targets || {}).pos_latency_ms;
+  const level = (state.autonomy || {}).level || 'L3';
+  if (!inc) {
+    body.innerHTML = `<div class="heal-empty">No incident at this site. Start a morning rush: the SLO monitor
+      detects a breach by itself, and at ${level} the system ${level === 'L4'
+        ? 'fixes it on its own inside the autonomy envelope' : 'diagnoses it and recommends a fix for the NOC'}.</div>
+      ${i.proposed_change ? proposedHere(i) : ''}`;
+    return;
+  }
+  const infos = STAGES.map(([key]) => stageInfo(inc, key));
+  // While the incident is open, the stage after the last completed one is in progress.
+  const last = infos.map(s => !!s.cls).lastIndexOf(true);
+  const escalated = (inc.decision || {}).decision === 'escalate';
+  if (inc.open && !escalated && last + 1 < infos.length) {
+    infos[last + 1] = {...infos[last + 1], cls: 'active', when: '…'};
+  }
+  const ribbon = STAGES.map(([, name], n) => {
+    const s = infos[n];
+    return `<div class="stage ${s.cls}" title="${esc(s.note)}"><div class="name">${name}</div>
+      <div class="when">${esc(s.when) || '&nbsp;'}</div></div>`;
+  }).join('');
+  const alarm = inc.alarm || {}, dx = inc.diagnosis || {}, dec = inc.decision || {};
+  const sim = dx.similarity != null ? `<span class="eng-only">${dx.similarity.toFixed(2)} · </span>` : '';
+  let decision = '';
+  if (dec.decision === 'allow') {
+    decision = `<div class="heal-note ok">✓ ${esc(dec.policy)}: ${esc(dec.runbook_id)} is inside the envelope, applied without a human.</div>`;
+  } else if (dec.decision === 'escalate') {
+    decision = `<div class="heal-note warn">⏸ Recommendation for the NOC: ${esc(dx.runbook_id || 'no runbook')}` +
+      ` (top match ${esc(dx.top_match || '—')}). Not applied: ${esc((dec.reasons || []).join('; '))}.</div>`;
+  }
+  const report = (inc.autopilot || {}).answer
+    ? `<div class="heal-note">🤖 ${esc(inc.autopilot.answer)}</div>` : '';
+  body.innerHTML = `
+    <div class="ribbon">${ribbon}</div>
+    <div class="heal-grid">
+      <div class="heal-card">
+        <h3>Alarm · ${esc(inc.site_name || i._id)}</h3>
+        <dl>
+          <dt>severity</dt><dd>${esc(alarm.perceived_severity || '—')}</dd>
+          <dt>type</dt><dd>${esc(alarm.alarm_type || '—')}</dd>
+          <dt>probable cause</dt><dd>${esc(alarm.probable_cause || '—')}</dd>
+          <dt>problem</dt><dd>${esc(alarm.specific_problem || '—')}</dd>
+          <dt>root cause</dt><dd>${esc(alarm.root_cause || 'not diagnosed yet')}</dd>
+          <dt>precedent</dt><dd>${dx.top_match ? `${sim}${esc(dx.top_match)} → ${esc(dx.runbook_id || 'no runbook')}` : '—'}</dd>
+          <dt>status</dt><dd>${esc(inc.status)}</dd>
+          <dt class="eng-only">incident</dt><dd class="eng-only">${esc(inc._id)}${(inc.autopilot || {}).session_id
+            ? ' · trace session ' + esc(inc.autopilot.session_id) : ''}</dd>
+        </dl>
+        ${decision}${report}
+      </div>
+      <div class="heal-card heal-chart">
+        <h3>POS latency, last two minutes</h3>
+        <div id="healChart">${latencyChart(inc, threshold)}</div>
+        ${proposal(inc)}
+      </div>
+    </div>
+    ${i.proposed_change ? proposedHere(i) : ''}`;
+}
+
+function proposal(inc) {
+  const p = inc.prevention;
+  if (!p) return '';
+  if (p.status === 'none') return `<div class="heal-note">No fleet change needed: ${esc(p.reason)}.</div>`;
+  const ev = p.evidence || {};
+  const rest = (p.sisters || []).slice(1).map(s => s.site);
+  const head = p.status === 'approved' ? '✓ Approved by the NOC' : '📋 The system proposes, the NOC approves';
+  return `<div class="heal-note ${p.status === 'approved' ? 'ok' : 'warn'}"><strong>${head}</strong>
+${esc(p.template)} → ${esc(p.new_version)}: canary at ${esc((p.canary || {}).site)}${rest.length ? ', then ' + esc(rest.join(', ')) : ''}.
+Evidence: ${esc(p.runbook_id)} fixed ${ev.incidents} incident(s) at ${esc((ev.sites || []).join(', '))}${ev.learned ? ` (${ev.learned} learned by this loop)` : ''}.</div>`;
+}
+
+function proposedHere(i) {
+  return `<div class="heal-note warn">📋 Proposed for this site: ${esc(i.proposed_change.title)}.
+Waiting for a NOC decision; nothing has changed yet.</div>`;
+}
+
+function patchHealChart() {
+  const el = document.getElementById('healChart');
+  const i = state.focused;
+  if (!el || !i) return;
+  el.innerHTML = latencyChart(state.incident[i._id], ((i.parsed || {}).targets || {}).pos_latency_ms);
+}
+
+setInterval(patchHealClock, 1000);
+
 // ── Telemetry-only patch — updates live value + gauge without re-rendering the panel ──
 function patchAssuranceTelemetry() {
   const i = state.focused;
@@ -1054,7 +1292,7 @@ function renderTabs() {
       <div class="tab${isActive ? ' active' : ''}" id="tab-${id}"
            onclick="switchFocus('${id}')">
         <span class="tab-name">${esc(siteName)}</span>
-        <span class="tab-status ${status}">${status}</span>${intent.pending_approval ? ' <span title="awaiting NOC approval">⏸</span>' : ''}
+        <span class="tab-status ${status}">${status}</span>${intent.pending_approval ? ' <span title="awaiting NOC approval">⏸</span>' : ''}${intent.proposed_change ? ' <span title="change proposed by the self-healing loop">📋</span>' : ''}
       </div>`;
   }).join('');
 }
@@ -1075,7 +1313,7 @@ async function switchFocus(intentId) {
   }
 }
 
-function renderAll() { renderTabs(); renderIntent(); renderPlan(); renderAssurance(); }
+function renderAll() { renderTabs(); renderIntent(); renderPlan(); renderAssurance(); renderHeal(); }
 
 function animateContent() {
   const grid = document.querySelector('.grid');
@@ -1250,6 +1488,9 @@ function connect() {
       state.site    = msg.site;
       state.telemetry = msg.telemetry || [];
       state.events  = msg.events || [];
+      state.incident = Object.fromEntries((msg.incidents || []).map(d => [d.intent_id, d]));
+      state.autonomy = msg.autonomy || null;
+      syncClock(msg.server_now);
       renderAll();
       return;
     }
@@ -1299,6 +1540,7 @@ function connect() {
       if (state.focused && msg.intent_id === state.focused._id) {
         state.telemetry = msg.samples;
         patchAssuranceTelemetry();
+        patchHealChart();
       }
       return;
     }
@@ -1311,7 +1553,15 @@ function connect() {
 
     if (msg.type === 'incident') {
       state.incident[msg.doc.intent_id] = msg.doc;
+      syncClock(msg.server_now);
       patchRush();
+      if (state.focused && msg.doc.intent_id === state.focused._id) renderHeal();
+      return;
+    }
+
+    if (msg.type === 'autonomy') {
+      state.autonomy = {level: msg.level, policy: msg.policy, l4_allowed: msg.l4_allowed};
+      renderHeal();
       return;
     }
 
