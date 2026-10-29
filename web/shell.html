@@ -189,6 +189,9 @@
   }
   .server-badge.local   { background: rgba(0,212,255,0.10);  color: var(--cyan); }
   .server-badge.cloud   { background: rgba(204,136,255,0.12); color: #cc88ff; }
+  .server-badge.engine  { background: rgba(0,255,136,0.10);  color: var(--green); }
+  /* The Agent Engine twin's shell (web/twin_shell.py): agents, not MCP servers */
+  body.twin .server-remove, body.twin .add-server-btn, body.twin #tabWorkstreams { display: none; }
   .server-active        { font-size: 12px; color: var(--green); }
   .server-inactive      { font-size: 12px; color: var(--dim); }
   .server-remove {
@@ -525,8 +528,12 @@ function connect() {
       // / dtw_url) and links straight to them. Fallbacks: local dev runs
       // the dashboards on their own uvicorn ports (8060 / 8080); a legacy
       // single-origin reverse proxy mounts them under /ibn and /dtw.
+      // The Agent Engine twin's shell (web/twin_shell.py) has one lane, the
+      // dashboards' default one: their links carry no session token.
+      const twin = msg.runtime === 'agent_engine';
+      if (twin) applyTwinChrome();
       if (sessionToken) {
-        const q = '?session=' + encodeURIComponent(sessionToken);
+        const q = twin ? '' : '?session=' + encodeURIComponent(sessionToken);
         let ibn, dtw;
         if (msg.ibn_url) {                               // Kanopy / configured hosts
           ibn = msg.ibn_url.replace(/\/$/, '') + '/' + q;
@@ -543,7 +550,9 @@ function connect() {
       }
       document.getElementById('bannerHost').textContent    = msg.host || '—';
       document.getElementById('bannerIndexes').textContent = msg.indexes.join(', ') || 'none';
-      if (msg.servers.length)
+      if (twin)
+        appendLog('INFO', `✓ Ready — on Atlas Agent Engine: ${msg.servers.join(', ')}`);
+      else if (msg.servers.length)
         appendLog('INFO', `✓ Ready — ${msg.servers.length} MCP server(s) active`);
       // Seed cursor-up history from the shared shell history file so
       // arrow-keys recall queries typed earlier (in this session, in a
@@ -704,6 +713,18 @@ function connect() {
     appendLog('ERROR', 'Disconnected — reconnecting in 3s…');
     setTimeout(connect, 3000);
   };
+}
+
+function applyTwinChrome() {
+  document.body.classList.add('twin');
+  document.title = 'Agentic AI for Telco OSS/BSS — Agent Engine Shell';
+  document.querySelector('.banner-title').textContent =
+    '🧠 Agentic AI Demo for Telco OSS/BSS — Web Shell on Atlas Agent Engine';
+  document.querySelector('.banner-title').nextElementSibling.textContent =
+    'noc-coordinator + ibn-agent + dtw-agent over A2A · MongoDB Atlas + Voyage AI';
+  document.getElementById('tabServers').textContent = 'Agents';
+  document.getElementById('resetBtn').title =
+    "Re-seed the twin's IBN + DTW demo data and start a new Agent Engine session";
 }
 
 // ── Reverse history search (Ctrl+R / bck-i-search) ───────────────────────
