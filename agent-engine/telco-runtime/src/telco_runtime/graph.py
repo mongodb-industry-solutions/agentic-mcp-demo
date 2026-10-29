@@ -266,7 +266,10 @@ def build_domain_graph(
         in the tool sandbox, replayed from its recorded result on resume.
         The wrapped tools need a full ToolCall, and its id is the activity's
         durable identity, so call_id must be stable across replays: it is
-        derived from the model's tool-call id plus the step."""
+        derived from the model's tool-call id plus the step. None arguments
+        are left out, so the tool's defaults apply (the SDK validates them
+        against the annotations, and `site: str = None` refuses a None)."""
+        args = {k: v for k, v in args.items() if v is not None}
         message = all_tools[name].invoke(
             {"type": "tool_call", "name": name, "args": args, "id": call_id}
         )

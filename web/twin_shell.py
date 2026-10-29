@@ -64,6 +64,10 @@ AUTH_RACE = ("session expired", "refresh token")   # see autopilot.py
 AUTH_RETRIES, AUTH_RETRY_S = 2, 3
 BUSY = "currently busy"     # 503: every sandbox is held (or the runtime is rolling)
 BUSY_RETRIES, BUSY_RETRY_S = 3, 5
+# The CLI couldn't reach the platform (its workspace lookup, or DNS) and
+# sent nothing, so repeating is safe, also for a resume.
+UNREACHABLE = ("resolve workspace features", "nodename nor servname", "no such host")
+NET_RETRIES, NET_RETRY_S = 2, 10
 AGENTS = ["noc-coordinator", "ibn-agent", "dtw-agent"]
 AGENT_WORKSPACES = {   # for the approval cards; the domain agents pause
     os.environ.get("TWIN_IBN_WORKSPACE_ID", "ws-6ad0efe66189a50fdc461f8d"): "ibn-agent",
@@ -96,6 +100,11 @@ _REORDER_S = 1.0   # spans arrive in batches; emit them in end-time order
 
 _clients: set[WebSocket] = set()
 _agent_names: dict[str, str] = {}   # workspace id → agent, learned from the spans
+# A resumed run replays its earlier steps, and each replayed tool call is
+# traced again (same execution, tool, input and output, no call id): logged
+# once. Keyed per execution, the oldest dropped first.
+_seen_tools: dict[str, set] = {}
+_SEEN_EXECUTIONS = 200
 _turn_lock = asyncio.Lock()          # one turn (or reset) at a time
 _ae_session: str | None = None       # the coordinator session, reused across turns
 
@@ -124,6 +133,14 @@ async def _send_all(msg: dict) -> None:
             _clients.discard(ws)
 
 
+async def _send(ws: WebSocket, msg: dict) -> None:
+    """To one page; a page that has closed meanwhile is dropped."""
+    try:
+        await ws.send_text(json.dumps(msg))
+    except Exception:
+        _clients.discard(ws)
+
+
 async def _broadcast(tag: str, msg: str) -> None:
     await _send_all({"type": "broadcast", "tag": tag, "msg": msg})
 
@@ -136,6 +153,23 @@ def _json(value) -> dict:
     except ValueError:
         return {}
     return v if isinstance(v, dict) else {}
+
+
+def _replayed(span: dict) -> bool:
+    attrs = span.get("attributes") or {}
+    if attrs.get("openinference.span.kind") != "TOOL":
+        return False
+    execution = span.get("execution_id") or attrs.get("execution.id")
+    if not execution:
+        return False
+    seen = _seen_tools.setdefault(execution, set())
+    if len(_seen_tools) > _SEEN_EXECUTIONS:
+        _seen_tools.pop(next(iter(_seen_tools)))
+    key = (attrs.get("tool.name"), attrs.get("input.value"), attrs.get("output.value"))
+    if key in seen:
+        return True
+    seen.add(key)
+    return False
 
 
 def _span_lines(span: dict) -> list[tuple[str, str]]:
@@ -234,6 +268,8 @@ async def _log_pump(queue: asyncio.Queue) -> None:
             res = span.get("resource") or {}
             _agent_names[res.get("agentic_platform.workspace_id")] = res.get("service.name", "?")
         for span in sorted(batch, key=lambda s: s.get("end_time_ns") or 0):
+            if _replayed(span):
+                continue
             try:
                 for tag, text in _span_lines(span):
                     await _broadcast(tag, _redact(text))
@@ -254,7 +290,7 @@ async def _invoke(text: str | None, session_id: str | None, workspace_id: str | 
         cmd += ["--session", session_id]
     if resume:
         cmd += ["--resume", json.dumps(resume)]
-    auth_left, busy_left = AUTH_RETRIES, BUSY_RETRIES
+    auth_left, busy_left, net_left = AUTH_RETRIES, BUSY_RETRIES, NET_RETRIES
     while True:
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdin=asyncio.subprocess.DEVNULL if resume else asyncio.subprocess.PIPE,
@@ -276,6 +312,11 @@ async def _invoke(text: str | None, session_id: str | None, workspace_id: str | 
             busy_left -= 1
             await _broadcast("INFO", f"Agent Engine is at capacity; retrying in {BUSY_RETRY_S} s")
             await asyncio.sleep(BUSY_RETRY_S)
+            continue
+        if net_left and any(s in err for s in UNREACHABLE):
+            net_left -= 1
+            await _broadcast("INFO", f"Can't reach Agent Engine; retrying in {NET_RETRY_S} s")
+            await asyncio.sleep(NET_RETRY_S)
             continue
         out["ok"] = proc.returncode == 0 and str(out.get("success")).lower() == "true"
         return out
@@ -413,7 +454,7 @@ def _expire(approval_id: str, status: str) -> None:
         client.close()
 
 
-async def _decide(ws: WebSocket, approval_id: str, decision: str, notes: str) -> None:
+async def _decide(approval_id: str, decision: str, notes: str) -> None:
     """Resume the paused agent with the NOC decision."""
     client = MongoClient(os.environ["MONGODB_URI"])
     try:
@@ -450,11 +491,27 @@ async def _decide(ws: WebSocket, approval_id: str, decision: str, notes: str) ->
                         resume={interrupt_id: {"decision": decision, "reviewer_notes": notes}})
     elapsed = round(time.monotonic() - t0, 1)
     if not out["ok"]:
-        raise ValueError(f"resume failed: {out.get('error') or 'the invoke failed'}")
+        err = f"resume failed: {out.get('error') or 'the invoke failed'}"
+        # A resume the runtime rejects (a replay conflict) fails the run:
+        # expire the review now, not on the next click.
+        status = "unknown"
+        try:
+            for _ in range(3):
+                await asyncio.sleep(2)
+                status = (await _execution(doc["execution_id"], workspace_id)).get("status") or "unknown"
+                if status not in ("pending", "running", "resuming"):
+                    break
+        except Exception as e:
+            log.warning(f"{approval_id}: execution status after the failed resume: {e}")
+        if status not in _PAUSED | {"pending", "running", "unknown"}:
+            await asyncio.to_thread(_expire, approval_id, status)
+            err += f". The run is {status} now, so {approval_id} has expired; ask again for a new review."
+        raise ValueError(err)
     answer = out.get("response") or (f"⏸ {agent} paused again for a NOC review."
                                      if out.get("suspend_context") else "No response.")
-    await ws.send_text(json.dumps({"type": "response", "elapsed": elapsed, "markdown": answer,
-                                   "title": f"🤖 {agent} after {approval_id} ({decision})"}))
+    # To every page: the cards are shared, and the deciding page may be gone.
+    await _send_all({"type": "response", "elapsed": elapsed, "markdown": answer,
+                     "title": f"🤖 {agent} after {approval_id} ({decision})"})
     await _broadcast("INFO", f"✓ {agent} resumed after {approval_id} in {elapsed} s")
 
 
@@ -557,14 +614,22 @@ async def ws_endpoint(ws: WebSocket):
 
             if typ == "init":
                 info = app.state.mongo_info
+                # The page works without its history and cards (the cluster
+                # unreachable, DNS): the chat still goes to the coordinator.
+                try:
+                    history = await asyncio.to_thread(_history)
+                    cards = await asyncio.to_thread(_pending_cards)
+                except Exception as e:
+                    log.warning(f"init: {e}")
+                    history, cards = [], []
                 await ws.send_text(json.dumps({
                     "type": "hello", "runtime": "agent_engine", "session": "twin",
                     "host": info["host"], "indexes": info["indexes"], "servers": AGENTS,
-                    "history": await asyncio.to_thread(_history),
+                    "history": history,
                     "ibn_url": os.environ.get("TWIN_IBN_DASHBOARD_URL", "http://localhost:8160"),
                     "dtw_url": os.environ.get("TWIN_DTW_DASHBOARD_URL", "http://localhost:8180"),
                 }))
-                for card in await asyncio.to_thread(_pending_cards):
+                for card in cards:
                     await ws.send_text(json.dumps({"type": "approval", "review": card}))
 
             elif typ == "query":
@@ -590,18 +655,17 @@ async def ws_endpoint(ws: WebSocket):
                 approval_id = str(msg.get("approval_id") or "")
                 # Waits for a running turn: the card can arrive mid-turn.
                 async with _turn_lock:
-                    await ws.send_text(json.dumps({"type": "thinking", "active": True}))
+                    await _send(ws, {"type": "thinking", "active": True})
                     try:
-                        await _decide(ws, approval_id, str(msg.get("decision") or ""),
+                        await _decide(approval_id, str(msg.get("decision") or ""),
                                       str(msg.get("notes") or "").strip()[:500])
                     except Exception as e:
                         log.warning(f"decision on {approval_id}: {e}")
                         await _broadcast("ERROR", str(e)[:300])
-                        await ws.send_text(json.dumps({"type": "approval_failed",
-                                                       "approval_id": approval_id,
-                                                       "message": str(e)}))
+                        await _send(ws, {"type": "approval_failed", "approval_id": approval_id,
+                                         "message": str(e)})
                     finally:
-                        await ws.send_text(json.dumps({"type": "thinking", "active": False}))
+                        await _send(ws, {"type": "thinking", "active": False})
 
             elif typ == "reset_demo":
                 if _turn_lock.locked():

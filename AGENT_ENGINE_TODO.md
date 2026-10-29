@@ -311,3 +311,14 @@ in brackets.
 - Public preview, with no SLA and breaking changes expected. We pin the
   CLI and SDK versions and keep the legacy runtime as the fallback until
   GA.
+- **The build doesn't honor our SDK pin** (2026-10-29):
+  - *Gap:* the platform-managed install adds the current
+    `agent-engine-runner-shared` (0.11.11, which needs `mcp==2.3.0`) on top
+    of our `uv.lock` (0.11.8, `mcp 1.27.0`), so every build of an unchanged
+    agent failed with "No solution found when resolving dependencies" until
+    we relocked.
+  - *Effect:* an SDK release can break the next deploy, and 0.11.11 also
+    changed behavior: tool arguments are validated against the
+    annotations, so a `None` for `site: str = None` now fails the run.
+  - *Ask:* build with the locked versions, or announce the minimum the
+    platform requires before it moves.
