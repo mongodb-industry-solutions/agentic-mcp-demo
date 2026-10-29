@@ -331,8 +331,7 @@ class RegistryMixin:
                     {"$set": local_servers[name]}
                 )
                 if name in self.sessions:
-                    del self.sessions[name]
-                    self.tool_cache.pop(name, None)
+                    await self._close_server(name)
                 await self._broadcast("BOOTSTRAP", f"    ↻ {name} (session evicted, will reload on next query)")
 
         # 3. Remove deleted servers
@@ -341,8 +340,7 @@ class RegistryMixin:
             for name in deleted_servers:
                 await self.collection.delete_one({"server_name": name})
                 if name in self.sessions:
-                    del self.sessions[name]
-                    self.tool_cache.pop(name, None)
+                    await self._close_server(name)
                 await self._broadcast("BOOTSTRAP", f"    - {name}")
 
         await self._broadcast("BOOTSTRAP", f"✓ Registry sync complete")
@@ -419,8 +417,7 @@ class RegistryMixin:
 
         # Close existing session if any so it restarts fresh
         if name in self.sessions:
-            del self.sessions[name]
-            self.tool_cache.pop(name, None)
+            await self._close_server(name)
 
         await self._activate_servers([{"server_name": name, "path": str(path)}])
 
@@ -433,8 +430,7 @@ class RegistryMixin:
     async def remove_server(self, name: str) -> str:
         """Deactivate session and remove from registry."""
         if name in self.sessions:
-            del self.sessions[name]
-            self.tool_cache.pop(name, None)
+            await self._close_server(name)
 
         cloud_path = self.temp_dir / f"{name}.py"
         if cloud_path.exists():
