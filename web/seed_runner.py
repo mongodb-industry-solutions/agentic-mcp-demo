@@ -63,6 +63,7 @@ SESSION_STATE_BASES = [
     "agent_approvals",      # Agent Engine NOC reviews (oss_tools/approvals.py)
     "ibn_incidents",        # self-healing incidents (web/ibn_assurance.py)
     "ibn_sim_runs",         # morning-rush requests (start_morning_rush)
+    "ibn_autonomy_policy",  # autonomy level L3/L4 (oss_tools/ibn/autonomy.py; back to L3)
 ]
 
 

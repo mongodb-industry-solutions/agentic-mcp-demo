@@ -16,9 +16,10 @@ import datetime
 import json
 import logging
 import math
+import time
 from pymongo import DESCENDING
 from oss_tools._ctx import ToolSet, collection
-from oss_tools.ibn import slo
+from oss_tools.ibn import autonomy, slo
 
 
 tools  = ToolSet()
@@ -505,7 +506,8 @@ def diagnose_violation(intent_id: str = None, site: str = None,
 
 
 @tools.tool
-def apply_runbook(runbook_id: str, intent_id: str = None, site: str = None) -> str:
+def apply_runbook(runbook_id: str, intent_id: str = None, site: str = None,
+                  autonomous: bool = False) -> str:
     """
     Apply a runbook to a violating intent. Records the application in the
     intent's history, writes a recovery event, and writes one fresh
@@ -515,6 +517,11 @@ def apply_runbook(runbook_id: str, intent_id: str = None, site: str = None) -> s
         runbook_id: The runbook to apply, e.g. 'RB-007'.
         intent_id:  The intent currently violating, e.g. 'IBN-005'.
         site:       Alternative: site name fragment like 'Marienplatz'.
+        autonomous: Only in autonomous mode (no human in the loop). The
+                    autonomy envelope is checked again here: outside it,
+                    nothing is applied and the incident goes to the NOC.
+                    Inside it, the runbook is applied and recovery is left
+                    to the SLO monitor to verify (call await_recovery).
 
     Pass either intent_id or site.
     """
@@ -527,6 +534,9 @@ def apply_runbook(runbook_id: str, intent_id: str = None, site: str = None) -> s
     runbook = knowledge_chunks.find_one({"_id": runbook_id, "kind": "runbook"})
     if not runbook:
         return f"❌ Runbook {runbook_id} not found."
+
+    if autonomous:
+        return _apply_autonomously(intent, runbook)
 
     now = datetime.datetime.now()
     targets = intent.get("parsed", {}).get("targets", {})
@@ -576,6 +586,110 @@ def apply_runbook(runbook_id: str, intent_id: str = None, site: str = None) -> s
         f"  POS latency now {healthy_value:.1f}ms (target ≤ {threshold}ms). "
         f"Compliance restored."
     )
+
+
+def _apply_autonomously(intent: dict, runbook: dict) -> str:
+    """apply_runbook(autonomous=True): re-check the envelope here (the
+    model's choice never widens it), then apply without asserting recovery:
+    the intent's history is what the rush model reads (rush.mitigated), so
+    latency falls in the data and the SLO monitor closes the incident."""
+    incident = incidents.find_one({"intent_id": intent["_id"], "open": True})
+    verdict = autonomy.evaluate(intent, runbook["_id"], incident)
+    autonomy.record(verdict)
+    if verdict["decision"] != "allow":
+        return (f"⛔ {runbook['_id']} NOT applied: outside the autonomy envelope "
+                f"({verdict['policy']}, level {verdict['level']}). Escalated to the NOC:\n"
+                + "\n".join(f"  - {r}" for r in verdict["reasons"]))
+    now = datetime.datetime.now()
+    intents.update_one({"_id": intent["_id"]}, {
+        "$push": {"history": {"ts": now, "event": "runbook_applied", "runbook_id": runbook["_id"],
+                              "by": autonomy.AUTONOMOUS_BY, "incident_id": incident["_id"],
+                              "note": runbook.get("title", "")}},
+        "$inc": {"version": 1},
+    })
+    incidents.update_one({"_id": incident["_id"]}, {
+        "$set": {"status": "mitigating", "autonomous_act_at": now,
+                 "action": {"runbook_id": runbook["_id"], "at": now, "by": autonomy.AUTONOMOUS_BY,
+                            "policy": verdict["policy"]}},
+        "$push": {"timeline": {"ts": now, "stage": "act", "by": autonomy.AUTONOMOUS_BY,
+                               "note": f"applied {runbook['_id']}: {runbook.get('title', '')} "
+                                       f"({verdict['policy']})"}},
+    })
+    return (f"✓ Runbook **{runbook['_id']}** applied autonomously to {intent['_id']} "
+            f"({verdict['policy']}).\n  *{runbook.get('title')}*\n"
+            f"  Recovery is not assumed: call await_recovery('{intent['_id']}') and let the "
+            f"SLO monitor verify it.")
+
+
+@tools.tool
+def check_autonomy(runbook_id: str, intent_id: str = None, site: str = None) -> str:
+    """
+    Autonomous mode only: may the system apply this runbook on its own, or
+    must a NOC engineer decide? Checks the lane's autonomy policy (level
+    L3/L4, change freeze, deny list, rate limit) and the open incident's
+    recorded diagnosis (the top match must name this runbook with
+    similarity at or above the policy minimum, and the runbook must have
+    fixed a past incident). Run diagnose_violation first.
+
+    Returns JSON: decision ("allow" or "escalate"), the policy, every
+    check with its result, and the reasons for an escalation. On
+    "escalate", apply nothing: report the diagnosis and the reasons.
+
+    Args:
+        runbook_id: The runbook the diagnosis recommends, e.g. 'RB-007'.
+        intent_id:  The violating intent, e.g. 'IBN-005'.
+        site:       Alternative: site name fragment like 'Marienplatz'.
+    """
+    intent = _resolve_intent(intent_id, site)
+    if not intent:
+        return json.dumps({"error": f"No matching intent found for intent_id={intent_id!r}, "
+                                    f"site={site!r}."})
+    incident = incidents.find_one({"intent_id": intent["_id"], "open": True})
+    verdict = autonomy.evaluate(intent, runbook_id, incident)
+    autonomy.record(verdict)
+    return json.dumps(verdict, default=str)
+
+
+AWAIT_MAX_S = 75
+
+
+@tools.tool(timeout_s=AWAIT_MAX_S + 15)
+def await_recovery(intent_id: str = None, site: str = None, timeout_s: int = 60) -> str:
+    """
+    Autonomous mode only: wait until the SLO monitor (not the agent)
+    declares the intent's incident recovered, after a runbook was applied.
+    On timeout the incident is escalated to the NOC.
+
+    Args:
+        intent_id: The intent, e.g. 'IBN-005'.
+        site:      Alternative: site name fragment like 'Marienplatz'.
+        timeout_s: How long to wait (default 60, at most 75).
+    """
+    intent = _resolve_intent(intent_id, site)
+    if not intent:
+        return (f"❌ No matching intent found for "
+                f"intent_id={intent_id!r}, site={site!r}.")
+    incident = incidents.find_one({"intent_id": intent["_id"]}, sort=[("opened_at", DESCENDING)])
+    if not incident:
+        return f"❌ No incident recorded for {intent['_id']}."
+    wait_s = min(max(int(timeout_s or 60), 5), AWAIT_MAX_S)
+    deadline = time.monotonic() + wait_s
+    while incident.get("open") and time.monotonic() < deadline:
+        time.sleep(2)
+        incident = incidents.find_one({"_id": incident["_id"]}) or {}
+    if not incident.get("open"):
+        verify = next((s for s in reversed(incident.get("timeline") or [])
+                       if s.get("stage") == "verify"), {})
+        return (f"✓ {intent['_id']} recovered, verified by the SLO monitor: "
+                f"{verify.get('note', 'incident closed')}. "
+                f"Time to recover {incident.get('mttr_s', '—')} s.")
+    now = datetime.datetime.now()
+    note = f"not recovered {wait_s} s after the action: escalated to the NOC"
+    incidents.update_one({"_id": incident["_id"], "open": True}, {
+        "$set": {"status": "escalated", "escalated_at": now},
+        "$push": {"timeline": {"ts": now, "stage": "verify", "by": "await_recovery", "note": note}},
+    })
+    return f"⏱ {intent['_id']} {note}. The incident stays open."
 
 
 @tools.tool
