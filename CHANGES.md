@@ -1,5 +1,25 @@
 # CHANGES.md
 
+## 2026-10-30
+
+### The web shell on Atlas Agent Engine: a demo lane per browser session
+
+The web shell on Agent Engine (http://localhost:8170, `bin/twin.sh start`)
+now works like the Kanopy demo's: every browser session has its own demo
+data, and its dashboard links open the dashboards on that data. Reset
+clears only your own session and starts a new conversation with the
+coordinator. Behind the scenes the shell talks to the agents over the
+Agent Engine API instead of the CLI, so it can tell them which session's
+data to work on. The Agent Log shows only your own session's agent
+activity, and NOC approval cards appear in the session that asked for them.
+The self-healing loop runs per session as well: when the SLO monitor opens
+an incident in your session, the deployed IBN agent takes it on with no
+prompt, and the panel shows the run. Set the session to L4 on its IBN
+dashboard for the full repair. With your CLI login the shell still only
+serves your own machine, and all sessions share your platform memory. With
+a service account (`AE_CLIENT_ID`, `AE_CLIENT_SECRET`) each session also
+gets its own memory, which is what a hosted version needs.
+
 ## 2026-10-29
 
 ### Self-healing network, step 5: the browser shell responds by itself
