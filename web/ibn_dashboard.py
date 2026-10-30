@@ -86,7 +86,7 @@ async def broadcast(session: DashSession, msg: dict):
     """Send to the tabs watching ONE session only."""
     data = json.dumps(_serializable(msg))
     dead = []
-    for ws in session.clients:
+    for ws in list(session.clients):   # a tab can leave while a send awaits
         try:
             await ws.send_text(data)
         except Exception:

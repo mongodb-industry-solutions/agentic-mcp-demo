@@ -1,5 +1,25 @@
 # CHANGES.md
 
+## 2026-10-29
+
+### Self-healing network, step 5: the browser shell responds by itself
+
+In the Kanopy demo's web shell, the IBN agent now takes an incident on
+without being asked. Start a morning rush ("IBN: start the morning rush at
+Hamburg Altona", or the dashboard's button) with the IBN dashboard open.
+When the SLO monitor opens an incident, a "🤖 Self-healing · no human
+prompt" panel appears in the chat. The agent runs the diagnosis and checks
+the autonomy envelope, then reports what it found. At autonomy L3, the
+only level the Kanopy demo allows, it stops at a recommendation, and you
+decide as the NOC ("apply runbook"). The agent knows what it just reported,
+so a follow-up continues from there. If you are in the middle of a turn,
+the run waits until it ends, and a query you send during a run waits for
+the run. Where L4 is enabled, as in the Agent Engine twin, the same panel
+shows the full repair: the runbook applied, recovery verified by the
+monitor, and a canary proposed for the sister stores. The twin's own web
+shell shows the twin autopilot's runs as the same panels. The help page has
+the two new steps. `SELF_HEALING_RESPONDER=0` turns the responder off.
+
 ## 2026-10-21
 
 ### The web shell on Atlas Agent Engine (twin)
