@@ -849,6 +849,41 @@ runs as a twin next to the Kanopy demo, single user:
   not match next step 8". An HTTP `invoke` with `session_id` and
   `resume_map` (which could resend the headers) started a new, empty turn
   instead of resuming, so the shell resumes through the CLI.
+- **Lanes and the API (Phase 8b, 2026-10-30, branch
+  `feature/agent-engine-hosted-shell`):** the shell no longer calls the
+  CLI. `web/ae_client.py` sends every turn as an HTTP `POST …/invoke` with
+  the browser session's lane in `X-Mdb-Agent-Engine-Custom-Demo-Prefix`,
+  so each browser session gets its own lane, as on Kanopy: `s_<token>_`
+  collections seeded on first use, reaped when idle (`TWIN_MAX_SESSIONS`,
+  `DEMO_SESSION_TTL_SEC`), Reset per lane, dashboard links with
+  `?session=`. The bearer token comes from a service account when
+  `AE_CLIENT_ID`/`AE_CLIENT_SECRET` are set (client credentials,
+  `POST /api/v1/oauth/token`; then also a `user_id` per browser session,
+  so each visitor has their own memory, Phase 4 finding 3 above), else
+  from the presenter's CLI login (no `user_id`: the platform refuses
+  another user's id from a human caller without end-user delegation; the
+  shell then serves loopback clients only). Each browser session has its
+  own coordinator session with an id the shell chooses
+  (`demo-<token>-<nonce>`, stored in the lane's `ae_session`, new on
+  Reset, and also the memory identity), so the Agent Log routes the trace
+  spans while a turn runs: a span's `session_id` names the browser
+  session, and its `trace_id` covers the A2A children, whose spans wait
+  until the trace's owner is known. The approval card watches the lane's
+  `agent_approvals`, and a decision resumes over the API with
+  `X-Session-ID`, `resume_map` and the lane header resent (if the paused
+  execution stays suspended, the shell says so). The twin autopilot's job
+  in a lane is done by the shell: a per-session responder, like the
+  Kanopy shell's (S5), hands each incident the lane's SLO monitor opens
+  to ibn-agent (session `<coordinator session>-heal-<incident>`), shows
+  it as the `autonomous` panel, and gives its report to the next turn as
+  context (unless that turn names DTW). `agent-engine/autopilot.py` stays
+  for the default lane (the Agent Engine UI). Verified offline while the
+  platform refused every invoke (`AGENT_ENGINE_TODO.md` 2.6): sessions and
+  lanes, isolation, Reset, the capacity retries and the error path, the
+  approval card and an expired review, the responder's claim and panels,
+  the span routing (synthetic spans). Still to verify on a working
+  platform: a turn in a lane end to end, the API resume, and the client-
+  chosen session ids.
 - **The Kanopy demo stays as it is.** Every push to `main` redeploys
   production (`.drone.yml`), and PRs #31–#35 change legacy code
   (`mcp_servers/`, `web/*.html`, `seed_runner.py`). They stay unmerged
