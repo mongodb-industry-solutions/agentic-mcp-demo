@@ -5,8 +5,11 @@ Status 2026-10-21 (CLI 0.1.119, SDK 0.11.8). Jira: ISTTH-969.
 The Telco OSS agents run on Atlas Agent Engine today: `noc-coordinator`,
 `ibn-agent` and `dtw-agent` in the shared JeffN project, with their data on
 the `telco-oss-agents` cluster. The twin's web shell runs on the presenter's
-laptop and drives them with the presenter's CLI login. It does chat, the
-Agent Log and NOC approvals, for one presenter at a time. The Kanopy demo
+laptop and drives them over the Agent Engine API with the presenter's CLI
+login. It does chat, the Agent Log, NOC approvals and the self-healing
+responder, with a demo lane per browser session (Phase 8b, 2026-10-30);
+with a service account instead (`AE_CLIENT_ID`/`AE_CLIENT_SECRET`) it
+also gives each browser session its own memory identity. The Kanopy demo
 (staging and prod) still runs the legacy runtime and is unaffected.
 
 "Fully fledged" means the Kanopy-hosted shell on Agent Engine: many
@@ -260,7 +263,9 @@ in brackets.
 ### 2.5 CLI
 
 - **No custom-header flag on `invoke`** (P0 #2): the CLI can't select a
-  demo lane, so the twin has one lane.
+  demo lane. *Workaround:* the twin shell calls the HTTP API
+  (`web/ae_client.py`); only the twin autopilot still uses the CLI, in
+  the default lane.
 - **No command to read an execution:**
   - *Gap:* the interrupt id of a paused run is only in
     `GET /executions/{id}`.
@@ -299,6 +304,12 @@ in brackets.
     secret sync by another team restarts the orchestration engine for
     every workspace (Walter, the AE team), which would fit. The twin
     autopilot now retries this answer every 10 s, six times.
+  - *Still on 2026-10-30 at 12:00Z* (about 17 hours), now for all three
+    agents: HTTP `503`, `code: POOL_EXHAUSTED`, `source: capacity`,
+    `Retry-After: 10`, the same with the CLI and the HTTP API; `status`
+    healthy, no session holding capacity, deploys of the afternoon before
+    the outage. Reported in #ts-experts-agent-engine
+    (https://mongodb.slack.com/archives/C0B7G8ZC2G6/p1793361666342319).
 - **Not yet verified:** how many concurrent sessions the preview allows
   for our three agents under real load, with service-account invokes, the
   lane header and a `user_id` per visitor.

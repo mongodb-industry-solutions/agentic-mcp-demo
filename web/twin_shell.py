@@ -3,28 +3,39 @@
 # Author: Benjamin Lorenz <benjamin.lorenz@mongodb.com>
 #
 
-# The web shell on Atlas Agent Engine, for the twin (AGENT_ENGINE_PLAN.md,
-# Phase 8a). The same page as web/shell.py, but a turn goes to the deployed
-# noc-coordinator through `agentengine invoke` with the presenter's CLI
-# login, and the Agent Log comes from the platform's traces on the agents'
-# cluster (mdb_store_<project>.traces, a change stream): the coordinator's
-# routing, its A2A delegations, every tool call of the domain agents.
+# The web shell on Atlas Agent Engine (AGENT_ENGINE_PLAN.md, Phases 8a/8b).
+# The same page as web/shell.py, but a turn goes to the deployed
+# noc-coordinator over the Agent Engine API (web/ae_client.py), and the
+# Agent Log comes from the platform's traces on the agents' cluster
+# (mdb_store_<project>.traces, a change stream): the coordinator's routing,
+# its A2A delegations, every tool call of the domain agents.
+#
+# Lanes: like the Kanopy shell, each browser session gets its own demo lane
+# (s_<token>_ collections, seeded on first use, reaped when idle). Every
+# invoke carries the lane as the demo-prefix custom header, which the
+# coordinator forwards to the domain agents over A2A. The browser session
+# also has its own coordinator session (its id is ours, so the Agent Log
+# can route the trace spans to the right page) and, with a service account,
+# its own memory identity (ae_client). Reset reseeds the lane and starts
+# both afresh. With the presenter's CLI login instead of a service account,
+# every turn runs as the presenter, so the shell then serves loopback
+# clients only.
 #
 # NOC approvals: a blast-radius action pauses the domain agent that the
-# coordinator delegated to (A2A can't resume a child). Its review doc in
-# agent_approvals names the paused execution and session; a change stream
-# turns it into an approval card, and the decision resumes that session with
-# `agentengine invoke --resume`, keyed by the interrupt id from the
-# platform's GET /executions/{id}.
+# coordinator delegated to (A2A can't resume a child). Its review doc in the
+# lane's agent_approvals names the paused execution and session; a change
+# stream turns it into an approval card, and the decision resumes that
+# session over the API, with the lane header resent and the interrupt id
+# from GET /executions/{id}.
 #
-# Self-healing: the twin autopilot's runs (bin/twin.sh autopilot) show as the
-# same panels as the browser shell's responder, from the incidents' change
-# stream.
+# Self-healing: each session runs a responder, like the Kanopy shell's
+# (web/self_healing.py): an incident the SLO monitor opens in the lane goes
+# to the deployed ibn-agent with no human prompt, and the chat shows the
+# run as an `autonomous` panel. The lane's autonomy policy decides what the
+# agent may do (L4 where SELF_HEALING_L4=1, as bin/twin.sh sets it).
 #
-# Single presenter, default lane, like the twin dashboards: the CLI can't
-# send the demo-prefix header, and the invoke runs as the presenter. So it
-# only serves loopback clients. Run it with bin/twin.sh start (:8170).
-# web/shell.py, the Kanopy shell, doesn't import this module.
+# Run it with bin/twin.sh start (:8170). web/shell.py, the Kanopy shell,
+# doesn't import this module.
 
 import sys
 from pathlib import Path
@@ -38,16 +49,19 @@ import os
 import re
 import threading
 import time
+import uuid
+from collections import OrderedDict
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
-import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
-from pymongo import MongoClient
+from pymongo import AsyncMongoClient, MongoClient
 
+from agents import history as shell_history
 from oss_tools.ibn import autonomy
-from web import seed_runner
+from web import ae_client, seed_runner
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 log = logging.getLogger("twin_shell")
@@ -55,42 +69,27 @@ log = logging.getLogger("twin_shell")
 DEMO_DB = "agent_registry"
 ROOT = Path(__file__).resolve().parent.parent
 
-# The deployed coordinator in JeffN (explicit, so the CLI's current context
-# doesn't matter; the same defaults as agent-engine/autopilot.py).
-PROJECT_ID = os.environ.get("TWIN_AE_PROJECT_ID", "6aa4558bb19c96d52970c253")
-TARGET = {
-    "--base-url": os.environ.get("TWIN_AE_BASE_URL", "https://agentengine.mongodb.com"),
-    "--org-id": os.environ.get("TWIN_AE_ORG_ID", "6a99bbc5fa6869c45dee52b6"),
-    "--project-id": PROJECT_ID,
-    "--workspace-id": os.environ.get("TWIN_COORDINATOR_WORKSPACE_ID", "ws-6ad1060d6189a50fdc472a65"),
-}
-INVOKE_TIMEOUT = "10m"
-AUTH_RACE = ("session expired", "refresh token")   # see autopilot.py
-AUTH_RETRIES, AUTH_RETRY_S = 2, 3
-BUSY = "currently busy"     # 503: every sandbox is held (or the runtime is rolling)
-BUSY_RETRIES, BUSY_RETRY_S = 3, 5
-# The CLI couldn't reach the platform (its workspace lookup, or DNS) and
-# sent nothing, so repeating is safe, also for a resume.
-UNREACHABLE = ("resolve workspace features", "nodename nor servname", "no such host")
-NET_RETRIES, NET_RETRY_S = 2, 10
+# The deployed agents in JeffN (the same defaults as agent-engine/autopilot.py).
+COORDINATOR_WS = os.environ.get("TWIN_COORDINATOR_WORKSPACE_ID", "ws-6ad1060d6189a50fdc472a65")
+IBN_WS = os.environ.get("TWIN_IBN_WORKSPACE_ID", "ws-6ad0efe66189a50fdc461f8d")
+DTW_WS = os.environ.get("TWIN_DTW_WORKSPACE_ID", "ws-6ad0efe7ea67bce171583766")
 AGENTS = ["noc-coordinator", "ibn-agent", "dtw-agent"]
-AGENT_WORKSPACES = {   # for the approval cards; the domain agents pause
-    os.environ.get("TWIN_IBN_WORKSPACE_ID", "ws-6ad0efe66189a50fdc461f8d"): "ibn-agent",
-    os.environ.get("TWIN_DTW_WORKSPACE_ID", "ws-6ad0efe7ea67bce171583766"): "dtw-agent",
-    TARGET["--workspace-id"]: "noc-coordinator",
-}
-_IBN_WS, _DTW_WS = (next(w for w, a in AGENT_WORKSPACES.items() if a == n)
-                    for n in ("ibn-agent", "dtw-agent"))
+AGENT_WORKSPACES = {IBN_WS: "ibn-agent", DTW_WS: "dtw-agent", COORDINATOR_WS: "noc-coordinator"}
 # The agent that owns each reviewed action (oss_tools.approvals): the review
 # doc names the paused execution and session, but the tool sandbox doesn't
 # know its workspace id (get_current_workspace_id() is empty there).
 ACTION_WORKSPACE = {
-    "activate_plan": _IBN_WS, "apply_runbook": _IBN_WS, "update_template_version": _IBN_WS,
-    "cancel_intent": _IBN_WS, "delete_scenario": _DTW_WS, "delete_all_scenarios": _DTW_WS,
+    "activate_plan": IBN_WS, "apply_runbook": IBN_WS, "update_template_version": IBN_WS,
+    "cancel_intent": IBN_WS, "delete_scenario": DTW_WS, "delete_all_scenarios": DTW_WS,
 }
-# The CLI login's token, for the one call the CLI has no command for:
-# GET /executions/{id} (the interrupt id of a paused run).
-AUTH_FILE = Path.home() / ".agentengine" / "auth.json"
+
+MAX_SESSIONS = int(os.environ.get("TWIN_MAX_SESSIONS", "6"))
+SESSION_TTL_SEC = int(os.environ.get("DEMO_SESSION_TTL_SEC", "1800"))   # 30 min idle
+_TOKEN_RE = re.compile(r"^[a-z0-9]{8,32}$")   # as web/shell.py
+LANE_STATE = "ae_session"   # per lane: the coordinator session (and memory identity)
+RESPONDER = os.environ.get("SELF_HEALING_RESPONDER", "1") != "0"
+RESPONDER_BY = "ibn-agent (twin shell)"
+CATCH_UP = datetime.timedelta(minutes=5)   # open incidents this young are picked up at start
 
 # Our three workspaces and the subscriber-id patterns come from the
 # guardrail (Phase 6). It redacts the agents' answers; the log shows tool
@@ -102,16 +101,58 @@ _REDACT = [re.compile(p["value"]) for p in _GUARDRAIL["config"]["match_patterns"
 # The coordinator's internal tools; its routing comes from the route span.
 _INTERNAL_TOOLS = {"record_routing", "rank_agents", "runbooks_for_memory", "pending_reviews"}
 _REORDER_S = 1.0   # spans arrive in batches; emit them in end-time order
+_ORPHAN_S = 60     # a span whose trace has no known session yet waits this long
 
-_clients: set[WebSocket] = set()
+
+@dataclass
+class Session:
+    token: str
+    prefix: str
+    lock: asyncio.Lock                       # one turn, decision or reset at a time
+    ae_session: str = ""                     # the coordinator's Agent Engine session
+    clients: set = field(default_factory=set)
+    last_activity: float = 0.0
+    context: str = ""                        # the last self-healing report, for the next turn
+    tasks: list = field(default_factory=list)   # approvals watch, self-healing responder
+
+    @property
+    def user_id(self) -> str:
+        """The memory identity: one per coordinator session, so Reset
+        starts a fresh one (there is no delete-by-user API)."""
+        return self.ae_session
+
+
+_sessions: dict[str, Session] = {}
+_sessions_guard = asyncio.Lock()   # serialises create / reap
 _agent_names: dict[str, str] = {}   # workspace id → agent, learned from the spans
+# Span routing: an Agent Engine session we started → browser session, and a
+# trace → browser session (an A2A child has its own session in the same
+# trace). Both bounded, the oldest dropped first.
+_session_owner: OrderedDict[str, str] = OrderedDict()
+_trace_owner: OrderedDict[str, str] = OrderedDict()
+_orphans: dict[str, list] = {}   # trace → [(arrived, span)] until its owner is known
+_OWNER_MAX = 2000
 # A resumed run replays its earlier steps, and each replayed tool call is
 # traced again (same execution, tool, input and output, no call id): logged
 # once. Keyed per execution, the oldest dropped first.
 _seen_tools: dict[str, set] = {}
 _SEEN_EXECUTIONS = 200
-_turn_lock = asyncio.Lock()          # one turn (or reset) at a time
-_ae_session: str | None = None       # the coordinator session, reused across turns
+
+_aclient: AsyncMongoClient | None = None
+
+
+def _adb():
+    global _aclient
+    if _aclient is None:
+        _aclient = AsyncMongoClient(os.environ["MONGODB_URI"])
+    return _aclient[DEMO_DB]
+
+
+def _remember_owner(table: OrderedDict, key: str, token: str) -> None:
+    table[key] = token
+    table.move_to_end(key)
+    while len(table) > _OWNER_MAX:
+        table.popitem(last=False)
 
 
 def _redact(text: str) -> str:
@@ -129,25 +170,25 @@ def _preview(text: str, max_lines: int = 3, max_chars: int = 250) -> str:
     return result + (" …" if len(lines) > max_lines else "")
 
 
-async def _send_all(msg: dict) -> None:
-    data = json.dumps(msg)
-    for ws in list(_clients):
+async def _send_all(sess: Session, msg: dict) -> None:
+    """To every tab on one session; a tab that has closed is dropped."""
+    data = json.dumps(msg, default=str)
+    for ws in list(sess.clients):
         try:
             await ws.send_text(data)
         except Exception:
-            _clients.discard(ws)
+            sess.clients.discard(ws)
 
 
 async def _send(ws: WebSocket, msg: dict) -> None:
-    """To one page; a page that has closed meanwhile is dropped."""
     try:
-        await ws.send_text(json.dumps(msg))
+        await ws.send_text(json.dumps(msg, default=str))
     except Exception:
-        _clients.discard(ws)
+        pass
 
 
-async def _broadcast(tag: str, msg: str) -> None:
-    await _send_all({"type": "broadcast", "tag": tag, "msg": msg})
+async def _broadcast(sess: Session, tag: str, msg: str) -> None:
+    await _send_all(sess, {"type": "broadcast", "tag": tag, "msg": msg})
 
 
 # ── Agent Log from the traces ─────────────────────────────────────────────
@@ -226,41 +267,51 @@ def _span_lines(span: dict) -> list[tuple[str, str]]:
     return []
 
 
+# Spans with a session id (to learn which trace is whose) plus the ones the
+# log renders.
 _SPAN_FILTER = [{"$match": {"operationType": "insert", "$or": [
+    {"fullDocument.session_id": {"$exists": True}},
     {"fullDocument.name": {"$in": ["route", "a2a.invoke_agent", "aer.execute"]}},
     {"$expr": {"$eq": [{"$getField": {"field": "openinference.span.kind",
                                       "input": "$fullDocument.attributes"}}, "TOOL"]}},
 ]}}]
 
 
-def _watch(db: str, coll: str, pipeline: list, on_doc, stop: threading.Event) -> None:
-    """Blocking change stream (a thread): on_doc(fullDocument) per change."""
+def _watch_traces(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, stop: threading.Event) -> None:
+    """Blocking change stream on the platform's traces (a thread)."""
     client = MongoClient(os.environ["MONGODB_URI"])
     try:
         while not stop.is_set():
             try:
-                with client[db][coll].watch(pipeline, full_document="updateLookup",
-                                            max_await_time_ms=1000) as stream:
+                with client[f"mdb_store_{ae_client.PROJECT_ID}"]["traces"].watch(
+                        _SPAN_FILTER, max_await_time_ms=1000) as stream:
                     while not stop.is_set():
                         change = stream.try_next()
-                        if change is not None and change.get("fullDocument"):
-                            on_doc(change["fullDocument"])
+                        span = (change or {}).get("fullDocument")
+                        if span and (span.get("resource") or {}).get(
+                                "agentic_platform.workspace_id") in WORKSPACES:
+                            loop.call_soon_threadsafe(queue.put_nowait, span)
             except Exception as e:
-                log.warning(f"{coll} watch: {e}; retrying")
+                log.warning(f"traces watch: {e}; retrying")
                 stop.wait(3)
     finally:
         client.close()
 
 
-def _watch_traces(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, stop: threading.Event) -> None:
-    def on_span(span: dict) -> None:
-        if (span.get("resource") or {}).get("agentic_platform.workspace_id") in WORKSPACES:
-            loop.call_soon_threadsafe(queue.put_nowait, span)
-    _watch(f"mdb_store_{PROJECT_ID}", "traces", _SPAN_FILTER, on_span, stop)
+def _owner(span: dict) -> str | None:
+    trace = span.get("trace_id")
+    sid = (span.get("session_id") or "").split(":")[0]
+    if trace and sid in _session_owner:
+        _remember_owner(_trace_owner, trace, _session_owner[sid])
+    return _trace_owner.get(trace)
 
 
 async def _log_pump(queue: asyncio.Queue) -> None:
-    """Spans → Agent Log lines, reordered by end time within a short window."""
+    """Spans → each session's Agent Log, reordered by end time within a
+    short window. A span is routed by its trace: the trace belongs to the
+    browser session that started its root session. Spans of a trace whose
+    owner isn't known yet wait for it (an A2A child's spans can arrive
+    before the coordinator's)."""
     while True:
         batch = [await queue.get()]
         deadline = time.monotonic() + _REORDER_S
@@ -269,95 +320,180 @@ async def _log_pump(queue: asyncio.Queue) -> None:
                 batch.append(await asyncio.wait_for(queue.get(), left))
             except TimeoutError:
                 break
+        now = time.monotonic()
         for span in batch:
             res = span.get("resource") or {}
             _agent_names[res.get("agentic_platform.workspace_id")] = res.get("service.name", "?")
-        for span in sorted(batch, key=lambda s: s.get("end_time_ns") or 0):
-            if _replayed(span):
+            _owner(span)
+        ready = []
+        for trace in list(_orphans):
+            if trace in _trace_owner:
+                ready += [s for _, s in _orphans.pop(trace)]
+            elif now - _orphans[trace][0][0] > _ORPHAN_S:
+                del _orphans[trace]   # not ours (the Agent Engine UI, the autopilot)
+        for span in batch:
+            if _owner(span):
+                ready.append(span)
+            elif span.get("trace_id"):
+                _orphans.setdefault(span["trace_id"], []).append((now, span))
+        for span in sorted(ready, key=lambda s: s.get("end_time_ns") or 0):
+            sess = _sessions.get(_trace_owner.get(span.get("trace_id")))
+            if not sess or _replayed(span):
                 continue
             try:
                 for tag, text in _span_lines(span):
-                    await _broadcast(tag, _redact(text))
+                    await _broadcast(sess, tag, _redact(text))
             except Exception as e:
                 log.warning(f"span {span.get('name')}: {e}")
 
 
+# ── Sessions ──────────────────────────────────────────────────────────────
+
+def _new_ae_session(token: str) -> str:
+    # Our own id (letters, digits, hyphens; at most 128), so the spans of a
+    # turn can be routed while it runs.
+    return f"demo-{token}-{uuid.uuid4().hex[:8]}"
+
+
+async def _set_ae_session(sess: Session, session_id: str) -> None:
+    sess.ae_session = session_id
+    _remember_owner(_session_owner, session_id, sess.token)
+    await _adb()[sess.prefix + LANE_STATE].replace_one(
+        {"_id": "shell"}, {"session_id": session_id, "since": datetime.datetime.now()}, upsert=True)
+
+
+def _drop_lane(prefix: str) -> None:
+    """Drop a reaped session's collections (as web/shell.py does)."""
+    client = MongoClient(os.environ["MONGODB_URI"])
+    try:
+        db = client[DEMO_DB]
+        for base in seed_runner.SESSION_MUTABLE_BASES + seed_runner.SESSION_STATE_BASES + [LANE_STATE]:
+            db[prefix + base].drop()
+            if base == "ibn_telemetry":
+                try:
+                    db.drop_collection("system.buckets." + prefix + base)
+                except Exception:
+                    pass
+    finally:
+        client.close()
+
+
+async def _destroy_locked(token: str) -> None:
+    sess = _sessions.pop(token, None)
+    if not sess:
+        return
+    for task in sess.tasks:
+        task.cancel()
+    await asyncio.gather(*sess.tasks, return_exceptions=True)
+    try:
+        await asyncio.to_thread(_drop_lane, sess.prefix)
+    except Exception as e:
+        log.warning(f"session {token}: dropping the lane failed: {e}")
+    log.info(f"session {token} reaped ({len(_sessions)} remain)")
+
+
+async def _reap_idle_locked() -> None:
+    now = time.monotonic()
+    for token, sess in list(_sessions.items()):
+        if not sess.clients and now - sess.last_activity >= SESSION_TTL_SEC:
+            await _destroy_locked(token)
+
+
+async def _reaper_loop() -> None:
+    while True:
+        await asyncio.sleep(60)
+        try:
+            async with _sessions_guard:
+                await _reap_idle_locked()
+        except Exception as e:
+            log.warning(f"reaper sweep: {e}")
+
+
+async def _get_or_create_session(token: str) -> tuple[Session | None, str | None]:
+    """A session by token: its lane is seeded on first use, and its
+    coordinator session survives a shell restart (stored in the lane)."""
+    async with _sessions_guard:
+        if sess := _sessions.get(token):
+            return sess, None
+        await _reap_idle_locked()
+        if len(_sessions) >= MAX_SESSIONS:
+            return None, (f"The demo is at capacity ({MAX_SESSIONS} concurrent sessions). "
+                          "Please try again in a few minutes.")
+        prefix = f"s_{token}_"
+        try:
+            seeded = await seed_runner.ensure_session_seeded(prefix, DEMO_DB)
+            state = await _adb()[prefix + LANE_STATE].find_one({"_id": "shell"})
+        except Exception as e:
+            log.exception("session lane seed failed")
+            return None, f"Could not initialise demo data: {e}"
+        sess = Session(token=token, prefix=prefix, lock=asyncio.Lock(), last_activity=time.monotonic())
+        await _set_ae_session(sess, (state or {}).get("session_id") or _new_ae_session(token))
+        sess.tasks.append(asyncio.create_task(_watch_approvals(sess)))
+        if RESPONDER:
+            sess.tasks.append(asyncio.create_task(_respond_to_incidents(sess)))
+        _sessions[token] = sess
+        log.info(f"session {token} created (lane {'seeded' if seeded else 'reused'}, "
+                 f"{len(_sessions)}/{MAX_SESSIONS} active)")
+        return sess, None
+
+
+async def _watch(coll, on_doc, ops=("insert", "update")) -> None:
+    """A change stream on one lane collection until cancelled; a Reset
+    drops the demo collections, which ends the stream: watch again."""
+    while True:
+        try:
+            async with await coll.watch([{"$match": {"operationType": {"$in": list(ops)}}}],
+                                        full_document="updateLookup") as stream:
+                async for change in stream:
+                    if doc := change.get("fullDocument"):
+                        await on_doc(doc)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning(f"{coll.name} watch failed ({e}); retrying in 5 s")
+            await asyncio.sleep(5)
+
+
 # ── Turns ─────────────────────────────────────────────────────────────────
 
-async def _invoke(text: str | None, session_id: str | None, workspace_id: str | None = None,
-                  resume: dict | None = None) -> dict:
-    """One `agentengine invoke`: a message (stdin) to the coordinator, or a
-    resume_map for a paused session of `workspace_id`."""
-    cmd = ["agentengine", "invoke", "--json", "--quiet", "--timeout", INVOKE_TIMEOUT]
-    for flag, value in {**TARGET, **({"--workspace-id": workspace_id} if workspace_id else {})}.items():
-        cmd += [flag, value]
-    if session_id:
-        cmd += ["--session", session_id]
-    if resume:
-        cmd += ["--resume", json.dumps(resume)]
-    auth_left, busy_left, net_left = AUTH_RETRIES, BUSY_RETRIES, NET_RETRIES
-    while True:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdin=asyncio.subprocess.DEVNULL if resume else asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        stdout, stderr = await proc.communicate(None if resume else (text or "").encode())
-        try:
-            out = json.loads(stdout)
-        except ValueError:
-            text_err = (stderr or stdout).decode(errors="replace").strip()
-            # The CLI's own "Error: …" line, not its hints and flag echo.
-            lines = [ln for ln in text_err.splitlines() if ln.startswith("Error:")]
-            out = {"success": False, "error": (lines[-1] if lines else text_err)[-500:]}
-        err = out.get("error") or ""
-        if auth_left and any(s in err for s in AUTH_RACE):
-            auth_left -= 1
-            await asyncio.sleep(AUTH_RETRY_S)
-            continue
-        if busy_left and BUSY in err:
-            busy_left -= 1
-            await _broadcast("INFO", f"Agent Engine is at capacity; retrying in {BUSY_RETRY_S} s")
-            await asyncio.sleep(BUSY_RETRY_S)
-            continue
-        if net_left and any(s in err for s in UNREACHABLE):
-            net_left -= 1
-            await _broadcast("INFO", f"Can't reach Agent Engine; retrying in {NET_RETRY_S} s")
-            await asyncio.sleep(NET_RETRY_S)
-            continue
-        out["ok"] = proc.returncode == 0 and str(out.get("success")).lower() == "true"
-        return out
+async def _turn(sess: Session, ws: WebSocket, text: str) -> None:
+    await _broadcast(sess, "QUERY", text[:300])
+    await _broadcast(sess, "AGENT", f"→ noc-coordinator on Atlas Agent Engine "
+                                    f"(lane {sess.prefix}, session …{sess.ae_session[-8:]})")
+    message = text
+    if sess.context and not re.search(r"\bdtw\b", text, re.IGNORECASE):
+        # The coordinator never saw the self-healing run (it went straight to
+        # ibn-agent), so a follow-up such as "apply runbook" gets its report.
+        message = f"(Context: {sess.context})\n\n{text}"
+    sess.context = ""
 
+    async def retry(note: str) -> None:
+        await _broadcast(sess, "INFO", note)
 
-async def _turn(ws: WebSocket, text: str) -> None:
-    global _ae_session
-    await _broadcast("QUERY", text[:300])
-    await _broadcast("AGENT", "→ noc-coordinator on Atlas Agent Engine"
-                     + (f" (session {_ae_session[:8]}…)" if _ae_session else " (new session)"))
     t0 = time.monotonic()
-    out = await _invoke(text, _ae_session)
-    if not out["ok"] and _ae_session and "session" in (out.get("error") or "").lower():
-        await _broadcast("INFO", f"Session {_ae_session[:8]}… is gone; starting a new one")
-        _ae_session = None
-        out = await _invoke(text, None)
+    out = await ae_client.invoke(COORDINATOR_WS, message=message, session_id=sess.ae_session,
+                                 lane=sess.prefix, user_id=sess.user_id, on_retry=retry)
+    err = out.get("error") or ""
+    if not out["ok"] and "session" in err.lower() and "busy" not in err.lower():
+        await _broadcast(sess, "INFO", f"Session …{sess.ae_session[-8:]} is gone; starting a new one")
+        await _set_ae_session(sess, _new_ae_session(sess.token))
+        out = await ae_client.invoke(COORDINATOR_WS, message=message, session_id=sess.ae_session,
+                                     lane=sess.prefix, user_id=sess.user_id, on_retry=retry)
     elapsed = round(time.monotonic() - t0, 1)
     if not out["ok"]:
         err = out.get("error") or "the invoke failed"
-        await _broadcast("ERROR", err[:300])
-        await ws.send_text(json.dumps({"type": "error", "message": f"Agent Engine: {err}"}))
+        await _broadcast(sess, "ERROR", err[:300])
+        await _send(ws, {"type": "error", "message": f"Agent Engine: {err}"})
         return
-    _ae_session = out.get("session_id") or _ae_session
-    await ws.send_text(json.dumps({"type": "response", "elapsed": elapsed,
-                                   "markdown": out.get("response") or "No response."}))
-    await _broadcast("INFO", f"✓ noc-coordinator answered in {elapsed} s "
-                             f"(execution {str(out.get('execution_id'))[:8]}…)")
+    await _send(ws, {"type": "response", "elapsed": elapsed,
+                     "markdown": out.get("response") or "No response."})
+    await _broadcast(sess, "INFO", f"✓ noc-coordinator answered in {elapsed} s "
+                                   f"(execution {str(out.get('execution_id'))[:8]}…)")
 
 
 # ── NOC approvals ─────────────────────────────────────────────────────────
 
 _PAUSED = {"suspended", "resuming"}
-
-
-def _approvals(client: MongoClient):
-    return client[DEMO_DB]["agent_approvals"]   # the default lane
 
 
 def _workspace(doc: dict) -> str | None:
@@ -375,18 +511,15 @@ def _card(doc: dict) -> dict:
     return json.loads(_redact(json.dumps(card, default=str)))
 
 
-def _pending_cards() -> list[dict]:
-    client = MongoClient(os.environ["MONGODB_URI"])
-    try:
-        return [_card(d) for d in _approvals(client).find({"status": "pending"}).sort("seq", 1)]
-    finally:
-        client.close()
+async def _pending_cards(sess: Session) -> list[dict]:
+    cur = _adb()[sess.prefix + "agent_approvals"].find({"status": "pending"}).sort("seq", 1)
+    return [_card(d) async for d in cur]
 
 
-def _watch_approvals(loop: asyncio.AbstractEventLoop, stop: threading.Event) -> None:
-    def on_doc(doc: dict) -> None:
+async def _watch_approvals(sess: Session) -> None:
+    async def on_doc(doc: dict) -> None:
         card = _card(doc)
-        asyncio.run_coroutine_threadsafe(_send_all({"type": "approval", "review": card}), loop)
+        await _send_all(sess, {"type": "approval", "review": card})
         if card["status"] == "pending":
             text = f"⏸ {card['approval_id']} awaits NOC approval on {card['agent']}: {card['title']}"
         elif card["status"] == "expired":
@@ -395,79 +528,8 @@ def _watch_approvals(loop: asyncio.AbstractEventLoop, stop: threading.Event) -> 
             text = f"✓ {card['approval_id']} approved by {card['decided_by']}: {card['title']}"
         else:
             return
-        asyncio.run_coroutine_threadsafe(_broadcast("AGENT", text), loop)
-    _watch(DEMO_DB, "agent_approvals", [{"$match": {"operationType": {"$in": ["insert", "update"]}}}],
-           on_doc, stop)
-
-
-def _watch_autopilot(loop: asyncio.AbstractEventLoop, stop: threading.Event) -> None:
-    """The twin autopilot's runs (agent-engine/autopilot.py) as the page's
-    self-healing panels, like the browser shell's own responder
-    (web/self_healing.py): `started` when it claims an incident, `done` with
-    its report. The autopilot writes both onto the incident."""
-    sent: dict[str, str] = {}
-    levels: dict[str, str] = {}
-
-    def on_doc(doc: dict) -> None:
-        run = doc.get("autopilot") or {}
-        phase = {"running": "started", "done": "done", "failed": "done"}.get(run.get("status"))
-        key = str(doc["_id"])
-        if not phase or sent.get(key) == phase:
-            return
-        sent[key] = phase
-        msg = {"type": "autonomous", "phase": phase, "incident_id": key,
-               "intent_id": doc.get("intent_id"), "site": doc.get("site_name") or "",
-               "level": (doc.get("decision") or {}).get("level")}
-        if phase == "started":
-            client = MongoClient(os.environ["MONGODB_URI"])
-            try:
-                pol = autonomy.merge(client[DEMO_DB]["ibn_autonomy_policy"].find_one(
-                    {"_id": autonomy.POLICY_ID}))
-            finally:
-                client.close()
-            levels[key] = pol["level"]
-            msg.update(level=pol["level"],
-                       note=(doc.get("alarm") or {}).get("specific_problem", "SLO breach"))
-        else:
-            took = (run["finished_at"] - run["started_at"]).total_seconds() \
-                if run.get("finished_at") and run.get("started_at") else None
-            msg["level"] = msg["level"] or levels.get(key, "?")
-            msg.update(ok=run["status"] == "done", markdown=_redact(run.get("answer") or ""),
-                       elapsed=round(took, 1) if took is not None else "?")
-        asyncio.run_coroutine_threadsafe(_send_all(msg), loop)
-    _watch(DEMO_DB, "ibn_incidents", [{"$match": {"operationType": {"$in": ["insert", "update"]}}}],
-           on_doc, stop)
-
-
-async def _api(method: str, path: str, *, timeout: float = 20, **kw) -> httpx.Response:
-    """An Agent Engine API call with the CLI login's token (a 401 makes the
-    CLI refresh it, then the call is repeated once)."""
-    url = f"{TARGET['--base-url']}/api/v1/projects/{PROJECT_ID}{path}"
-    headers = kw.pop("headers", {})
-    for attempt in range(2):
-        creds = json.loads(await asyncio.to_thread(AUTH_FILE.read_text))["credentials"]
-        token = creds[TARGET["--base-url"]]["access_token"]
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.request(method, url, headers={**headers, "Authorization": f"Bearer {token}"},
-                                     **kw)
-        if r.status_code != 401 or attempt:
-            return r
-        proc = await asyncio.create_subprocess_exec(
-            "agentengine", "status", "--json", "--quiet",
-            *[a for f, v in TARGET.items() for a in (f, v)],
-            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-        await proc.wait()
-    return r
-
-
-async def _execution(execution_id: str, workspace_id: str) -> dict:
-    """GET /executions/{id}."""
-    r = await _api("GET", f"/executions/{execution_id}", params={"workspace_id": workspace_id})
-    if r.status_code == 404:
-        return {"status": "gone"}
-    r.raise_for_status()
-    ex = r.json().get("execution")
-    return _json(ex) if isinstance(ex, str) else (ex or {})
+        await _broadcast(sess, "AGENT", text)
+    await _watch(_adb()[sess.prefix + "agent_approvals"], on_doc)
 
 
 def _interrupt_id(execution: dict, approval_id: str) -> str | None:
@@ -480,31 +542,22 @@ def _interrupt_id(execution: dict, approval_id: str) -> str | None:
     return items[0].get("id") if len(items) == 1 and not _json(items[0].get("value")) else None
 
 
-def _expire(approval_id: str, status: str) -> None:
+async def _expire(sess: Session, approval_id: str, status: str) -> None:
     """A review whose paused run is gone: close it and clear its markers."""
-    client = MongoClient(os.environ["MONGODB_URI"])
-    try:
-        coll = _approvals(client)
-        doc = coll.find_one_and_update(
-            {"_id": approval_id, "status": "pending"},
-            {"$set": {"status": "expired", "decided_by": "twin-shell",
-                      "reviewer_notes": f"the paused run is {status}",
-                      "decided_at": datetime.datetime.now()}})
-        for name, ids in ((doc or {}).get("targets") or {}).items():
-            if ids:
-                client[DEMO_DB][name].update_many({"_id": {"$in": ids}},
-                                                  {"$unset": {"pending_approval": ""}})
-    finally:
-        client.close()
+    doc = await _adb()[sess.prefix + "agent_approvals"].find_one_and_update(
+        {"_id": approval_id, "status": "pending"},
+        {"$set": {"status": "expired", "decided_by": "twin-shell",
+                  "reviewer_notes": f"the paused run is {status}",
+                  "decided_at": datetime.datetime.now()}})
+    for name, ids in ((doc or {}).get("targets") or {}).items():
+        if ids:
+            await _adb()[sess.prefix + name].update_many({"_id": {"$in": ids}},
+                                                         {"$unset": {"pending_approval": ""}})
 
 
-async def _decide(approval_id: str, decision: str, notes: str) -> None:
+async def _decide(sess: Session, approval_id: str, decision: str, notes: str) -> None:
     """Resume the paused agent with the NOC decision."""
-    client = MongoClient(os.environ["MONGODB_URI"])
-    try:
-        doc = await asyncio.to_thread(_approvals(client).find_one, {"_id": approval_id})
-    finally:
-        client.close()
+    doc = await _adb()[sess.prefix + "agent_approvals"].find_one({"_id": approval_id})
     if not doc or doc.get("status") != "pending":
         raise ValueError(f"{approval_id} is not pending any more")
     if decision not in (doc.get("allowed_decisions") or []):
@@ -513,26 +566,28 @@ async def _decide(approval_id: str, decision: str, notes: str) -> None:
     if not (doc.get("execution_id") and workspace_id and doc.get("session_id")):
         raise ValueError(f"{approval_id} doesn't name the paused run")
     agent = AGENT_WORKSPACES.get(workspace_id, workspace_id)
-    await _broadcast("ACTION", f"NOC decision: {decision} {approval_id}"
+    await _broadcast(sess, "ACTION", f"NOC decision: {decision} {approval_id}"
                      + (f" ({notes})" if notes else "") + f" → resuming {agent}")
-    execution = await _execution(doc["execution_id"], workspace_id)
+    execution = await ae_client.execution(doc["execution_id"], workspace_id)
     status = execution.get("status") or "unknown"
     if status in ("pending", "running"):
         raise ValueError(f"{agent} is still running ({status}); decide once it has paused")
     if status not in _PAUSED:
-        await asyncio.to_thread(_expire, approval_id, status)
+        await _expire(sess, approval_id, status)
         raise ValueError(f"the paused run behind {approval_id} is {status}: it can't be resumed. "
                          "Ask again to get a new review.")
     interrupt_id = _interrupt_id(execution, approval_id)
     if not interrupt_id:
         raise ValueError(f"no interrupt for {approval_id} on execution {doc['execution_id'][:8]}…")
+    # The resumed run's spans belong to this page.
+    _remember_owner(_session_owner, doc["session_id"], sess.token)
     t0 = time.monotonic()
-    # The CLI resumes (its exact request is what the platform accepts) but
-    # can't resend the run's custom headers; the graph keeps its path
-    # without them (telco_runtime.a2a.message_depth). The lane header is
-    # lost too, which is fine for the twin's default lane.
-    out = await _invoke(None, doc["session_id"], workspace_id=workspace_id,
-                        resume={interrupt_id: {"decision": decision, "reviewer_notes": notes}})
+    # The platform doesn't keep custom headers across a pause: the resume
+    # resends the lane. A2A depth travels in the message instead
+    # (telco_runtime.a2a.message_depth).
+    out = await ae_client.invoke(workspace_id, session_id=doc["session_id"], lane=sess.prefix,
+                                 user_id=sess.user_id,
+                                 resume_map={interrupt_id: {"decision": decision, "reviewer_notes": notes}})
     elapsed = round(time.monotonic() - t0, 1)
     if not out["ok"]:
         err = f"resume failed: {out.get('error') or 'the invoke failed'}"
@@ -542,49 +597,110 @@ async def _decide(approval_id: str, decision: str, notes: str) -> None:
         try:
             for _ in range(3):
                 await asyncio.sleep(2)
-                status = (await _execution(doc["execution_id"], workspace_id)).get("status") or "unknown"
+                status = (await ae_client.execution(doc["execution_id"], workspace_id)).get("status") or "unknown"
                 if status not in ("pending", "running", "resuming"):
                     break
         except Exception as e:
             log.warning(f"{approval_id}: execution status after the failed resume: {e}")
         if status not in _PAUSED | {"pending", "running", "unknown"}:
-            await asyncio.to_thread(_expire, approval_id, status)
+            await _expire(sess, approval_id, status)
             err += f". The run is {status} now, so {approval_id} has expired; ask again for a new review."
         raise ValueError(err)
+    if out.get("execution_id") != doc["execution_id"] and not out.get("suspend_context"):
+        # An invoke that started a new turn instead of resuming leaves the
+        # paused execution suspended (AGENT_ENGINE_PLAN.md, Phase 3 #5).
+        status = (await ae_client.execution(doc["execution_id"], workspace_id)).get("status")
+        if status in _PAUSED:
+            raise ValueError(f"Agent Engine didn't resume {approval_id}: the paused run is still "
+                             f"{status} (execution {doc['execution_id'][:8]}…)")
     answer = out.get("response") or (f"⏸ {agent} paused again for a NOC review."
                                      if out.get("suspend_context") else "No response.")
-    # To every page: the cards are shared, and the deciding page may be gone.
-    await _send_all({"type": "response", "elapsed": elapsed, "markdown": answer,
-                     "title": f"🤖 {agent} after {approval_id} ({decision})"})
-    await _broadcast("INFO", f"✓ {agent} resumed after {approval_id} in {elapsed} s")
+    await _send_all(sess, {"type": "response", "elapsed": elapsed, "markdown": answer,
+                           "title": f"🤖 {agent} after {approval_id} ({decision})"})
+    await _broadcast(sess, "INFO", f"✓ {agent} resumed after {approval_id} in {elapsed} s")
 
 
-def _history_coll(client: MongoClient):
-    # The default lane's agent_history on the twin (Reset clears it). Not
-    # agents/history.py: that one imports the legacy terminal history file
-    # into an empty collection.
-    return client[DEMO_DB]["agent_history"]
+# ── Self-healing responder ────────────────────────────────────────────────
 
+async def _respond_to_incidents(sess: Session) -> None:
+    """Watch the lane's ibn_incidents; hand every incident the SLO monitor
+    opens (it runs in the IBN dashboard, so a dashboard tab must be open on
+    the session) to the deployed ibn-agent."""
+    incidents = _adb()[sess.prefix + "ibn_incidents"]
+    running: set[asyncio.Task] = set()
 
-def _history(limit: int = 500) -> list[str]:
-    client = MongoClient(os.environ["MONGODB_URI"])
+    async def start(incident_id) -> None:
+        # One responder per incident (the field the autopilot and the
+        # Kanopy shell's responder claim with, too).
+        doc = await incidents.find_one_and_update(
+            {"_id": incident_id, "autopilot": {"$exists": False}},
+            {"$set": {"autopilot": {"status": "running", "by": RESPONDER_BY,
+                                    "started_at": datetime.datetime.now()}}})
+        if doc:
+            task = asyncio.create_task(_respond(sess, incidents, doc))
+            running.add(task)
+            task.add_done_callback(running.discard)
+
+    async def on_insert(doc: dict) -> None:
+        if doc.get("open"):
+            await start(doc["_id"])
+
     try:
-        return [d["text"] for d in _history_coll(client).find({}, {"_id": 0, "text": 1})
-                .sort("_id", -1).limit(limit) if d.get("text")]
+        young = datetime.datetime.now() - CATCH_UP
+        async for doc in incidents.find({"open": True, "opened_at": {"$gte": young},
+                                         "autopilot": {"$exists": False}}, {"_id": 1}):
+            await start(doc["_id"])
+        await _watch(incidents, on_insert, ops=("insert",))
     finally:
-        client.close()
+        for task in running:
+            task.cancel()
 
 
-def _remember(text: str) -> None:
-    client = MongoClient(os.environ["MONGODB_URI"])
-    try:
-        coll = _history_coll(client)
-        last = coll.find_one({}, {"_id": 0, "text": 1}, sort=[("_id", -1)])
-        if not last or last.get("text") != text:
-            coll.insert_one({"text": text, "source": "twin-shell", "ts": datetime.datetime.now()})
-    finally:
-        client.close()
+async def _respond(sess: Session, incidents, incident: dict) -> None:
+    head = {"type": "autonomous", "incident_id": str(incident["_id"]),
+            "intent_id": incident["intent_id"], "site": incident.get("site_name") or ""}
+    if sess.lock.locked():
+        await _send_all(sess, {**head, "phase": "queued"})
+    async with sess.lock:
+        pol = autonomy.merge(await _adb()[sess.prefix + "ibn_autonomy_policy"].find_one(
+            {"_id": autonomy.POLICY_ID}))
+        await _send_all(sess, {**head, "phase": "started", "level": pol["level"],
+                               "note": (incident.get("alarm") or {}).get("specific_problem", "SLO breach")})
+        session_id = f"{sess.ae_session}-heal-{str(incident['_id'])[-8:]}"
+        _remember_owner(_session_owner, session_id, sess.token)
+        log.info(f"self-healing run ({sess.prefix}, {incident['intent_id']}, {pol['level']})")
 
+        async def retry(note: str) -> None:
+            await _broadcast(sess, "INFO", note)
+
+        t0 = time.monotonic()
+        try:
+            out = await ae_client.invoke(IBN_WS, message=autonomy.task(incident, pol),
+                                         session_id=session_id, lane=sess.prefix,
+                                         user_id=sess.user_id, on_retry=retry)
+        except Exception as e:
+            log.exception("self-healing run failed")
+            out = {"ok": False, "error": f"The self-healing run failed: {e}"}
+        ok = out["ok"]
+        answer = _redact((out.get("response") or out.get("error") or "").strip())
+        now = datetime.datetime.now()
+        await incidents.update_one({"_id": incident["_id"]}, {
+            "$set": {"autopilot.status": "done" if ok else "failed", "autopilot.finished_at": now,
+                     "autopilot.session_id": out.get("session_id"),
+                     "autopilot.execution_id": out.get("execution_id"),
+                     "autopilot.answer": answer[:2000]},
+            "$push": {"timeline": {"ts": now, "stage": "report", "by": RESPONDER_BY,
+                                   "note": answer.splitlines()[0][:300] if answer else "(no answer)"}},
+        })
+        if ok:
+            sess.context = (f"with no human prompt, the self-healing run on ibn-agent just handled "
+                            f"incident {incident['_id']} for {incident['intent_id']} at {head['site']} "
+                            f"(autonomy {pol['level']}) and reported: {answer[:600]}")
+        await _send_all(sess, {**head, "phase": "done", "ok": ok, "level": pol["level"],
+                               "markdown": answer, "elapsed": round(time.monotonic() - t0, 1)})
+
+
+# ── App ───────────────────────────────────────────────────────────────────
 
 def _mongo_info() -> dict:
     parsed = urlparse(os.environ.get("MONGODB_URI", ""))
@@ -593,6 +709,8 @@ def _mongo_info() -> dict:
     try:
         db = client[DEMO_DB]
         for coll in db.list_collection_names():
+            if coll.startswith("s_"):
+                continue
             try:
                 indexes += [f"{coll}.{i['name']}" for i in db[coll].list_search_indexes()
                             if i.get("type") == "vectorSearch"]
@@ -610,19 +728,21 @@ async def lifespan(app: FastAPI):
     app.state.mongo_info = await asyncio.to_thread(_mongo_info)
     queue: asyncio.Queue = asyncio.Queue()
     stop = threading.Event()
-    watcher = threading.Thread(target=_watch_traces, args=(asyncio.get_running_loop(), queue, stop),
-                               daemon=True)
-    watcher.start()
-    threading.Thread(target=_watch_approvals, args=(asyncio.get_running_loop(), stop),
+    threading.Thread(target=_watch_traces, args=(asyncio.get_running_loop(), queue, stop),
                      daemon=True).start()
-    threading.Thread(target=_watch_autopilot, args=(asyncio.get_running_loop(), stop),
-                     daemon=True).start()
-    pump = asyncio.create_task(_log_pump(queue))
-    log.info("Twin shell ready on Atlas Agent Engine (noc-coordinator)")
+    background = [asyncio.create_task(_log_pump(queue)), asyncio.create_task(_reaper_loop())]
+    log.info("Shell ready on Atlas Agent Engine (noc-coordinator), "
+             + ("service account: per-session memory" if ae_client.credentials.service_account
+                else "the presenter's CLI login: loopback only"))
     yield
     stop.set()
-    pump.cancel()
-    await asyncio.gather(pump, return_exceptions=True)
+    async with _sessions_guard:
+        for sess in _sessions.values():
+            for task in sess.tasks:
+                task.cancel()
+    for task in background:
+        task.cancel()
+    await asyncio.gather(*background, return_exceptions=True)
 
 
 app = FastAPI(lifespan=lifespan)
@@ -646,114 +766,134 @@ def _agent_rows() -> list[dict]:
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
-    # Every turn runs as the presenter's CLI login: loopback only.
-    if not ws.client or ws.client.host not in ("127.0.0.1", "::1"):
+    # With the CLI login every turn runs as the presenter: loopback only.
+    if not ae_client.credentials.service_account and (
+            not ws.client or ws.client.host not in ("127.0.0.1", "::1")):
         await ws.close(code=1008)
         return
     await ws.accept()
-    _clients.add(ws)
-    global _ae_session
+    sess: Session | None = None   # bound by the first `init` message
     try:
         while True:
             msg = json.loads(await ws.receive_text())
             typ = msg.get("type")
 
             if typ == "init":
+                token = (msg.get("token") or "").strip().lower()
+                if not _TOKEN_RE.match(token):
+                    token = uuid.uuid4().hex[:12]
+                sess, err = await _get_or_create_session(token)
+                if err:
+                    await _send(ws, {"type": "error", "message": err})
+                    await ws.close()
+                    return
+                sess.clients.add(ws)
+                sess.last_activity = time.monotonic()
                 info = app.state.mongo_info
                 # The page works without its history and cards (the cluster
                 # unreachable, DNS): the chat still goes to the coordinator.
                 try:
-                    history = await asyncio.to_thread(_history)
-                    cards = await asyncio.to_thread(_pending_cards)
+                    history = await asyncio.to_thread(shell_history.read_recent, prefix=sess.prefix)
+                    cards = await _pending_cards(sess)
                 except Exception as e:
                     log.warning(f"init: {e}")
                     history, cards = [], []
-                await ws.send_text(json.dumps({
-                    "type": "hello", "runtime": "agent_engine", "session": "twin",
+                await _send(ws, {
+                    "type": "hello", "runtime": "agent_engine", "session": token,
                     "host": info["host"], "indexes": info["indexes"], "servers": AGENTS,
                     "history": history,
                     "ibn_url": os.environ.get("TWIN_IBN_DASHBOARD_URL", "http://localhost:8160"),
                     "dtw_url": os.environ.get("TWIN_DTW_DASHBOARD_URL", "http://localhost:8180"),
-                }))
+                })
                 for card in cards:
-                    await ws.send_text(json.dumps({"type": "approval", "review": card}))
+                    await _send(ws, {"type": "approval", "review": card})
+                continue
 
-            elif typ == "query":
+            if sess is None:
+                continue   # nothing before the session is established
+            sess.last_activity = time.monotonic()
+
+            if typ == "query":
                 text = (msg.get("text") or "").strip()
                 if not text:
                     continue
-                await asyncio.to_thread(_remember, text)
-                if _turn_lock.locked():
-                    await ws.send_text(json.dumps({"type": "error", "message":
-                        "Busy: the previous turn is still running. Try again in a moment."}))
-                    continue
-                async with _turn_lock:
-                    await ws.send_text(json.dumps({"type": "thinking", "active": True}))
+                await asyncio.to_thread(shell_history.append, text, source="twin-shell",
+                                        prefix=sess.prefix)
+                if sess.lock.locked():
+                    await _send(ws, {"type": "broadcast", "tag": "AGENT",
+                                     "msg": "⏳ Your query waits for the turn that is running "
+                                            "(a self-healing run, or another tab)."})
+                async with sess.lock:
+                    await _send(ws, {"type": "thinking", "active": True})
                     try:
-                        await _turn(ws, text)
+                        await _turn(sess, ws, text)
                     except Exception as e:
                         log.exception("turn failed")
-                        await ws.send_text(json.dumps({"type": "error", "message": str(e)}))
+                        await _send(ws, {"type": "error", "message": str(e)})
                     finally:
-                        await ws.send_text(json.dumps({"type": "thinking", "active": False}))
+                        await _send(ws, {"type": "thinking", "active": False})
 
             elif typ == "approval_decision":
                 approval_id = str(msg.get("approval_id") or "")
                 # Waits for a running turn: the card can arrive mid-turn.
-                async with _turn_lock:
+                async with sess.lock:
                     await _send(ws, {"type": "thinking", "active": True})
                     try:
-                        await _decide(approval_id, str(msg.get("decision") or ""),
+                        await _decide(sess, approval_id, str(msg.get("decision") or ""),
                                       str(msg.get("notes") or "").strip()[:500])
                     except Exception as e:
                         log.warning(f"decision on {approval_id}: {e}")
-                        await _broadcast("ERROR", str(e)[:300])
+                        await _broadcast(sess, "ERROR", str(e)[:300])
                         await _send(ws, {"type": "approval_failed", "approval_id": approval_id,
                                          "message": str(e)})
                     finally:
                         await _send(ws, {"type": "thinking", "active": False})
 
             elif typ == "reset_demo":
-                if _turn_lock.locked():
-                    await ws.send_text(json.dumps({"type": "reset_done", "ok": False, "message":
-                        "Busy: a turn or reset is running. Try again in a moment."}))
+                if sess.lock.locked():
+                    await _send(ws, {"type": "reset_done", "ok": False, "message":
+                        "Busy: a turn or reset is running. Try again in a moment."})
                     continue
 
                 async def _emit(line: str):
-                    await ws.send_text(json.dumps({"type": "reset_progress", "line": line}))
+                    await _send(ws, {"type": "reset_progress", "line": line})
 
-                async with _turn_lock:
-                    await ws.send_text(json.dumps({"type": "reset_started"}))
+                async with sess.lock:
+                    await _send(ws, {"type": "reset_started"})
                     try:
-                        await seed_runner.reset_session("", DEMO_DB, _emit)
-                        _ae_session = None
-                        await ws.send_text(json.dumps({"type": "reset_done", "ok": True, "message":
-                            "The twin's demo data has been reset to a clean slate, and the next "
-                            "turn starts a new Agent Engine session. Platform memory stays (there "
-                            "is no delete-by-user API)."}))
+                        await seed_runner.reset_session(sess.prefix, DEMO_DB, _emit)
+                        await _set_ae_session(sess, _new_ae_session(sess.token))
+                        sess.context = ""
+                        await _send(ws, {"type": "reset_done", "ok": True, "message":
+                            "Your demo lane has been reset to a clean slate, and the next turn "
+                            "starts a new Agent Engine session"
+                            + (" with a fresh memory identity." if ae_client.credentials.service_account
+                               else ". Platform memory stays (it is the presenter's).")})
                     except Exception as e:
                         log.exception("reset failed")
-                        await ws.send_text(json.dumps({"type": "reset_done", "ok": False,
-                                                       "message": f"Reset failed: {e}"}))
+                        await _send(ws, {"type": "reset_done", "ok": False,
+                                         "message": f"Reset failed: {e}"})
 
             elif typ == "server_list":
-                await ws.send_text(json.dumps({"type": "server_list", "servers": _agent_rows()}))
+                await _send(ws, {"type": "server_list", "servers": _agent_rows()})
 
             elif typ == "workstreams_request":
-                await ws.send_text(json.dumps({"type": "workstreams", "list": []}))
+                await _send(ws, {"type": "workstreams", "list": []})
 
             elif typ == "command":
                 if msg.get("cmd") == "status":
-                    await ws.send_text(json.dumps({"type": "status", "servers": AGENTS}))
+                    await _send(ws, {"type": "status", "servers": AGENTS})
                 else:   # preferences / memory: platform memory, ask the coordinator
-                    await ws.send_text(json.dumps({"type": "memory", "rows": [{
+                    await _send(ws, {"type": "memory", "rows": [{
                         "ts": "—", "text": "Memory lives in Agent Engine: ask the coordinator "
                                            "“what do you remember about me?”",
-                        "category": "platform", "type": "—"}]}))
+                        "category": "platform", "type": "—"}]})
     except WebSocketDisconnect:
         pass
     finally:
-        _clients.discard(ws)
+        if sess:
+            sess.clients.discard(ws)
+            sess.last_activity = time.monotonic()
 
 
 if __name__ == "__main__":

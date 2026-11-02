@@ -3,13 +3,14 @@
 # Copyright (c) 2026 MongoDB Inc.
 # Author: Benjamin Lorenz <benjamin.lorenz@mongodb.com>
 #
-# The Agent Engine twin of the browser demo (AGENT_ENGINE_PLAN.md, until
-# Phase 8): you chat with the deployed noc-coordinator in the twin's web
-# shell (web/twin_shell.py, through `agentengine invoke` with your CLI
-# login) or in the Atlas Agent Engine UI, and the two dashboards watch the
-# agents' cluster. Single user, default lane (neither can send the
-# demo-prefix header). The Kanopy demo and bin/start.sh are untouched:
-# other ports, other pidfiles, and a guard against the legacy database.
+# The Agent Engine twin of the browser demo (AGENT_ENGINE_PLAN.md): you
+# chat with the deployed noc-coordinator in the web shell on Agent Engine
+# (web/twin_shell.py, over the Agent Engine API with your CLI login, or a
+# service account when AE_CLIENT_ID/AE_CLIENT_SECRET are set), each browser
+# session in its own demo lane, or in the Atlas Agent Engine UI (default
+# lane), and the two dashboards watch the agents' cluster. The Kanopy demo
+# and bin/start.sh are untouched: other ports, other pidfiles, and a guard
+# against the legacy database.
 #
 #   bin/twin.sh start    web shell :8170, IBN dashboard :8160, DTW dashboard
 #                        :8180 (detached, localhost only)
@@ -19,11 +20,13 @@
 #                        clear its approvals/routing decisions (platform
 #                        memory stays: there is no delete-by-user API)
 #   bin/twin.sh autopilot [L4|L3]
-#                        foreground: set the autonomy level (default L4) and
-#                        hand every incident the SLO monitor opens to the
-#                        deployed ibn-agent, no human prompt (agent-engine/
-#                        autopilot.py, SELF_HEALING_PLAN.md S2). The monitor
-#                        runs in the IBN dashboard, so keep a tab open.
+#                        foreground, for the default lane (the web shell
+#                        responds in its own lanes): set the autonomy level
+#                        (default L4) and hand every incident the SLO
+#                        monitor opens to the deployed ibn-agent, no human
+#                        prompt (agent-engine/autopilot.py,
+#                        SELF_HEALING_PLAN.md S2). The monitor runs in the
+#                        IBN dashboard, so keep a tab open on that lane.
 #
 # TWIN_MONGODB_URI is the agents' cluster (the workspace MONGODB_URI).
 

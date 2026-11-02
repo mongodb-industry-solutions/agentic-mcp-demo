@@ -573,12 +573,12 @@ function connect() {
       // / dtw_url) and links straight to them. Fallbacks: local dev runs
       // the dashboards on their own uvicorn ports (8060 / 8080); a legacy
       // single-origin reverse proxy mounts them under /ibn and /dtw.
-      // The Agent Engine twin's shell (web/twin_shell.py) has one lane, the
-      // dashboards' default one: their links carry no session token.
+      // The shell on Agent Engine (web/twin_shell.py) keeps a lane per
+      // session too, so its links carry the token as well.
       const twin = msg.runtime === 'agent_engine';
       if (twin) applyTwinChrome();
       if (sessionToken) {
-        const q = twin ? '' : '?session=' + encodeURIComponent(sessionToken);
+        const q = '?session=' + encodeURIComponent(sessionToken);
         let ibn, dtw;
         if (msg.ibn_url) {                               // Kanopy / configured hosts
           ibn = msg.ibn_url.replace(/\/$/, '') + '/' + q;
@@ -788,7 +788,7 @@ function applyTwinChrome() {
     'noc-coordinator + ibn-agent + dtw-agent over A2A · MongoDB Atlas + Voyage AI';
   document.getElementById('tabServers').textContent = 'Agents';
   document.getElementById('resetBtn').title =
-    "Re-seed the twin's IBN + DTW demo data and start a new Agent Engine session";
+    "Re-seed your session's IBN + DTW demo data and start a new Agent Engine session";
 }
 
 // ── Reverse history search (Ctrl+R / bck-i-search) ───────────────────────

@@ -9,8 +9,10 @@ run by `bin/twin.sh autopilot [L3|L4]`.
 
 Agent Engine has no triggers yet, and service accounts are blocked in the
 shared JeffN project, so this local process stands in for them until
-Phase 8: it watches the twin cluster's `ibn_incidents` (default lane, like
-the rest of the twin) and, for every incident the SLO monitor opens, calls
+Phase 8: it watches the twin cluster's `ibn_incidents` in the default lane
+(the one the Agent Engine UI uses; the web shell on Agent Engine responds
+in its own lanes, web/twin_shell.py) and, for every incident the SLO
+monitor opens, calls
 the deployed ibn-agent through `agentengine invoke` with the presenter's
 CLI login. Each run is its own session in Agent Engine Traces; its ids are
 recorded on the incident.
