@@ -38,7 +38,19 @@ organizational, above all item 1.1: a dedicated Agent Engine project.
 and id), cluster `oss-demos`, CLI context `ist-telco`. Workspaces
 `ibn-agent` `ws-6af1e8a9a1058b3d57ec3b7e`, `dtw-agent`
 `ws-6af1e8a9a1058b3d57ec3b80`, `noc-coordinator`
-`ws-6af1e8a9a1058b3d57ec3b82`. What drove it, kept for the record:
+`ws-6af1e8a9a1058b3d57ec3b82`.
+
+**JeffN cleanup (2026-11-10):** our three JeffN workspaces, the guardrail
+`telco-subscriber-id-redaction` and the Flex cluster `telco-oss-agents`
+are deleted. Still there, on purpose:
+
+- the project secret `CEREBRAS_API_KEY` (our Grove key) and the project
+  memory config (generation 4, ours). The memory server is project-wide
+  and other teams' JeffN agents have memory on, so both stay until the
+  JeffN owner has taken them over or agreed a date to remove them;
+- the `hello-world` workspace, which isn't known to be ours.
+
+What drove the move, kept for the record:
 
 - **The JeffN outage (2026-10-29 on):** every invoke got `503
   POOL_EXHAUSTED`. Root cause (Bailey Pearson): JeffN's OE kept its sandbox
@@ -78,7 +90,7 @@ and id), cluster `oss-demos`, CLI context `ist-telco`. Workspaces
 - **Done (2026-11-09):** `oss-demos` in IST Telco, seeded from `seed/`;
   `ibn_knowledge_index` and `dtw_knowledge_index` are ready, and the
   coordinator creates `agent_cards_index` on its first turn.
-  `telco-oss-agents` (JeffN) stays until the JeffN workspaces are removed.
+  `telco-oss-agents` (JeffN) was deleted on 2026-11-10 (see 1.1).
 - **Done (2026-11-10): M10.** The cluster has to be dedicated, not Flex:
   Agent Engine memory now lands on it too (the project `MONGODB_URI`) and
   brings 10 search indexes of its own (a vector and a text index per

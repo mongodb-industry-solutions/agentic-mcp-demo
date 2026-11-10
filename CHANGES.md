@@ -1,5 +1,15 @@
 # CHANGES.md
 
+## 2026-11-10
+
+### Our old setup in the JeffN project is removed
+
+Now that the agents run in IST Telco, their old copies in the shared JeffN
+project are deleted: the three workspaces, the subscriber-ID guardrail and
+the `telco-oss-agents` cluster. Nothing in the demo used them any more.
+The project-wide memory settings we left in JeffN stay until the project's
+owner has taken them over, because other teams' agents rely on them.
+
 ## 2026-11-09
 
 ### The Agent Engine agents move to a project of their own
