@@ -1,10 +1,11 @@
 # What the demo still needs on Atlas Agent Engine
 
-Status 2026-10-21 (CLI 0.1.119, SDK 0.11.8). Jira: ISTTH-969.
+Status 2026-11-09 (CLI 0.1.119, SDK 0.11.8). Jira: ISTTH-969.
 
 The Telco OSS agents run on Atlas Agent Engine today: `noc-coordinator`,
-`ibn-agent` and `dtw-agent` in the shared JeffN project, with their data on
-the `telco-oss-agents` cluster. The twin's web shell runs on the presenter's
+`ibn-agent` and `dtw-agent` in our own Agent Engine project, IST Telco
+(since 2026-11-09; before, the shared JeffN project), with their data on the
+`oss-demos` cluster. The twin's web shell runs on the presenter's
 laptop and drives them over the Agent Engine API with the presenter's CLI
 login. It does chat, the Agent Log, NOC approvals and the self-healing
 responder, with a demo lane per browser session (Phase 8b, 2026-10-30);
@@ -30,7 +31,22 @@ organizational, above all item 1.1: a dedicated Agent Engine project.
 
 ## 1. Organizational TODOs
 
-### 1.1 A dedicated Agent Engine project (blocker)
+### 1.1 A dedicated Agent Engine project (done 2026-11-09)
+
+**Done:** the Atlas project IST Telco in the Products org
+(`6ae9c9d3aa92329446878f4a`; Agent Engine mirrors it under the same name
+and id), cluster `oss-demos`, CLI context `ist-telco`. Workspaces
+`ibn-agent` `ws-6af1e8a9a1058b3d57ec3b7e`, `dtw-agent`
+`ws-6af1e8a9a1058b3d57ec3b80`, `noc-coordinator`
+`ws-6af1e8a9a1058b3d57ec3b82`. What drove it, kept for the record:
+
+- **The JeffN outage (2026-10-29 on):** every invoke got `503
+  POOL_EXHAUSTED`. Root cause (Bailey Pearson): JeffN's OE kept its sandbox
+  ownership records in the legacy shared store `mdb_agentic_store`, on the
+  cluster behind the project-scoped `MONGODB_URI` (another team's); several
+  projects wrote to it, and an OE rollout's handover broke. The fix there
+  (create `mdb_store_<project>` and redeploy) would have switched the OE
+  for every team in JeffN, so we moved instead.
 
 - **What:** our own Agent Engine project, linked to our own Atlas project,
   instead of the shared JeffN project. Ideally one per environment
@@ -59,13 +75,22 @@ organizational, above all item 1.1: a dedicated Agent Engine project.
 
 ### 1.2 The agents' Atlas cluster in that project
 
-- Move or recreate `telco-oss-agents` (today a Flex cluster in JeffN, AWS
-  us-east-1) in the new Atlas project, and reseed it from `seed/`.
+- **Done (2026-11-09):** `oss-demos` in IST Telco, seeded from `seed/`;
+  `ibn_knowledge_index` and `dtw_knowledge_index` are ready, and the
+  coordinator creates `agent_cards_index` on its first turn.
+  `telco-oss-agents` (JeffN) stays until the JeffN workspaces are removed.
+- **Done (2026-11-10): M10.** The cluster has to be dedicated, not Flex:
+  Agent Engine memory now lands on it too (the project `MONGODB_URI`) and
+  brings 10 search indexes of its own (a vector and a text index per
+  memory type), so with our three there are 13. Flex refused the 13th
+  (`agent_cards_index`: "maximum number of FTS indexes has been reached").
+  In JeffN memory sat on another team's cluster, so this never showed.
 - **Size it for the target load.** The platform's run state
   (`mdb_store_<project>`: traces, checkpoints) lands on this cluster too,
   so many concurrent visitors may need more than Flex.
-- **Database access:** a cluster-scoped database user for the agents (no
-  more `istmedia`).
+- **Database access:** a database user for the agents with only the access
+  they need. The agents use an `atlasAdmin` user for now, which is
+  acceptable on a cluster of our own but still broader than needed.
 - **Recreate:**
   - the Atlas Vector Search indexes: `ibn_knowledge_index`,
     `dtw_knowledge_index` and `agent_cards_index`, all on auto-embed

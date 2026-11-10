@@ -26,7 +26,7 @@ a2a:
   enabled: true
   allowed_callers:
     - c47ee072257dbccb667aec2b   # local dev (agentengine dev up)
-    - ws-6ad1060d6189a50fdc472a65   # JeffN
+    - ws-6af1e8a9a1058b3d57ec3b82   # IST Telco
   skills:
     - name: noc-request
       description: Route a NOC request to the right domain agents and combine their answers.

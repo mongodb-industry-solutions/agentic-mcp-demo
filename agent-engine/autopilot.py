@@ -7,9 +7,8 @@
 The Agent Engine twin's autonomous responder (SELF_HEALING_PLAN.md, S2),
 run by `bin/twin.sh autopilot [L3|L4]`.
 
-Agent Engine has no triggers yet, and service accounts are blocked in the
-shared JeffN project, so this local process stands in for them until
-Phase 8: it watches the twin cluster's `ibn_incidents` in the default lane
+Agent Engine has no triggers yet, and the twin has no service account
+yet, so this local process stands in for them until Phase 8: it watches the twin cluster's `ibn_incidents` in the default lane
 (the one the Agent Engine UI uses; the web shell on Agent Engine responds
 in its own lanes, web/twin_shell.py) and, for every incident the SLO
 monitor opens, calls
@@ -38,13 +37,13 @@ from pymongo import MongoClient
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from oss_tools.ibn import autonomy
 
-# The deployed ibn-agent in JeffN (an explicit target, so the CLI's current
+# The deployed ibn-agent in the IST Telco project (an explicit target, so the CLI's current
 # context doesn't matter).
 TARGET = {
     "--base-url": os.environ.get("TWIN_AE_BASE_URL", "https://agentengine.mongodb.com"),
     "--org-id": os.environ.get("TWIN_AE_ORG_ID", "6a99bbc5fa6869c45dee52b6"),
-    "--project-id": os.environ.get("TWIN_AE_PROJECT_ID", "6aa4558bb19c96d52970c253"),
-    "--workspace-id": os.environ.get("TWIN_IBN_WORKSPACE_ID", "ws-6ad0efe66189a50fdc461f8d"),
+    "--project-id": os.environ.get("TWIN_AE_PROJECT_ID", "6ae9c9d3aa92329446878f4a"),
+    "--workspace-id": os.environ.get("TWIN_IBN_WORKSPACE_ID", "ws-6af1e8a9a1058b3d57ec3b7e"),
 }
 INVOKE_TIMEOUT = "5m"
 # Two invokes started together may both refresh the CLI login, and the

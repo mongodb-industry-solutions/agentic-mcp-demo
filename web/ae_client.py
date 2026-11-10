@@ -36,7 +36,7 @@ import httpx
 
 BASE_URL = os.environ.get("TWIN_AE_BASE_URL", "https://agentengine.mongodb.com")
 ORG_ID = os.environ.get("TWIN_AE_ORG_ID", "6a99bbc5fa6869c45dee52b6")
-PROJECT_ID = os.environ.get("TWIN_AE_PROJECT_ID", "6aa4558bb19c96d52970c253")
+PROJECT_ID = os.environ.get("TWIN_AE_PROJECT_ID", "6ae9c9d3aa92329446878f4a")
 LANE_HEADER = "X-Mdb-Agent-Engine-Custom-Demo-Prefix"
 
 INVOKE_TIMEOUT_S = 600
@@ -56,11 +56,15 @@ class _CliLogin:
         return creds[BASE_URL]["access_token"]
 
     async def refresh(self) -> None:
+        # Any authenticated command refreshes the stored token; this one
+        # needs no workspace (`status` refuses an org/project-only target).
         proc = await asyncio.create_subprocess_exec(
-            "agentengine", "status", "--json", "--quiet", "--base-url", BASE_URL,
-            "--org-id", ORG_ID, "--project-id", PROJECT_ID,
-            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-        await proc.wait()
+            "agentengine", "organization", "list", "--json", "--quiet", "--base-url", BASE_URL,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        _, err = await proc.communicate()
+        if proc.returncode:
+            raise RuntimeError(f"can't refresh the agentengine login ({err.decode().strip()[:200]}); "
+                               "run `agentengine auth login`")
 
 
 class _ServiceAccount:

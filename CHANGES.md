@@ -1,5 +1,20 @@
 # CHANGES.md
 
+## 2026-11-09
+
+### The Agent Engine agents move to a project of their own
+
+The three Telco OSS agents on Atlas Agent Engine (`noc-coordinator`,
+`ibn-agent`, `dtw-agent`) now run in our own project, IST Telco, with their
+data on our own cluster, `oss-demos`. Until now they shared the JeffN
+project with other teams, and that cost us a week of outage: since
+29 October every request to them was refused because of a clash in the
+project's shared bookkeeping. In our own project, no other team's secrets,
+settings, memories or restarts reach our agents. The web shell on Agent
+Engine and the autopilot (`bin/twin.sh`) talk to the new project by
+default; set `TWIN_MONGODB_URI` to the `oss-demos` cluster. The Kanopy demo
+is unaffected.
+
 ## 2026-10-30
 
 ### The web shell on Atlas Agent Engine: a demo lane per browser session

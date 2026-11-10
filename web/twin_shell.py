@@ -69,10 +69,10 @@ log = logging.getLogger("twin_shell")
 DEMO_DB = "agent_registry"
 ROOT = Path(__file__).resolve().parent.parent
 
-# The deployed agents in JeffN (the same defaults as agent-engine/autopilot.py).
-COORDINATOR_WS = os.environ.get("TWIN_COORDINATOR_WORKSPACE_ID", "ws-6ad1060d6189a50fdc472a65")
-IBN_WS = os.environ.get("TWIN_IBN_WORKSPACE_ID", "ws-6ad0efe66189a50fdc461f8d")
-DTW_WS = os.environ.get("TWIN_DTW_WORKSPACE_ID", "ws-6ad0efe7ea67bce171583766")
+# The deployed agents in the IST Telco project (the same defaults as agent-engine/autopilot.py).
+COORDINATOR_WS = os.environ.get("TWIN_COORDINATOR_WORKSPACE_ID", "ws-6af1e8a9a1058b3d57ec3b82")
+IBN_WS = os.environ.get("TWIN_IBN_WORKSPACE_ID", "ws-6af1e8a9a1058b3d57ec3b7e")
+DTW_WS = os.environ.get("TWIN_DTW_WORKSPACE_ID", "ws-6af1e8a9a1058b3d57ec3b80")
 AGENTS = ["noc-coordinator", "ibn-agent", "dtw-agent"]
 AGENT_WORKSPACES = {IBN_WS: "ibn-agent", DTW_WS: "dtw-agent", COORDINATOR_WS: "noc-coordinator"}
 # The agent that owns each reviewed action (oss_tools.approvals): the review
