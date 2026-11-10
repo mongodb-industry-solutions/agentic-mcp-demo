@@ -2,9 +2,9 @@
 #
 # Telco OSS (AGENT_ENGINE_PLAN.md, Phase 5). Memory configuration is
 # project-scoped: `agentengine memory configure` applies this block to every
-# agent in the Agent Engine project (in the shared JeffN project, to the
-# other teams' agents too). Local dev (`agentengine dev up`) reads it from
-# here, the repo root.
+# agent in the Agent Engine project (our own IST Telco project; in the
+# shared JeffN project it also applied to other teams' agents). Local dev
+# (`agentengine dev up`) reads it from here, the repo root.
 
 memory:
   # Memory-server log level. One of: debug | info | warning | error | critical.
@@ -32,13 +32,12 @@ memory:
   #   agentengine secret set LLM_API_KEY --sync
   # Extraction reads a project-scoped secret from a fixed list of names
   # (LLM_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY,
-  # CEREBRAS_API_KEY). In JeffN, LLM_API_KEY and OPENAI_API_KEY hold another
-  # agent's gateway key, so our key sits under the otherwise unused
-  # CEREBRAS_API_KEY name (the name doesn't have to match the provider).
-  # It's a key for the Grove gateway on Azure API Management, which takes
-  # it in an `api-key` header; the memory server keeps a grove-foundry URL
-  # up to /v1. The base URL is explicit because JeffN's project
-  # OPENAI_BASE_URL points at another gateway. (Claude through the MongoDB
+  # CEREBRAS_API_KEY). In our own project it's LLM_API_KEY, the key the
+  # agents use too (in JeffN that name held another team's key, so ours sat
+  # under CEREBRAS_API_KEY). It's a key for the Grove gateway on Azure API
+  # Management, which takes it in an `api-key` header; the memory server
+  # keeps a grove-foundry URL up to /v1. The base URL is explicit so a
+  # project OPENAI_BASE_URL can't redirect extraction. (Claude through the MongoDB
   # AI Gateway extracted locally but never deployed.) The model is pinned
   # to the one the agents use (the provider default, gpt-5.6-luna, can
   # change with a platform upgrade).
@@ -47,7 +46,7 @@ memory:
     model: gpt-4o
     base_url: https://grove-gateway-prod.azure-api.net/grove-foundry-prod/openai/v1
     auth_header: api-key
-    api_key_secret: CEREBRAS_API_KEY
+    api_key_secret: LLM_API_KEY
 
   background_extraction:
     # Snapshot promotion

@@ -24,18 +24,19 @@ features:
 version: 0.1.0
 # Every A2A call (coordinator delegation, consultation) opens a new
 # session, which holds a sandbox for the idle TTL (600 s). That TTL is
-# project-wide in the shared JeffN project, so capacity comes from replicas.
+# project-wide (in our own IST Telco project, our choice), so capacity
+# comes from replicas.
 scaling:
   replicas: 8
 # A2A (Phase 4): called by the NOC coordinator and consulted by ibn-agent;
-# no other agent in the shared project may call it.
+# no other agent may call it.
 a2a:
   enabled: true
   allowed_callers:
     - c47ee072257dbccb667aec2b   # noc-coordinator, local dev
-    - ws-6ad1060d6189a50fdc472a65   # noc-coordinator, JeffN
+    - ws-6af1e8a9a1058b3d57ec3b82   # noc-coordinator, IST Telco
     - 6dd3c9bae3ceecbce7b6d01d   # ibn-agent, local dev
-    - ws-6ad0efe66189a50fdc461f8d   # ibn-agent, JeffN
+    - ws-6af1e8a9a1058b3d57ec3b7e   # ibn-agent, IST Telco
   skills:
     - name: qos-what-if
       description: "Simulate QoS changes (e.g. downlink uplifts) on the ACME Mobile digital twin: per-cell load, bottlenecks."
