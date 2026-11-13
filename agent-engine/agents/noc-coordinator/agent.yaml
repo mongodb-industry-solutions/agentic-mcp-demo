@@ -19,6 +19,13 @@ features:
   # saving, glossary/procedure seeding.
   memory: true
 version: 0.1.0
+# One session per visitor (the shell keeps a coordinator session per
+# browser session); it keeps its sandbox between a visitor's turns for
+# 300 s, then resumes from the durable checkpoint. Platform default: 4
+# replicas, 600 s, too few for the shell's 6 visitors.
+scaling:
+  replicas: 12
+  agent_idle_ttl_seconds: 300
 # A2A on, so the platform hands this agent a token to call the domain
 # agents. Nothing calls the coordinator itself: its allowed_callers names
 # only itself.
