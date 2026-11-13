@@ -1,5 +1,16 @@
 # CHANGES.md
 
+## 2026-11-13
+
+### The demo reaches its AI models through Grove
+
+The Kanopy demo's OpenAI key stopped working on 13 November, and every
+question in the shell failed. The shell now reaches the same models
+(gpt-4o, gpt-4o-mini) through MongoDB's Grove AI Gateway, with a Grove key,
+on staging and prod. Nothing else changes for the demo. To run it locally,
+set `OPENAI_API_KEY` to your Grove gateway key and `OPENAI_BASE_URL` to
+`https://ai-gateway.corp.mongodb.com/openai/v1`.
+
 ## 2026-11-10
 
 ### Our old setup in the JeffN project is removed
