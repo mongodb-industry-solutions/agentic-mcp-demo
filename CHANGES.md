@@ -2,6 +2,16 @@
 
 ## 2026-11-13
 
+### Staging runs the demo on Atlas Agent Engine
+
+The staging demo (agentic-mcp-demo-shell.industrysolutions.staging.corp.mongodb.com)
+now runs on Atlas Agent Engine, like the twin on the presenter's laptop:
+every question goes to the NOC coordinator in our IST Telco project, each
+visitor gets a demo lane and a memory of their own, NOC approvals appear as
+cards in the chat, and the network can heal itself (up to autonomy level 4).
+Its IBN and DTW dashboards show the Agent Engine agents' data. Prod still
+runs the original demo.
+
 ### The demo reaches its AI models through Grove
 
 The Kanopy demo's OpenAI key stopped working on 13 November, and every
