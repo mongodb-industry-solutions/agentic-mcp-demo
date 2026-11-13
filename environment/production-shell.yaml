@@ -9,6 +9,7 @@ env:
   NODE_ENV: prod
   AWS_REGION: us-east-1
   OPENAI_MODEL: gpt-4o
+  OPENAI_BASE_URL: "https://ai-gateway.corp.mongodb.com/openai/v1"   # Grove AI Gateway; OPENAI_API_KEY holds a Grove gateway key
   AGENT_MODE: all
   DEMO_DISABLE_FILE_WATCH: "1"   # immutable image — no mcp_servers/ hot-reload needed
   IBN_DASHBOARD_URL: "https://agentic-mcp-demo-ibn.industrysolutions.prod.corp.mongodb.com"
