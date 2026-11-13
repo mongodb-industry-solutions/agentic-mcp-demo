@@ -325,6 +325,13 @@ in brackets.
   - *Ask:* autoscaling, or sandbox sharing for A2A children, and a
     per-workspace idle timeout (today it's project-wide: the last deploy
     wins).
+  - *Seen again on staging (2026-11-13):* three visitors filled ibn-agent
+    and dtw-agent (8 replicas, 600 s) within a minute. Now
+    `scaling.agent_idle_ttl_seconds` is per agent (manifest reference,
+    1–86400, default 600): the domain agents run 24 replicas and 60 s, the
+    coordinator 12 and 300 s. Next: mark A2A child sessions finished at
+    the end of their turn ("Mark a Session Finished from Your Agent"),
+    which releases the sandbox at once.
 - **A secret change interrupts service:**
   - *Gap:* `secret set --sync` rolls the runtime. For a minute or two
     after it, invokes got the same `503` "All agent instances are
