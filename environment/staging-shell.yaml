@@ -14,11 +14,21 @@ env:
   DEMO_DISABLE_FILE_WATCH: "1"   # immutable image — no mcp_servers/ hot-reload needed
   IBN_DASHBOARD_URL: "https://agentic-mcp-demo-ibn.industrysolutions.staging.corp.mongodb.com"
   DTW_DASHBOARD_URL: "https://agentic-mcp-demo-dtw.industrysolutions.staging.corp.mongodb.com"
+  # Staging runs the shell on Atlas Agent Engine (web/twin_shell.py): the
+  # deployed noc-coordinator in the IST Telco project, data on oss-demos,
+  # the kanopy-shell-staging service account. Unset SHELL_APP and point
+  # MONGODB_URI back at agentic-mcp-demo-secrets for the legacy shell.
+  SHELL_APP: "web.twin_shell:app"
+  TZ: UTC   # like the agents' tool sandboxes (writers store naive datetime.now())
+  TWIN_IBN_DASHBOARD_URL: "https://agentic-mcp-demo-ibn.industrysolutions.staging.corp.mongodb.com"
+  TWIN_DTW_DASHBOARD_URL: "https://agentic-mcp-demo-dtw.industrysolutions.staging.corp.mongodb.com"
 
 envSecrets:
   OPENAI_API_KEY: agentic-mcp-demo-secrets
-  MONGODB_URI: agentic-mcp-demo-secrets
+  MONGODB_URI: agentic-mcp-demo-ae-secrets
   VOYAGE_API_KEY: agentic-mcp-demo-secrets
+  AE_CLIENT_ID: agentic-mcp-demo-ae-secrets
+  AE_CLIENT_SECRET: agentic-mcp-demo-ae-secrets
 
 serviceAccount:
   enabled: true
