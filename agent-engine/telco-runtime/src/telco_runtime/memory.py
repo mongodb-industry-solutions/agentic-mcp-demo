@@ -28,6 +28,7 @@ All calls go through app.memory in the agent sandbox; the platform records
 them as durable activities, so a replay doesn't repeat a write.
 """
 
+import hashlib
 import re
 from collections.abc import Callable
 from typing import Any
@@ -306,16 +307,44 @@ def save_lesson(app: App, label: str, text: str) -> bool:
     return bool(getattr(result, "acknowledged", result))
 
 
+def preference_label(user_id: str, label: str, text: str) -> str:
+    """The stored label of a user's note. Semantic labels are unique per
+    organisation (the memory store's unique index is `(org_id, label)`), not
+    per user, and a second save under a taken label is silently refused:
+    a bare `vodafone-demo` saved by one visitor blocked every other visitor
+    (staging test, 2026-11-16). So the label carries a digest of the user
+    and the text: other users and other notes never collide, and the same
+    note saved twice by the same user maps to the same label (the save
+    upserts it)."""
+    slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")[:40] or "note"
+    digest = hashlib.sha1(f"{user_id}\n{text.strip()}".encode()).hexdigest()[:12]
+    return f"{slug}-{digest}"
+
+
 def save_preference(app: App, label: str, text: str) -> bool:
-    result = app.memory.save_semantic(text=text, label=label, source="noc-coordinator",
-                                      metadata={"kind": "preference"})
-    return bool(getattr(result, "acknowledged", result))
+    """Save what the user asked to keep, under a per-user label."""
+    key = preference_label(str(app.get_current_user_id() or ""), label, text)
+    try:
+        result = app.memory.save_semantic(text=text, label=key, source="noc-coordinator",
+                                          metadata={"kind": "preference", "topic": label})
+    except (MemoryIdentityError, MemoryClientError, MemoryAPIError) as e:
+        print(f"⚠️ preference {key} not saved to memory: {type(e).__name__}: {e}")
+        return False
+    ok = bool(getattr(result, "acknowledged", result))
+    if not ok:
+        print(f"⚠️ preference {key} not acknowledged by memory")
+    return ok
 
 
 def list_preferences(app: App) -> list[str]:
-    """What memory holds about this user: the preferences they stated and
-    what extraction learned. Not filtered on the `kind` metadata, because
-    extraction supersedes a saved preference with its own version."""
-    hits = app.memory.search_semantic("how the user wants answers, their role and focus",
-                                      top_k=PREFERENCES_TOP_K)
+    """What memory holds about this user: the notes they asked to keep, the
+    preferences they stated and what extraction learned. Not filtered on
+    the `kind` metadata, because extraction supersedes a saved preference
+    with its own version. Two searches, because one fixed question about
+    answers and role ranks a note such as "I present to Vodafone next
+    Tuesday" below the cut."""
+    hits = []
+    for question in ("how the user wants answers, their role and focus",
+                     "what the user asked me to remember: plans, dates, customers"):
+        hits += app.memory.search_semantic(question, top_k=PREFERENCES_TOP_K)
     return list(dict.fromkeys(h.content for h in hits if h.content))
