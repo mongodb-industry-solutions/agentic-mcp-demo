@@ -50,6 +50,33 @@ _REMEMBER_CUE = re.compile(
     r"\b(remember|note that|make a note|keep in mind|don't forget|for next time|"
     r"answers?|repl(y|ies)|respond|briefly|short|in detail|call me)\b", re.IGNORECASE)
 
+# Short follow-ups ("Diagnose the violation.", "Run the simulation.") are
+# routed in code, not by the router model: with the previous turn as a hint
+# it still sent "Diagnose the violation." to dtw-agent (staging test,
+# 2026-11-16). The domain with the most of its own words decides
+# ("Simulate a POS latency violation" is IBN); none, or a tie, keeps the
+# previous turn's domain (as the legacy runtime's last_domain stickiness).
+# "plan" is in neither: IBN proposes plans, DTW simulates plans.
+FOLLOW_UP_WORDS = 8
+_DOMAIN_WORDS = {
+    "ibn": re.compile(r"\b(intents?|violat\w*|diagnos\w*|runbooks?|feasib\w*|activat\w*|stores?|sites?|"
+                      r"slos?|templates?|incidents?|rush|compliance|repair\w*|pos|latency)\b",
+                      re.IGNORECASE),
+    "dtw": re.compile(r"\b(simulat\w*|scenarios?|uplift|qos|cells?|bottlenecks?|roaming|apn|downlink|"
+                      r"mbps|markets?|what-if|twin)\b", re.IGNORECASE),
+}
+
+
+def follow_up_domains(query: str, sticky: list[str]) -> list[str] | None:
+    """The domains of a short follow-up, or None when the router model
+    should decide (a longer request, or no previous turn)."""
+    if not sticky or len(query.split()) > FOLLOW_UP_WORDS:
+        return None
+    hits = {d: len(words.findall(query)) for d, words in _DOMAIN_WORDS.items()}
+    best = max(hits.values())
+    leaders = [d for d, n in hits.items() if n == best]
+    return leaders if best and len(leaders) == 1 else list(sticky)
+
 SYNTHESIS_PROMPT = (
     "You are the coordinator of domain-specialist agents in a network "
     "operations system. Combine the specialist answers below into ONE "
@@ -170,7 +197,10 @@ def build_coordinator_graph(app: App) -> CompiledStateGraph:
         picked = explicit + [d for d in args.get("domains", []) if d in DOMAIN_AGENT]
         method = "explicit_mention+llm" if explicit else "llm"
         if not picked and intent:
-            return [], method, intent
+            return [], method, intent   # only a memory message ("what do you remember?")
+        follow_up = None if explicit else follow_up_domains(query, sticky)
+        if follow_up:
+            return follow_up, "follow_up", intent
         return (list(dict.fromkeys(picked)) or sticky or list(DOMAIN_AGENT)), method, intent
 
     def with_context(subtask: str, agent: str, messages: list[AnyMessage], memory: str) -> str:
