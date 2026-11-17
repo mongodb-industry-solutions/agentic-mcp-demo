@@ -80,17 +80,10 @@ def _affected_cells(plan_id: str, markets: list[str]) -> list[dict]:
     return list(elements.find({"_id": {"$in": list(cell_ids)}, "type": "Cell"}))
 
 
-def _graph_dependency_walk(start_id: str, max_depth: int = 6) -> list[dict]:
-    """Run $graphLookup DOWNSTREAM from a node, return the discovered edges
-    plus their depth. Used to enumerate the dependency tree for the scenario.
-
-    $graphLookup semantics: connectToField is matched against the current
-    seed; connectFromField is the field whose value becomes the next seed.
-    For a forward (downstream) walk on edges of shape {from_id, to_id}, we
-    match the next edge by from_id == current_seed and follow to_id as the
-    next seed. (Reversing these two field names would do an upstream walk.)
-    """
-    pipeline = [
+def graph_walk_pipeline(start_id: str, max_depth: int = 6) -> list[dict]:
+    """The dependency walk: $graphLookup downstream over dtw_topology_edges
+    from one node (see _graph_dependency_walk)."""
+    return [
         {"$match": {"from_id": start_id}},
         {"$limit": 1},
         {
@@ -106,7 +99,19 @@ def _graph_dependency_walk(start_id: str, max_depth: int = 6) -> list[dict]:
         },
         {"$project": {"_id": 0, "from_id": 1, "to_id": 1, "relation": 1, "walk": 1}},
     ]
-    return list(topology_edges.aggregate(pipeline))
+
+
+def _graph_dependency_walk(start_id: str, max_depth: int = 6) -> list[dict]:
+    """Run $graphLookup DOWNSTREAM from a node, return the discovered edges
+    plus their depth. Used to enumerate the dependency tree for the scenario.
+
+    $graphLookup semantics: connectToField is matched against the current
+    seed; connectFromField is the field whose value becomes the next seed.
+    For a forward (downstream) walk on edges of shape {from_id, to_id}, we
+    match the next edge by from_id == current_seed and follow to_id as the
+    next seed. (Reversing these two field names would do an upstream walk.)
+    """
+    return list(topology_edges.aggregate(graph_walk_pipeline(start_id, max_depth)))
 
 
 # ─── Per-cell load projection ──────────────────────────────────────────────
@@ -294,25 +299,8 @@ def _build_fingerprint(scenario: dict, plan: dict,
     )
 
 
-def _hybrid_knowledge_search(fingerprint: str, scenario: dict) -> tuple[list, list, str]:
-    """
-    Run the hybrid query: $vectorSearch on knowledge_chunks.text combined with
-    structured filters drawn from the scenario's change_set / scope.
-    Returns (matches, pipeline_used, filter_level_label).
-
-    Gracefully degrades from a full hybrid filter to broader ones if the
-    initial result is empty (e.g. unusual market/segment combination).
-    """
-    cs    = scenario.get("change_set", {}) or {}
-    scope = scenario.get("scope", {})       or {}
-    segment = None
-    if cs.get("plan_id"):
-        p = plans.find_one({"_id": cs["plan_id"]}, {"segment": 1})
-        segment = (p or {}).get("segment")
-    markets = scope.get("markets") or []
-
-    # Increasingly relaxed filters. The dashboard renders the chosen filter
-    # level so the demo can show the fallback path.
+def knowledge_filters(segment: str | None, markets: list[str]) -> list[tuple[str, dict | None]]:
+    """The hybrid query's pre-filters, strictest first."""
     filters: list[tuple[str, dict | None]] = []
     if segment and markets:
         filters.append((
@@ -332,34 +320,60 @@ def _hybrid_knowledge_search(fingerprint: str, scenario: dict) -> tuple[list, li
         {"kind": {"$in": ["incident", "runbook"]}},
     ))
     filters.append(("widest (no filter)", None))
+    return filters
 
-    def _pipeline(flt: dict | None):
-        spec = {
-            "index":   "dtw_knowledge_index",
-            "path":    "text",
-            "query":   fingerprint,
-            "numCandidates": 200,
-            "limit":   5,
-        }
-        if flt is not None:
-            spec["filter"] = flt
-        return [
-            {"$vectorSearch": spec},
-            {"$project": {
-                "_id":  0,
-                "id":   "$_id",
-                "kind": 1, "title": 1, "market": 1, "segment": 1,
-                "plan_id": 1, "tags": 1, "ts": 1,
-                "linked_runbook": 1, "text": 1,
-                "score": {"$meta": "vectorSearchScore"},
-            }},
-        ]
+
+def knowledge_pipeline(fingerprint: str, flt: dict | None) -> list[dict]:
+    """The hybrid query: $vectorSearch over dtw_knowledge_chunks.text with
+    structured pre-filters from the scenario."""
+    spec = {
+        "index":   "dtw_knowledge_index",
+        "path":    "text",
+        "query":   fingerprint,
+        "numCandidates": 200,
+        "limit":   5,
+    }
+    if flt is not None:
+        spec["filter"] = flt
+    return [
+        {"$vectorSearch": spec},
+        {"$project": {
+            "_id":  0,
+            "id":   "$_id",
+            "kind": 1, "title": 1, "market": 1, "segment": 1,
+            "plan_id": 1, "tags": 1, "ts": 1,
+            "linked_runbook": 1, "text": 1,
+            "score": {"$meta": "vectorSearchScore"},
+        }},
+    ]
+
+
+def _hybrid_knowledge_search(fingerprint: str, scenario: dict) -> tuple[list, list, str]:
+    """
+    Run the hybrid query: $vectorSearch on knowledge_chunks.text combined with
+    structured filters drawn from the scenario's change_set / scope.
+    Returns (matches, pipeline_used, filter_level_label).
+
+    Gracefully degrades from a full hybrid filter to broader ones if the
+    initial result is empty (e.g. unusual market/segment combination).
+    """
+    cs    = scenario.get("change_set", {}) or {}
+    scope = scenario.get("scope", {})       or {}
+    segment = None
+    if cs.get("plan_id"):
+        p = plans.find_one({"_id": cs["plan_id"]}, {"segment": 1})
+        segment = (p or {}).get("segment")
+    markets = scope.get("markets") or []
+
+    # Increasingly relaxed filters. The dashboard renders the chosen filter
+    # level so the demo can show the fallback path.
+    filters = knowledge_filters(segment, markets)
 
     pipeline = []
     matches = []
     chosen_level = "—"
     for label, flt in filters:
-        pipeline = _pipeline(flt)
+        pipeline = knowledge_pipeline(fingerprint, flt)
         try:
             matches = list(knowledge_chunks.aggregate(pipeline))
         except Exception as e:

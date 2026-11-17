@@ -133,6 +133,8 @@
     border: 1px solid rgba(0,212,255,0.25);
     border-radius: 6px; padding: 12px 14px; color: #d6e6ee; font-size: 15px; line-height: 1.5;
   }
+  .showcase-buttons { margin-left: auto; display: flex; gap: 8px; }
+  header .showcase-buttons + .mode { margin-left: 12px; }
 </style>
 </head>
 <body>
@@ -141,6 +143,7 @@
   <div class="logo">DTW</div>
   <div class="title">Digital Twin — ACME Mobile</div>
   <div class="live" id="live"><span class="dot"></span><span id="liveLabel">offline</span></div>
+  <div class="showcase-buttons" id="showcaseButtons"></div>
   <div class="mode">mode <span class="pill" id="modePill">eng</span></div>
 </header>
 
@@ -165,6 +168,14 @@ const SQ = SESSION ? ("session=" + encodeURIComponent(SESSION)) : "";
 // Mount prefix when served under a sub-path behind a reverse proxy
 // (e.g. /dtw at agentic.example.com); empty at the origin root (dev port).
 const PREFIX = location.pathname.replace(/\/+$/, "");
+// The Data model / Hero queries popups (web/showcase.js).
+(() => {
+  const s = document.createElement("script");
+  s.src = PREFIX + "/showcase.js";
+  s.onload = () => Showcase.mount({container: document.getElementById("showcaseButtons"),
+                                  base: PREFIX, query: SQ, mode: MODE});
+  document.head.appendChild(s);
+})();
 
 const state = { scenarios: [], focusedId: null };
 

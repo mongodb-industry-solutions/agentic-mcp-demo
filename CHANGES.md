@@ -2,6 +2,17 @@
 
 ## 2026-11-17
 
+### See the data model and the hero queries
+
+Both dashboards have two new buttons in their header. **Data model** shows
+how the network twin lives in MongoDB: real documents from your demo lane,
+with the indexes behind them (vector search with automatic embeddings,
+geospatial, time series). **Hero queries** shows the queries the agents run,
+such as the diagnose search or the dependency walk, with numbered notes on
+what each part does. A query your lane has already run is marked LIVE.
+"Copy as mongosh" puts a query on the clipboard, ready for mongosh or
+Compass.
+
 ### The demo starts at autonomy level 4
 
 Each visitor's demo lane on the Agent Engine demo now starts at autonomy
