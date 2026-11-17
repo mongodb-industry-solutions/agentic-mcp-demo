@@ -649,6 +649,7 @@
     .heal-grid { grid-template-columns: 1fr; }
     .heal-clock { margin-left: 0; }
   }
+  .showcase-buttons { display: flex; gap: 8px; }
 </style>
 </head>
 <body>
@@ -659,6 +660,7 @@
       <h1>IBN Live <span>/ intent-based networking</span></h1>
     </div>
     <div class="header-right">
+      <div class="showcase-buttons" id="showcaseButtons"></div>
       <div class="mode-badge" id="modeBadge">eng</div>
       <div class="status-badge">
         <div class="status-dot" id="statusDot"></div>
@@ -777,6 +779,14 @@ const SQ = SESSION ? ('session=' + encodeURIComponent(SESSION)) : '';
 // (direct uvicorn port). The page is always the mount root, so the path
 // IS the prefix. Prepended to /ws and /snapshot so they hit this app.
 const PREFIX = location.pathname.replace(/\/+$/, '');
+// The Data model / Hero queries popups (web/showcase.js).
+(() => {
+  const s = document.createElement('script');
+  s.src = PREFIX + '/showcase.js';
+  s.onload = () => Showcase.mount({container: document.getElementById('showcaseButtons'),
+                                  base: PREFIX, query: SQ, mode: mode});
+  document.head.appendChild(s);
+})();
 
 // ── State ──
 let state = {

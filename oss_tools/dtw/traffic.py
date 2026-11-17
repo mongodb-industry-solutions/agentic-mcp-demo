@@ -165,16 +165,10 @@ def estimate_cell_load(cell_id: str, time_window: str = None) -> str:
 
 
 @tools.tool
-def peak_hours_for_market(market: str) -> str:
-    """
-    For a given market, identify the time windows with the highest aggregate
-    estimated subscribers across all plans. Useful for picking the scope of
-    a what-if simulation.
-
-    Args:
-        market: Market id (e.g. 'NYC_Metro').
-    """
-    rows = list(traffic.aggregate([
+def peak_hours_pipeline(market: str) -> list[dict]:
+    """Per time window of one market: active subscribers summed over every
+    plan's cells, busiest first."""
+    return [
         {"$match": {"market": market}},
         {"$unwind": "$cells"},
         {"$group": {
@@ -187,7 +181,19 @@ def peak_hours_for_market(market: str) -> str:
             "cells":        {"$addToSet": "$cells.cell_id"},
         }},
         {"$sort": {"total_subs": -1}},
-    ]))
+    ]
+
+
+def peak_hours_for_market(market: str) -> str:
+    """
+    For a given market, identify the time windows with the highest aggregate
+    estimated subscribers across all plans. Useful for picking the scope of
+    a what-if simulation.
+
+    Args:
+        market: Market id (e.g. 'NYC_Metro').
+    """
+    rows = list(traffic.aggregate(peak_hours_pipeline(market)))
     if not rows:
         return f"No traffic data for market {market!r}."
     lines = [f"## Peak windows for {market}",

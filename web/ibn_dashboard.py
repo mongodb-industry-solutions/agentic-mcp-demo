@@ -32,10 +32,11 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pymongo import AsyncMongoClient
 
 from web import ibn_assurance as assurance
+from web import showcase
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 log = logging.getLogger("ibn_dashboard")
@@ -448,6 +449,25 @@ HTML_PATH = Path(__file__).parent / "ibn.html"
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return HTML_PATH.read_text()
+
+
+SHOWCASE_JS = Path(__file__).parent / "showcase.js"
+
+
+@app.get("/showcase.js")
+async def showcase_js():
+    return Response(SHOWCASE_JS.read_text(), media_type="application/javascript",
+                    headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/api/showcase")
+async def showcase_api(session: str = ""):
+    """The Data model and Hero queries popups (web/showcase.py)."""
+    try:
+        return JSONResponse(await showcase.ibn(app.state.db, _prefix(session)))
+    except Exception as e:
+        log.exception("showcase failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/snapshot/{intent_id}")

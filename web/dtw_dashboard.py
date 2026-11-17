@@ -29,8 +29,10 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pymongo import AsyncMongoClient
+
+from web import showcase
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 log = logging.getLogger("dtw_dashboard")
@@ -194,6 +196,25 @@ async def index():
             status_code=500,
         )
     return HTML_PATH.read_text()
+
+
+SHOWCASE_JS = Path(__file__).parent / "showcase.js"
+
+
+@app.get("/showcase.js")
+async def showcase_js():
+    return Response(SHOWCASE_JS.read_text(), media_type="application/javascript",
+                    headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/api/showcase")
+async def showcase_api(session: str = ""):
+    """The Data model and Hero queries popups (web/showcase.py)."""
+    try:
+        return JSONResponse(await showcase.dtw(app.state.db, _prefix(session)))
+    except Exception as e:
+        log.exception("showcase failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/snapshot/{scenario_id}")
