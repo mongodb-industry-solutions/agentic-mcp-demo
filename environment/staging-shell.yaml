@@ -22,6 +22,10 @@ env:
   TZ: UTC   # like the agents' tool sandboxes (writers store naive datetime.now())
   TWIN_IBN_DASHBOARD_URL: "https://agentic-mcp-demo-ibn.industrysolutions.staging.corp.mongodb.com"
   TWIN_DTW_DASHBOARD_URL: "https://agentic-mcp-demo-dtw.industrysolutions.staging.corp.mongodb.com"
+  # The shell holds 6 visitors at once; a session whose tabs are all closed
+  # frees its slot after this many idle seconds (default 1800). An open tab
+  # keeps its session however long it idles.
+  DEMO_SESSION_TTL_SEC: "600"
 
 envSecrets:
   OPENAI_API_KEY: agentic-mcp-demo-secrets

@@ -44,6 +44,38 @@ from telco_runtime.a2a import A2A_TIMEOUT_S, AGENTS, DOMAIN_AGENT, call_agent
 from telco_runtime.graph import _llm
 
 CONTEXT_TURNS = 3
+# An explicit ask to keep something, or a remark about how to answer: what
+# lets a request that also asks for network work be remembered.
+_REMEMBER_CUE = re.compile(
+    r"\b(remember|note that|make a note|keep in mind|don't forget|for next time|"
+    r"answers?|repl(y|ies)|respond|briefly|short|in detail|call me)\b", re.IGNORECASE)
+
+# Short follow-ups ("Diagnose the violation.", "Run the simulation.") are
+# routed in code, not by the router model: with the previous turn as a hint
+# it still sent "Diagnose the violation." to dtw-agent (staging test,
+# 2026-11-16). The domain with the most of its own words decides
+# ("Simulate a POS latency violation" is IBN); none, or a tie, keeps the
+# previous turn's domain (as the legacy runtime's last_domain stickiness).
+# "plan" is in neither: IBN proposes plans, DTW simulates plans.
+FOLLOW_UP_WORDS = 8
+_DOMAIN_WORDS = {
+    "ibn": re.compile(r"\b(intents?|violat\w*|diagnos\w*|runbooks?|feasib\w*|activat\w*|stores?|sites?|"
+                      r"slos?|templates?|incidents?|rush|compliance|repair\w*|pos|latency)\b",
+                      re.IGNORECASE),
+    "dtw": re.compile(r"\b(simulat\w*|scenarios?|uplift|qos|cells?|bottlenecks?|roaming|apn|downlink|"
+                      r"mbps|markets?|what-if|twin)\b", re.IGNORECASE),
+}
+
+
+def follow_up_domains(query: str, sticky: list[str]) -> list[str] | None:
+    """The domains of a short follow-up, or None when the router model
+    should decide (a longer request, or no previous turn)."""
+    if not sticky or len(query.split()) > FOLLOW_UP_WORDS:
+        return None
+    hits = {d: len(words.findall(query)) for d, words in _DOMAIN_WORDS.items()}
+    best = max(hits.values())
+    leaders = [d for d, n in hits.items() if n == best]
+    return leaders if best and len(leaders) == 1 else list(sticky)
 
 SYNTHESIS_PROMPT = (
     "You are the coordinator of domain-specialist agents in a network "
@@ -134,16 +166,29 @@ def build_coordinator_graph(app: App) -> CompiledStateGraph:
             "Pick the specialist domains this NOC request needs. Include a domain only "
             "when the request concerns something that domain handles; pick both when it "
             "spans them.\n"
-            "Also set `memory`: 'remember' when this request itself states something "
-            "lasting to keep about the user (how they want answers, what they look after; "
-            "put it in `preference`, in their own words), 'recall' when they ask what you "
-            "remember about them, else 'none'. Never invent a preference. A message that "
+            "Also set `memory`: 'remember' when the user asks you to remember or note "
+            "something ('remember that …', 'note that …', 'keep in mind …'), whatever it "
+            "is, a date or a customer included, or states a lasting preference about how "
+            "they want answers; put it in `preference`, in their own words. 'recall' when "
+            "they ask what you remember about them. Else 'none': a request for network "
+            "work (open or onboard a store, submit an intent, run a simulation) is never "
+            "something to remember, even when it describes their plans: \"I'm opening a "
+            "store at Marienplatz, POS priority, max 40 ms\" is an intent for the IBN "
+            "agent, memory 'none'. One message can do both: \"check feasibility and "
+            "remember that I prefer tables\" gets domains ['ibn'] and memory 'remember'. "
+            "Never invent a "
+            "preference. A message that "
             "is only 'remember' or 'recall' (no question or task about the network, its "
             "intents or simulations) gets an "
             "empty `domains` list; who the user is or works for is not a task.\n\n"
             f"Domains:\n{catalog}\n{hint}\nRequest: {query!r}"))])
         args = msg.tool_calls[0]["args"] if msg.tool_calls else {}
         action = args.get("memory")
+        # The router also marks work requests that describe the user's plans
+        # ("I'm opening a store at Marienplatz …") as 'remember'. A request
+        # that picks domains is work: it is remembered only on an explicit cue.
+        if action == "remember" and args.get("domains") and not _REMEMBER_CUE.search(query):
+            action = "none"
         intent: dict[str, Any] = {}
         if action == "remember" and args.get("preference"):
             intent["preference"] = args["preference"]
@@ -152,7 +197,10 @@ def build_coordinator_graph(app: App) -> CompiledStateGraph:
         picked = explicit + [d for d in args.get("domains", []) if d in DOMAIN_AGENT]
         method = "explicit_mention+llm" if explicit else "llm"
         if not picked and intent:
-            return [], method, intent
+            return [], method, intent   # only a memory message ("what do you remember?")
+        follow_up = None if explicit else follow_up_domains(query, sticky)
+        if follow_up:
+            return follow_up, "follow_up", intent
         return (list(dict.fromkeys(picked)) or sticky or list(DOMAIN_AGENT)), method, intent
 
     def with_context(subtask: str, agent: str, messages: list[AnyMessage], memory: str) -> str:
@@ -181,10 +229,14 @@ def build_coordinator_graph(app: App) -> CompiledStateGraph:
                                 "memory": {"recalled_chars": len(memory), "seeded": seeded}}
         notes = []
         pref = intent.get("preference") or {}
-        if (pref.get("label") and pref.get("text")
-                and mem.save_preference(app, str(pref["label"]), str(pref["text"]))):
-            notes.append(f"Noted for next time: {pref['text']}")
-            turn["memory"]["preference_saved"] = pref["label"]
+        if pref.get("text"):
+            label, text = str(pref.get("label") or "note"), str(pref["text"])
+            if mem.save_preference(app, label, text):
+                notes.append(f"Noted for next time: {text}")
+                turn["memory"]["preference_saved"] = label
+            else:   # say so, never fall through to "Nothing to do."
+                notes.append(f"I couldn't save that to memory just now: {text}")
+                turn["memory"]["preference_failed"] = label
         if intent.get("list_preferences"):
             prefs = mem.list_preferences(app)
             notes.append("What I remember about you:\n" + "\n".join(f"- {p}" for p in prefs)
@@ -315,9 +367,11 @@ def _route_schema(domains: list[str]) -> dict:
                         "description": "Empty when the message only states or asks about "
                                        "what to remember and requests no network work."},
             "memory": {"type": "string", "enum": ["none", "remember", "recall"],
-                       "description": "remember: the user states something lasting about "
-                                      "themselves to keep. recall: they ask what you "
-                                      "remember about them. none: neither."},
+                       "description": "remember: the user asks you to remember or note "
+                                      "something, or states how they want answers. "
+                                      "recall: they ask what you remember about them. "
+                                      "none: anything else, including requests for "
+                                      "network work."},
             "preference": {
                 "type": "object",
                 "description": "With memory=remember: what to keep.",

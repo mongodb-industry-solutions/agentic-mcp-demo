@@ -23,11 +23,16 @@ features:
   memory: true
 version: 0.1.0
 # Every A2A call (coordinator delegation, consultation) opens a new
-# session, which holds a sandbox for the idle TTL (600 s). That TTL is
-# project-wide (in our own IST Telco project, our choice), so capacity
-# comes from replicas.
+# session, and a session keeps its sandbox until the idle TTL runs out
+# (platform default 600 s). With 8 replicas and 600 s, about 8 calls in
+# 10 minutes filled the agent (staging test, 2026-11-13: 503 "all agent
+# instances are currently busy" with three visitors). A2A children never
+# come back to their session, so they let it go after 60 s; a paused NOC
+# review resumes from the durable checkpoint on a new sandbox. Replicas
+# across all agents of the project count toward its cap of 512.
 scaling:
-  replicas: 8
+  replicas: 24
+  agent_idle_ttl_seconds: 60
 # A2A (Phase 4): called by the NOC coordinator and consulted by dtw-agent;
 # no other agent may call it.
 a2a:

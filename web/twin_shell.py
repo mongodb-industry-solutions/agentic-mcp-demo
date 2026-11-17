@@ -53,6 +53,7 @@ import uuid
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -159,6 +160,20 @@ def _redact(text: str) -> str:
     for p in _REDACT:
         text = p.sub("[BLOCKED]", text)
     return text
+
+
+def _redact_values(value: Any) -> Any:
+    """`_redact` on every string inside a JSON-shaped value. Not on the JSON
+    text: a float such as 48.992137962723625 has 15 digits in a row, the
+    IMSI pattern turned it into `48.[BLOCKED]`, and the card no longer
+    parsed (staging test, 2026-11-16: no history and no cards on reload)."""
+    if isinstance(value, str):
+        return _redact(value)
+    if isinstance(value, dict):
+        return {k: _redact_values(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_values(v) for v in value]
+    return value
 
 
 def _preview(text: str, max_lines: int = 3, max_chars: int = 250) -> str:
@@ -508,7 +523,7 @@ def _card(doc: dict) -> dict:
     card["approval_id"] = doc["_id"]
     card["agent"] = AGENT_WORKSPACES.get(_workspace(doc), _workspace(doc) or "?")
     card["resumable"] = bool(doc.get("session_id") and doc.get("execution_id"))
-    return json.loads(_redact(json.dumps(card, default=str)))
+    return _redact_values(json.loads(json.dumps(card, default=str)))
 
 
 async def _pending_cards(sess: Session) -> list[dict]:
