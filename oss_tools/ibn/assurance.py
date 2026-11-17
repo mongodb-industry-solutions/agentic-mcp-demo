@@ -308,6 +308,52 @@ def get_compliance(intent_id: str = None, site: str = None) -> str:
 
 
 @tools.tool
+def diagnose_filters(lng: float, lat: float, radius_km: float = 10,
+                     lookback_days: int = 180) -> list[tuple[str, dict]]:
+    """The diagnose query's pre-filters, strictest first: the WOW (kind +
+    time + geo box), then without the geo box, then kind only."""
+    dlat, dlng = _km_to_degrees(radius_km, lat)
+    cutoff = datetime.datetime.now() - datetime.timedelta(days=lookback_days)
+    return [
+        ("full (vector + kind + time + geo)", {
+            "kind": {"$eq": "incident"},
+            "ts":   {"$gte": cutoff},
+            "lng":  {"$gte": lng - dlng, "$lte": lng + dlng},
+            "lat":  {"$gte": lat - dlat, "$lte": lat + dlat},
+        }),
+        ("relaxed: dropped geo box (kind + time only)",
+         {"kind": {"$eq": "incident"}, "ts": {"$gte": cutoff}}),
+        ("broad: dropped time + geo (kind only)", {"kind": {"$eq": "incident"}}),
+    ]
+
+
+def diagnose_pipeline(fingerprint: str, flt: dict, lane: dict) -> list[dict]:
+    """The WOW query: one $vectorSearch stage whose filter carries kind,
+    time and the geo box, then the lane's learned incidents only."""
+    return [
+        {
+            "$vectorSearch": {
+                "index":   "ibn_knowledge_index",
+                "path":    "text",
+                "query":   fingerprint,
+                "filter":  flt,
+                "numCandidates": 200,
+                "limit": 10,
+            }
+        },
+        {"$match": lane},
+        {"$limit": 3},
+        {
+            "$project": {
+                "_id":         0, "title": 1, "site_name": 1, "ts": 1,
+                "fingerprint": 1, "runbook_id": 1, "text": 1,
+                "lng": 1, "lat": 1, "learned": 1,
+                "score":       {"$meta": "vectorSearchScore"},
+            }
+        },
+    ]
+
+
 def diagnose_violation(intent_id: str = None, site: str = None,
                        radius_km: float = 10, lookback_days: int = 180) -> str:
     """
@@ -344,8 +390,6 @@ def diagnose_violation(intent_id: str = None, site: str = None,
         return f"❌ Site for {intent_id} has no coordinates."
 
     lng, lat = site_doc["location"]["coordinates"]
-    dlat, dlng = _km_to_degrees(radius_km, lat)
-    cutoff = datetime.datetime.now() - datetime.timedelta(days=lookback_days)
 
     measured = _measured(intent_id)
     if measured:
@@ -356,60 +400,21 @@ def diagnose_violation(intent_id: str = None, site: str = None,
     else:
         fingerprint = _build_fingerprint(intent, _latest_metric(intent_id, "pos_latency_ms"))
 
-    # Try the full filter first (the WOW: vector + kind + time + geo box).
-    # If empty (likely an index-config issue or geo box too tight), gracefully
-    # relax: drop geo, then drop time. Report which level produced results so
-    # the demo never dead-ends and we still show what filtering happened.
-    filter_full = {
-        "kind": {"$eq": "incident"},
-        "ts":   {"$gte": cutoff},
-        "lng":  {"$gte": lng - dlng, "$lte": lng + dlng},
-        "lat":  {"$gte": lat - dlat, "$lte": lat + dlat},
-    }
-    filter_no_geo = {"kind": {"$eq": "incident"}, "ts": {"$gte": cutoff}}
-    filter_kind   = {"kind": {"$eq": "incident"}}
-
     # Learned incidents (S3) carry their lane; the index has no lane
     # field, so other lanes' are dropped after the search.
     lane = learning.lane_filter(demo_prefix())
 
-    def _build_pipeline(flt):
-        return [
-            {
-                "$vectorSearch": {
-                    "index":   "ibn_knowledge_index",
-                    "path":    "text",
-                    "query":   fingerprint,
-                    "filter":  flt,
-                    "numCandidates": 200,
-                    "limit": 10,
-                }
-            },
-            {"$match": lane},
-            {"$limit": 3},
-            {
-                "$project": {
-                    "_id":         0, "title": 1, "site_name": 1, "ts": 1,
-                    "fingerprint": 1, "runbook_id": 1, "text": 1,
-                    "lng": 1, "lat": 1, "learned": 1,
-                    "score":       {"$meta": "vectorSearchScore"},
-                }
-            },
-        ]
-
-    matches = []
-    pipeline = _build_pipeline(filter_full)
-    filter_level = "full (vector + kind + time + geo)"
+    # Try the full filter first (the WOW: vector + kind + time + geo box).
+    # If empty (likely an index-config issue or geo box too tight), gracefully
+    # relax: drop geo, then drop time. Report which level produced results so
+    # the demo never dead-ends and we still show what filtering happened.
+    matches, pipeline, filter_level = [], [], ""
     try:
-        matches = list(knowledge_chunks.aggregate(pipeline))
-        if not matches:
-            pipeline = _build_pipeline(filter_no_geo)
-            filter_level = "relaxed: dropped geo box (kind + time only)"
+        for filter_level, flt in diagnose_filters(lng, lat, radius_km, lookback_days):
+            pipeline = diagnose_pipeline(fingerprint, flt, lane)
             matches = list(knowledge_chunks.aggregate(pipeline))
-        if not matches:
-            pipeline = _build_pipeline(filter_kind)
-            filter_level = "broad: dropped time + geo (kind only)"
-            matches = list(knowledge_chunks.aggregate(pipeline))
+            if matches:
+                break
     except Exception as e:
         return (
             f"❌ Vector search failed: {e}\n"

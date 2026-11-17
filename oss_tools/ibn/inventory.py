@@ -177,6 +177,26 @@ def get_topology(site: str) -> str:
 
 
 @tools.tool
+def nearby_spare_pipeline(location: dict, site_id: str, radius_km: float = 20) -> list[dict]:
+    """$geoNear over ibn_resources (2dsphere): access nodes at other sites,
+    nearest first, within radius_km."""
+    return [
+        {
+            "$geoNear": {
+                "near": location,
+                "distanceField": "distance_m",
+                "maxDistance": radius_km * 1000,
+                "spherical": True,
+                "query": {
+                    "type":    "access_node",
+                    "site_id": {"$ne": site_id},  # exclude same site
+                },
+            }
+        },
+        {"$limit": 5},
+    ]
+
+
 def find_nearby_spare(site: str, radius_km: float = 20) -> str:
     """
     Find spare access-node capacity within radius_km of the given site,
@@ -191,22 +211,7 @@ def find_nearby_spare(site: str, radius_km: float = 20) -> str:
     if not s or not s.get("location"):
         return f"❌ Site '{site}' not found or has no coordinates."
 
-    pipeline = [
-        {
-            "$geoNear": {
-                "near": s["location"],
-                "distanceField": "distance_m",
-                "maxDistance": radius_km * 1000,
-                "spherical": True,
-                "query": {
-                    "type":    "access_node",
-                    "site_id": {"$ne": s["_id"]},  # exclude same site
-                },
-            }
-        },
-        {"$limit": 5},
-    ]
-    candidates = list(resources.aggregate(pipeline))
+    candidates = list(resources.aggregate(nearby_spare_pipeline(s["location"], s["_id"], radius_km)))
 
     if not candidates:
         return (
