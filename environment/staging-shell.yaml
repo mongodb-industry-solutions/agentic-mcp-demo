@@ -26,6 +26,9 @@ env:
   # frees its slot after this many idle seconds (default 1800). An open tab
   # keeps its session however long it idles.
   DEMO_SESSION_TTL_SEC: "600"
+  # Every new or reset lane starts at autonomy L4 (the agent fixes a morning
+  # rush on its own); the IBN dashboard's L3/L4 switch sets L3 for one demo.
+  TWIN_AUTONOMY_DEFAULT: L4
 
 envSecrets:
   OPENAI_API_KEY: agentic-mcp-demo-secrets
