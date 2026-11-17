@@ -33,6 +33,8 @@
 # to the deployed ibn-agent with no human prompt, and the chat shows the
 # run as an `autonomous` panel. The lane's autonomy policy decides what the
 # agent may do (L4 where SELF_HEALING_L4=1, as bin/twin.sh sets it).
+# TWIN_AUTONOMY_DEFAULT=L4 starts every new or reset lane at L4; the
+# dashboard's L3/L4 switch still changes it for one demo, until the next Reset.
 #
 # Run it with bin/twin.sh start (:8170). web/shell.py, the Kanopy shell,
 # doesn't import this module.
@@ -90,6 +92,9 @@ _TOKEN_RE = re.compile(r"^[a-z0-9]{8,32}$")   # as web/shell.py
 LANE_STATE = "ae_session"   # per lane: the coordinator session (and memory identity)
 RESPONDER = os.environ.get("SELF_HEALING_RESPONDER", "1") != "0"
 RESPONDER_BY = "ibn-agent (twin shell)"
+# The level a lane starts at when it has no policy yet (new lane, after a
+# Reset). Unset: the policy's own default, L3 (oss_tools/ibn/autonomy.py).
+AUTONOMY_DEFAULT = os.environ.get("TWIN_AUTONOMY_DEFAULT", "").strip().upper()
 CATCH_UP = datetime.timedelta(minutes=5)   # open incidents this young are picked up at start
 
 # Our three workspaces and the subscriber-id patterns come from the
@@ -370,6 +375,15 @@ def _new_ae_session(token: str) -> str:
     return f"demo-{token}-{uuid.uuid4().hex[:8]}"
 
 
+async def _apply_autonomy_default(prefix: str) -> None:
+    """Give a lane without a policy the configured starting level. A level
+    the presenter chose on the dashboard stays: the write only inserts."""
+    if AUTONOMY_DEFAULT not in autonomy.LEVELS:
+        return
+    await _adb()[prefix + "ibn_autonomy_policy"].update_one(
+        {"_id": autonomy.POLICY_ID}, {"$setOnInsert": {"level": AUTONOMY_DEFAULT}}, upsert=True)
+
+
 async def _set_ae_session(sess: Session, session_id: str) -> None:
     sess.ae_session = session_id
     _remember_owner(_session_owner, session_id, sess.token)
@@ -437,6 +451,7 @@ async def _get_or_create_session(token: str) -> tuple[Session | None, str | None
         prefix = f"s_{token}_"
         try:
             seeded = await seed_runner.ensure_session_seeded(prefix, DEMO_DB)
+            await _apply_autonomy_default(prefix)
             state = await _adb()[prefix + LANE_STATE].find_one({"_id": "shell"})
         except Exception as e:
             log.exception("session lane seed failed")
@@ -877,6 +892,7 @@ async def ws_endpoint(ws: WebSocket):
                     await _send(ws, {"type": "reset_started"})
                     try:
                         await seed_runner.reset_session(sess.prefix, DEMO_DB, _emit)
+                        await _apply_autonomy_default(sess.prefix)
                         await _set_ae_session(sess, _new_ae_session(sess.token))
                         sess.context = ""
                         await _send(ws, {"type": "reset_done", "ok": True, "message":

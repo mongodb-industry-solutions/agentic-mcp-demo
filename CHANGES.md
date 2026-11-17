@@ -1,5 +1,17 @@
 # CHANGES.md
 
+## 2026-11-17
+
+### The demo starts at autonomy level 4
+
+Each visitor's demo lane on the Agent Engine demo now starts at autonomy
+level 4: when a morning rush breaks a store's SLO, the agent fixes it on its
+own, learns from it and proposes a canary for the sister sites. For a demo
+that should show the human in the loop, switch the lane to L3 with the L3/L4
+switch on the IBN dashboard; it stays at L3 until the next Reset. The prod
+environment files now carry the same Agent Engine settings as staging, ready
+for the switch of prod to Agent Engine.
+
 ## 2026-11-13
 
 ### Staging runs the demo on Atlas Agent Engine

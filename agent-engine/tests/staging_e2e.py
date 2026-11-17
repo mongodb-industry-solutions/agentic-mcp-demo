@@ -25,6 +25,7 @@ Added after the staging test of 2026-11-13/16 (BIG SWITCH readiness).
 import argparse
 import asyncio
 import json
+import os
 import time
 import urllib.request
 import uuid
@@ -33,6 +34,8 @@ import websockets
 
 SHELL = "ws://127.0.0.1:8080/ws"
 IBN_WS = "ws://agentic-mcp-demo-ibn-web-app/ws?session={}"
+# The level a new lane starts at: the shell pod's own setting (the test runs there).
+EXPECT_LEVEL = os.environ.get("TWIN_AUTONOMY_DEFAULT", "").strip().upper()
 TURN_TIMEOUT_S = 360
 T0 = time.monotonic()
 RESULTS: list[tuple[str, bool, str]] = []
@@ -273,6 +276,10 @@ async def self_healing(v):
         intents = snap.get("intents") or []
         check("self-healing: dashboard lane snapshot", bool(intents),
               f"{len(intents)} intents; autonomy {snap.get('autonomy')}")
+        level = (snap.get("autonomy") or {}).get("level")
+        if EXPECT_LEVEL:
+            check(f"self-healing: the lane starts at {EXPECT_LEVEL}", level == EXPECT_LEVEL,
+                  f"level {level}")
         target = next((i for i in intents if "altona" in json.dumps(i).lower()
                        and i.get("status") == "active"), None)
         if not target:
@@ -293,6 +300,31 @@ async def self_healing(v):
         if started:
             m = await v.wait(lambda m: m.get("type") == "autonomous" and m.get("phase") == "done", 420)
             check("self-healing: agent report", m is not None and m.get("ok"), (m or {}).get("markdown") or "no report")
+            if level == "L4":   # it acted on its own, and proposed a canary for the sister sites
+                await dash.close()
+                dash = await websockets.connect(IBN_WS.format(v.token), max_size=None)
+                snap = json.loads(await asyncio.wait_for(dash.recv(), 30))
+                inc = next((i for i in snap.get("incidents") or []
+                            if i.get("intent_id") == target["_id"]), {})
+                check("self-healing: L4 applied the runbook on its own",
+                      bool(inc.get("autonomous_act_at")),
+                      f"incident {inc.get('_id')} status {inc.get('status')}, "
+                      f"decision {(inc.get('decision') or {}).get('decision')}")
+                check("self-healing: L4 proposed prevention for the sister sites",
+                      (inc.get("prevention") or {}).get("status") in ("proposed", "none"),
+                      f"prevention {(inc.get('prevention') or {}).get('status')}")
+                # A presenter switches this lane to L3 for a human-in-the-loop demo.
+                await dash.send(json.dumps({"type": "set_autonomy", "level": "L3"}))
+                got, end = None, time.monotonic() + 30
+                while time.monotonic() < end and got != "L3":
+                    try:
+                        msg = json.loads(await asyncio.wait_for(dash.recv(), 5))
+                    except asyncio.TimeoutError:
+                        continue
+                    if msg.get("type") == "autonomy":
+                        got = msg.get("level")
+                check("self-healing: the dashboard switches the lane to L3", got == "L3",
+                      f"level {got}")
         await dash.close()
     except Exception as e:
         check("self-healing", False, repr(e))
