@@ -200,6 +200,41 @@
     </div>
   </div>
 
+  <div class="flow flow-ibn">
+    <div class="flow-title">IBN — self-healing: nobody types the diagnosis</div>
+    <div class="flow-sub">Keep the IBN dashboard open: the SLO monitor that detects the breach runs there</div>
+
+    <div class="step">
+      <div class="step-n">7</div>
+      <div class="step-body">
+        <button class="prompt">IBN: start the morning rush at Hamburg Altona</button>
+        <p class="why"><b>What happens:</b> live telemetry plays on a compressed
+        08:55–10:05 clock. Nothing declares a violation: the monitor computes the
+        p95 latency every 2 seconds and opens an incident after three breached
+        windows. Then the IBN agent takes over <b>without a prompt</b>: a
+        <b>🤖 Self-healing</b> panel appears in the chat, and the agent runs the hero
+        query and checks the autonomy envelope. At autonomy <b>L3</b> (the default)
+        it stops at a recommendation; say <b>apply runbook</b> to decide as the NOC.
+        The dashboard's <i>Self-healing loop</i> panel shows each stage and the
+        MTTR clock.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">8</div>
+      <div class="step-body">
+        <button class="prompt">IBN: start the morning rush at Marienplatz</button>
+        <p class="why"><b>What happens:</b> the store you repaired in step 6 gets the
+        same rush and stays green: the telemetry reads the store's live
+        configuration, so the fix holds on data, not by script. Where autonomy
+        <b>L4</b> is enabled (the Agent Engine twin), the agent also applies the
+        runbook itself, the monitor verifies the recovery, the repair becomes a
+        new precedent in the knowledge base, and the sister stores get a canary
+        proposal that waits for the NOC.</p>
+      </div>
+    </div>
+  </div>
+
   <h2>2 · What-if scenarios (network digital twin)</h2>
   <p>
     A digital twin of ACME Mobile's plans, QoS profiles, RAN/core topology and

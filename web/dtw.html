@@ -61,6 +61,11 @@
   .scenario-row .id { font-family: "SF Mono", monospace; font-size: 13px; color: var(--accent); }
   .scenario-row .desc { font-size: 14px; margin-top: 2px; color: var(--text); }
   .scenario-row .meta { font-size: 12px; color: var(--mute); margin-top: 2px; }
+  /* Phase 3 (Agent Engine): a NOC review of an action on this scenario is pending. */
+  .awaiting { color: #ffd166; animation: awaiting-pulse 1.6s ease-in-out infinite; }
+  @keyframes awaiting-pulse { 50% { opacity: 0.55; } }
+  .approval-callout { border-left: 3px solid #ffd166; padding: 8px 12px; margin-bottom: 10px;
+                      background: rgba(255,209,102,0.06); }
 
   main { overflow-y: auto; padding: 18px 24px; }
 
@@ -201,7 +206,7 @@ function renderScenarioList() {
     return `<div class="scenario-row ${active}" data-id="${s._id}">
       <div class="id">${s._id}</div>
       <div class="desc">${(s.description || "—").substring(0, 80)}</div>
-      <div class="meta">${status} · ${delta || "—"}</div>
+      <div class="meta">${status} · ${delta || "—"}${s.pending_approval ? ` · <span class="awaiting">⏸ awaiting NOC approval (${s.pending_approval.approval_id})</span>` : ""}</div>
     </div>`;
   }).join("");
   root.querySelectorAll(".scenario-row").forEach(el => {
@@ -220,6 +225,9 @@ function renderFocused(s) {
     <div class="panel">
       <h2>${s._id} — ${s.scenario_type || "scenario"} — ${s.status || ""}</h2>
       <div class="body">
+        ${s.pending_approval ? `<div class="approval-callout"><span class="awaiting">⏸ awaiting NOC approval</span>
+          · ${s.pending_approval.approval_id} · ${s.pending_approval.title || s.pending_approval.action}.
+          The agent is paused until a NOC reviewer decides in Agent Engine.</div>` : ""}
         <div class="narrative">${(s.description || "")}</div>
         <div style="height:10px"></div>
         <div class="kv">

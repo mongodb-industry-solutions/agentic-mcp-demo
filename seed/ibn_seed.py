@@ -884,6 +884,36 @@ KNOWLEDGE_CHUNKS = [
 ]
 
 
+# ─── Rolling incident dates ────────────────────────────────────────────────
+# The incidents are dated relative to NOW ("21 days ago"), but the shared
+# reference data is seeded once and then ages, while diagnose_violation
+# looks back 180 days from today. By October 2026 the RB-007 Schwabing
+# incident had dropped out of the hero query, and Marienplatz got RB-003.
+# refresh_incident_dates() keeps every seeded incident at its designed age.
+
+INCIDENT_AGE_DAYS = {d["_id"]: (NOW - d["ts"]).days
+                     for d in KNOWLEDGE_CHUNKS if d["kind"] == "incident"}
+INCIDENT_DATE_DRIFT = datetime.timedelta(hours=12)
+
+
+def refresh_incident_dates(db, now: datetime.datetime | None = None) -> int:
+    """Move the seeded incidents back to their designed age. Touches only
+    their `ts`, and only when it drifted by more than INCIDENT_DATE_DRIFT,
+    so calling it again writes nothing. Incidents that aren't in the seed
+    (e.g. learned ones) keep their dates. Returns how many moved."""
+    now = now or datetime.datetime.now()
+    moved = 0
+    for _id, age in INCIDENT_AGE_DAYS.items():
+        target = now - datetime.timedelta(days=age)
+        res = db["ibn_knowledge_chunks"].update_one(
+            {"_id": _id, "kind": "incident",
+             "$or": [{"ts": {"$lt": target - INCIDENT_DATE_DRIFT}},
+                     {"ts": {"$gt": target + INCIDENT_DATE_DRIFT}}]},
+            {"$set": {"ts": target}})
+        moved += res.modified_count
+    return moved
+
+
 # ─── Loader ────────────────────────────────────────────────────────────────
 
 IBN_COLLECTIONS = [
@@ -1065,6 +1095,7 @@ def main():
     ensure_telemetry_timeseries(db)
     ensure_indexes(db)
     insert_all(db)
+    print(f"  ↻ {refresh_incident_dates(db)} incident dates rolled to their designed age")
     seed_baseline_telemetry(db)
     create_vector_index(db)
 

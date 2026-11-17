@@ -78,6 +78,8 @@ class OrchestratorAgent(BroadcastMixin, RegistryMixin, RouterMixin,
         self.shared_bootstrap = shared_bootstrap
         self.server_dir = Path(server_dir)
         self.sessions = {}
+        # server name → (owner task, stop event): see McpPoolMixin._serve_server
+        self.server_owners: Dict[str, tuple] = {}
         self.exit_stack = AsyncExitStack()
         self.conversation_history = []
         self.last_service = None  # Session Stickiness (service-level)
@@ -213,6 +215,7 @@ class OrchestratorAgent(BroadcastMixin, RegistryMixin, RouterMixin,
         pending = list(self._ws_summary_tasks) + list(self._memory_extract_tasks)
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+        await self._close_all_servers()
         await self.exit_stack.aclose()
         await self.http_client.aclose()
         await self.mongo_client.close()

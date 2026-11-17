@@ -1,0 +1,20 @@
+{
+  "name": "telco-subscriber-id-redaction",
+  "description": "Redacts IMSIs (15 digits) and MSISDNs (E.164) from the Telco OSS agents' answers (AGENT_ENGINE_PLAN.md, Phase 6).",
+  "type": "output_validation",
+  "action": "modify",
+  "status": "active",
+  "stage_filter": ["llm_output"],
+  "workspace_ids": [
+    "ws-6af1e8a9a1058b3d57ec3b7e",
+    "ws-6af1e8a9a1058b3d57ec3b80",
+    "ws-6af1e8a9a1058b3d57ec3b82"
+  ],
+  "config": {
+    "match_patterns": [
+      {"type": "regex", "value": "\\d{15}"},
+      {"type": "regex", "value": "\\+[1-9]\\d{7,14}"}
+    ],
+    "on_fail": "fix"
+  }
+}

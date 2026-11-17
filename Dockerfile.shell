@@ -21,5 +21,7 @@ COPY . .
 
 # Kanopy requires port 8080. The uvicorn.run() in web/shell.py is guarded
 # by `if __name__ == "__main__"` so this CMD overrides it cleanly.
+# SHELL_APP picks the shell: unset → the legacy shell (prod); staging sets
+# web.twin_shell:app, the shell on Atlas Agent Engine.
 EXPOSE 8080
-CMD ["uvicorn", "web.shell:app", "--host", "0.0.0.0", "--port", "8080", "--log-level", "info"]
+CMD ["sh", "-c", "exec uvicorn \"${SHELL_APP:-web.shell:app}\" --host 0.0.0.0 --port 8080 --log-level info"]

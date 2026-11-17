@@ -125,25 +125,74 @@ class McpPoolMixin:
                 continue  # already running, reuse
 
             path = srv["path"]
-
+            params = StdioServerParameters(
+                command="uv",
+                args=["run", path],
+                env=self._child_env()
+            )
+            ready = asyncio.get_running_loop().create_future()
+            stop = asyncio.Event()
+            owner = asyncio.create_task(self._serve_server(name, params, ready, stop))
             try:
-                params = StdioServerParameters(
-                    command="uv",
-                    args=["run", path],
-                    env=self._child_env()
-                )
-                read, write = await self.exit_stack.enter_async_context(stdio_client(params))
-                session = await self.exit_stack.enter_async_context(ClientSession(read, write))
-                await session.initialize()
-
-                self.sessions[name] = session
-                self.tool_cache.pop(name, None)  # invalidate stale cache on (re)start
-                await self._broadcast("AGENT", f"✓ Activated: {name}")
-
+                session = await ready
+            except asyncio.CancelledError:
+                stop.set()
+                owner.cancel()
+                raise
             except Exception as e:
                 print(f"  ❌ {name} failed: {e}")
                 await self._broadcast("ERROR",
                     f"❌ Failed to activate {name}: {type(e).__name__}: {e}")
+                continue
+
+            self.sessions[name] = session
+            self.server_owners[name] = (owner, stop)
+            self.tool_cache.pop(name, None)  # invalidate stale cache on (re)start
+            await self._broadcast("AGENT", f"✓ Activated: {name}")
+
+    @staticmethod
+    async def _serve_server(name: str, params: StdioServerParameters,
+                            ready: asyncio.Future, stop: asyncio.Event) -> None:
+        """Owner task of one persistent server. anyio's cancel scopes (inside
+        stdio_client) must be exited by the task that entered them, and the
+        task whose tool call spawns a server (a WebSocket turn, the
+        self-healing responder) is rarely the one that closes the
+        orchestrator (the session reaper, shutdown). So this task enters
+        the client and the session, hands the session over through `ready`,
+        and exits both itself once `stop` is set."""
+        try:
+            async with stdio_client(params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    ready.set_result(session)
+                    await stop.wait()
+        except Exception as e:
+            if not ready.done():
+                ready.set_exception(e)
+            else:
+                print(f"⚠️ MCP server {name} ended: {type(e).__name__}: {e}", flush=True)
+        finally:
+            if not ready.done():
+                ready.set_exception(RuntimeError(f"{name} exited before it was ready"))
+
+    async def _close_server(self, name: str) -> None:
+        """Stop one persistent server (its owner task closes the session and
+        the subprocess) and forget it; the next tool call starts it fresh."""
+        self.sessions.pop(name, None)
+        self.tool_cache.pop(name, None)
+        owner = self.server_owners.pop(name, None)
+        if not owner:
+            return
+        task, stop = owner
+        stop.set()
+        done, _ = await asyncio.wait({task}, timeout=10)
+        if not done:   # a server that doesn't shut down
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def _close_all_servers(self) -> None:
+        await asyncio.gather(*(self._close_server(n) for n in list(self.server_owners)),
+                             return_exceptions=True)
 
     def _resolve_server_paths(self, service_names: List[str]) -> List[Dict]:
         """Resolve service names to launchable paths — local filesystem

@@ -1,5 +1,339 @@
 # CHANGES.md
 
+## 2026-11-17
+
+### The demo starts at autonomy level 4
+
+Each visitor's demo lane on the Agent Engine demo now starts at autonomy
+level 4: when a morning rush breaks a store's SLO, the agent fixes it on its
+own, learns from it and proposes a canary for the sister sites. For a demo
+that should show the human in the loop, switch the lane to L3 with the L3/L4
+switch on the IBN dashboard; it stays at L3 until the next Reset. The prod
+environment files now carry the same Agent Engine settings as staging, ready
+for the switch of prod to Agent Engine.
+
+## 2026-11-13
+
+### Staging runs the demo on Atlas Agent Engine
+
+The staging demo (agentic-mcp-demo-shell.industrysolutions.staging.corp.mongodb.com)
+now runs on Atlas Agent Engine, like the twin on the presenter's laptop:
+every question goes to the NOC coordinator in our IST Telco project, each
+visitor gets a demo lane and a memory of their own, NOC approvals appear as
+cards in the chat, and the network can heal itself (up to autonomy level 4).
+Its IBN and DTW dashboards show the Agent Engine agents' data. Prod still
+runs the original demo.
+
+### The demo reaches its AI models through Grove
+
+The Kanopy demo's OpenAI key stopped working on 13 November, and every
+question in the shell failed. The shell now reaches the same models
+(gpt-4o, gpt-4o-mini) through MongoDB's Grove AI Gateway, with a Grove key,
+on staging and prod. Nothing else changes for the demo. To run it locally,
+set `OPENAI_API_KEY` to your Grove gateway key and `OPENAI_BASE_URL` to
+`https://ai-gateway.corp.mongodb.com/openai/v1`.
+
+## 2026-11-10
+
+### Our old setup in the JeffN project is removed
+
+Now that the agents run in IST Telco, their old copies in the shared JeffN
+project are deleted: the three workspaces, the subscriber-ID guardrail and
+the `telco-oss-agents` cluster. Nothing in the demo used them any more.
+The project-wide memory settings we left in JeffN stay until the project's
+owner has taken them over, because other teams' agents rely on them.
+
+## 2026-11-09
+
+### The Agent Engine agents move to a project of their own
+
+The three Telco OSS agents on Atlas Agent Engine (`noc-coordinator`,
+`ibn-agent`, `dtw-agent`) now run in our own project, IST Telco, with their
+data on our own cluster, `oss-demos`. Until now they shared the JeffN
+project with other teams, and that cost us a week of outage: since
+29 October every request to them was refused because of a clash in the
+project's shared bookkeeping. In our own project, no other team's secrets,
+settings, memories or restarts reach our agents. The web shell on Agent
+Engine and the autopilot (`bin/twin.sh`) talk to the new project by
+default; set `TWIN_MONGODB_URI` to the `oss-demos` cluster. The Kanopy demo
+is unaffected.
+
+## 2026-10-30
+
+### The web shell on Atlas Agent Engine: a demo lane per browser session
+
+The web shell on Agent Engine (http://localhost:8170, `bin/twin.sh start`)
+now works like the Kanopy demo's: every browser session has its own demo
+data, and its dashboard links open the dashboards on that data. Reset
+clears only your own session and starts a new conversation with the
+coordinator. Behind the scenes the shell talks to the agents over the
+Agent Engine API instead of the CLI, so it can tell them which session's
+data to work on. The Agent Log shows only your own session's agent
+activity, and NOC approval cards appear in the session that asked for them.
+The self-healing loop runs per session as well: when the SLO monitor opens
+an incident in your session, the deployed IBN agent takes it on with no
+prompt, and the panel shows the run. Set the session to L4 on its IBN
+dashboard for the full repair. With your CLI login the shell still only
+serves your own machine, and all sessions share your platform memory. With
+a service account (`AE_CLIENT_ID`, `AE_CLIENT_SECRET`) each session also
+gets its own memory, which is what a hosted version needs.
+
+## 2026-10-29
+
+### Self-healing network, step 5: the browser shell responds by itself
+
+In the Kanopy demo's web shell, the IBN agent now takes an incident on
+without being asked. Start a morning rush ("IBN: start the morning rush at
+Hamburg Altona", or the dashboard's button) with the IBN dashboard open.
+When the SLO monitor opens an incident, a "🤖 Self-healing · no human
+prompt" panel appears in the chat. The agent runs the diagnosis and checks
+the autonomy envelope, then reports what it found. At autonomy L3, the
+only level the Kanopy demo allows, it stops at a recommendation, and you
+decide as the NOC ("apply runbook"). The agent knows what it just reported,
+so a follow-up continues from there. If you are in the middle of a turn,
+the run waits until it ends, and a query you send during a run waits for
+the run. Where L4 is enabled, as in the Agent Engine twin, the same panel
+shows the full repair: the runbook applied, recovery verified by the
+monitor, and a canary proposed for the sister stores. The twin's own web
+shell shows the twin autopilot's runs as the same panels. The help page has
+the two new steps. `SELF_HEALING_RESPONDER=0` turns the responder off.
+
+## 2026-10-21
+
+### The web shell on Atlas Agent Engine (twin)
+
+The twin has its own web shell now, the same page as the Kanopy demo's, at
+http://localhost:8170 (`bin/twin.sh start`). You type into it as before,
+and the deployed coordinator answers, keeping the conversation across
+turns. The Agent Log on the right shows what the agents do while they
+work: which domains the coordinator picked, how Atlas ranked the agents,
+the sub-task each agent got, every tool call with a preview of its result,
+when one agent consults another, and how long each took. It reads all of
+that from the platform's own traces in MongoDB. Reset reseeds the twin's
+data and starts a new conversation. It runs on the presenter's laptop with
+their Agent Engine login, for one presenter at a time.
+
+When an agent wants to make a change that needs the NOC's sign-off, such
+as activating a store's service, applying a runbook or rolling a template
+out to several stores, the shell shows an approval card in the chat: what
+would change, where, and how many stores it touches. You approve, reject
+or (for a rollout) approve one store first as a canary, with an optional
+note, and the agent carries on from where it paused. This also works
+when the coordinator handed the change to an agent. The twin's two agents
+have these reviews on (`NOC_REVIEW=on`).
+
+### The agents remember what the network learned (Agent Engine twin)
+
+When the system fixes an incident on its own, the agents now also remember
+it: a one-sentence lesson (where, what was measured, which runbook, how
+fast it recovered) goes into the platform's memory next to the learned
+incident in the knowledge base. Ask the coordinator "have we seen POS
+latency problems like this before?" and it can tell you from memory, while
+the diagnosis keeps searching the knowledge base with its time and
+location filters. Takes effect with the next ibn-agent deploy.
+
+### Self-healing network, step 4: watch the loop on the dashboard
+
+The IBN dashboard has a new "Self-healing loop" panel. For the store in
+focus it lights up each step as it happens (sense, detect, diagnose,
+decide, act, verify, learn, prevent) with its time, counts the seconds
+since the alarm, and ends with "MTTR 28 s · 0 human actions". Next to it:
+the alarm (severity, probable cause, root cause, the past incident it
+matched), what the autonomy policy decided, the agent's own three-line
+report, a latency chart marking the breach, the fix and the recovery, and
+the proposal for the sister stores. A switch sets the level: L3 stops at a
+recommendation for the NOC, L4 fixes it. Stores with a pending proposal
+get a 📋 on their tab. On the Kanopy demo the switch stays at L3: acting
+on its own runs only on the Agent Engine twin for now.
+
+### Self-healing network, step 3: it learns, and proposes protecting the sister stores (Agent Engine twin)
+
+When the system fixes an incident by itself and the SLO monitor sees the
+store recover, the incident becomes a new entry in the knowledge base,
+written from what was measured. The next time the same thing happens at
+that store, the diagnosis finds this entry first ("learned by the
+self-healing loop"), and the autonomy policy counts it as a proven fix.
+After the recovery the agent also proposes protecting the other stores on
+the same network template: a canary at one store first, with the evidence
+from the knowledge base. Nothing changes until the NOC agrees, because a
+template change affects the whole chain. What one demo session learns
+stays in that session, and Reset removes it. The Kanopy demo never acts by
+itself, so it doesn't learn either.
+
+## 2026-10-20
+
+### Self-healing network, step 2: the system fixes it by itself (Agent Engine twin)
+
+On the Agent Engine twin, `bin/twin.sh autopilot` hands every incident
+the SLO monitor opens to the IBN agent, with no human prompt. The agent
+diagnoses it, asks the autonomy policy whether it may act, applies the
+runbook if it may, and waits until the monitor sees the network recover.
+Hamburg's morning rush is back within its target 38 seconds after it was
+detected, with nobody typing anything. Berlin's closest past incident is only a weak match, so it goes
+to the NOC with the diagnosis attached and nothing is changed. The policy
+is data per lane: level L3 (recommend only, the default) or L4 (act within
+the limits), a change freeze, a deny list and at most 3 actions per hour.
+The Kanopy demo gets the new tools but no autopilot yet.
+
+## 2026-10-16
+
+### Self-healing network, step 1: the network notices by itself
+
+A store's morning rush can now be played as live telemetry: "☀ start the
+morning rush" (or the `start_morning_rush` tool) runs about 105 seconds of
+POS latency, uplink utilization, queue depth and guest throughput on a
+compressed 08:55–10:05 clock. Nobody declares a violation any more: an SLO
+monitor in the IBN dashboard watches the data, opens an incident when POS
+latency stays over the target, and closes it when it recovers, with the
+time to recover. A store that already has the latency runbook stays green
+through the same rush. Diagnosis now describes what was measured, not a
+fixed text. "Inject morning rush" still works as before. Next: the system
+diagnoses and fixes it by itself (`SELF_HEALING_PLAN.md`).
+
+### Subscriber identifiers redacted (Agent Engine migration, Phase 6)
+
+The Agent Engine agents no longer show subscriber identifiers. Ask for
+sample subscribers and the IMSIs and MSISDNs come back as `[BLOCKED]`,
+with the rest (market, network, cells) intact. A platform guardrail does
+it, on our three agents only; the agent code doesn't filter anything.
+The Kanopy demo is unchanged.
+
+### The Agent Engine twin of the demo
+
+The Agent Engine agents can now be demoed next to the Kanopy demo, which
+stays as it is. You chat with `noc-coordinator` in the Atlas Agent Engine
+UI, and `bin/twin.sh start` runs the IBN and DTW dashboards on :8160 and
+:8180 against the agents' cluster (`TWIN_MONGODB_URI`). `bin/twin.sh
+reset` puts the demo data back. Single user for now: everyone shares one
+lane, because the chat UI can't select a session lane.
+
+The twin runs without NOC approvals, since the chat UI has no way to
+approve a paused action; `NOC_REVIEW=on` brings them back. Its agents and
+memory extraction call gpt-4o through the Grove gateway instead of OpenAI
+directly.
+
+Memory extraction no longer looks for procedures in conversations: it
+never stored one, and on conversations without one it failed. The seeded
+demo flows and runbooks are still recalled.
+
+## 2026-10-15
+
+### Platform memory for the agents (Agent Engine migration, Phase 5)
+
+The three Agent Engine agents now use Agent Engine memory. Each turn starts
+with a recall for the user: what they said to remember, what the platform
+learned from earlier conversations, the procedures and a Telco glossary.
+The coordinator passes that recall to the agents it calls.
+- **Remember and recall:** "Remember that I look after the NYC market"
+  saves it for the user; "What do you remember about me?" lists it. A new
+  session the next day still knows it.
+- **Learned in the background:** after a conversation goes idle, the
+  platform extracts facts and episodes from it (OpenAI
+  gpt-4o). Facts it learns supersede the ones saved by hand. Verified
+  locally and deployed. Claude through the MongoDB AI Gateway extracted
+  locally but not on the deployed agents.
+- **Seeded once:** about 60 Telco terms (IBN, 3GPP, TM Forum), the three
+  demo flows and the ten IBN/DTW runbooks, shared across the project.
+
+The legacy runtime keeps its own memory (`agent_memories`,
+`user_preferences`) until the cut-over. The Reset button doesn't clear
+platform memory yet: there is no delete-by-user API.
+
+### NOC coordinator and A2A (Agent Engine migration, Phase 4)
+
+A third Agent Engine agent, `noc-coordinator`, is the front door for NOC
+requests. It picks the domain agents in scope (an explicit "ibn"/"dtw"
+mention plus gpt-4o-mini), ranks them by `$vectorSearch` over
+`agent_cards` when both are, splits the request, and calls the agents
+concurrently over A2A, forwarding the session's lane. A single answer
+passes through unchanged; two are combined (gpt-4o). The IBN and DTW
+agents can also `consult_agent` each other: two questions per turn, one
+level deep. The legacy runtime is unchanged.
+
+What the legacy side sees:
+- **`routing_decisions`** gets one document per coordinator turn
+  (`runtime: "agent-engine"`): Stage 1 domains and method, card ranking,
+  sub-tasks, the agents' execution IDs and status, synthesis time.
+- **`agent_cards`** documents gain an `a2a_name` field (`ibn-agent`,
+  `dtw-agent`). The coordinator upserts the cards itself, with the same
+  `_id`s and index as the legacy shell.
+- **`agent_approvals`** documents record the Agent Engine execution and
+  session that paused (`execution_id`, `session_id`), so a review behind a
+  delegated call can be found and resumed.
+
+Also fixed in the Phase 3 review gate: `parallel_tool_calls=False` was
+passed to `bind_tools`, where the SDK drops it, so a deployed model could
+emit two tool calls in one turn and only the first was reviewed. It is now
+an invocation option, and the review node also keeps only the first call.
+
+### NOC approval for blast-radius actions (Agent Engine migration, Phase 3)
+
+On Atlas Agent Engine, the IBN and DTW agents now pause before
+`activate_plan`, `apply_runbook`, `update_template_version`,
+`cancel_intent`, `delete_scenario` and `delete_all_scenarios`. A NOC
+reviewer approves or rejects in Agent Engine (Pending Reviews page, CLI or
+API), and a rejected action never runs. A template bump that affects more
+than one site can be approved as a **canary**: the first site is migrated,
+its compliance is re-checked, and a second review covers the rest. The
+legacy MCP runtime has no review step and behaves as before.
+
+What the legacy side sees:
+- **Dashboards.** While a review is pending, the documents it would change
+  carry a `pending_approval` marker, so the IBN intent card/tab and the DTW
+  scenario list show "⏸ awaiting NOC approval" through their existing
+  change streams.
+- **Audit trail.** Each review is a document in the session's
+  `agent_approvals` collection (action, arguments, blast radius, decision,
+  reviewer notes). Reset clears it with the other agent-state planes.
+- **`update_template_version`** takes an optional `intent_ids` to flag
+  only some intents (the staged rollout), and its successor policy doc is
+  now upserted. Before, a second bump of the same template, from another
+  session or a rerun, failed with a duplicate key on the shared
+  `ibn_knowledge_chunks`.
+- **`apply_runbook`** now restores POS latency to 70% of the target. The
+  old floor of 22 ms left intents with targets under ~31 ms (such as the
+  20 ms Marienplatz onboarding) violated after "Compliance restored".
+
+## 2026-10-14
+
+### IBN/DTW tool code moved to `oss_tools/` (Agent Engine migration, Phase 1)
+
+The 10 Telco MCP servers (`ibn_*`, `dtw_*`) are now ~25-line FastMCP shims.
+Their tool code lives in `oss_tools/{ibn,dtw}/*.py` as plain functions
+collected in a per-module `tools` ToolSet. The Atlas Agent Engine agents
+(`AGENT_ENGINE_PLAN.md`) can register the same functions with
+`@app.tool()`, so we get one implementation and two runtimes. Each shim keeps
+the full module docstring, because the registry embeds it for routing.
+The pre-move history of the tool code stays on the `mcp_servers/` paths,
+since the shims reuse them.
+
+**Prefix per call, not per process.** The servers bound `_PFX =
+os.environ["DEMO_PREFIX"]` and their collection handles at import time.
+That works for one subprocess per browser session, but not for an Agent
+Engine sandbox serving many sessions. `oss_tools._ctx.collection(name,
+mutable=…)` returns a proxy that resolves `<prefix><name>` on every
+attribute access. The prefix comes from the `demo-prefix` custom header
+inside Agent Engine (validated against the shell's `s_<token>_` shape, and
+anything else is rejected), else from `DEMO_PREFIX`. Reference collections
+are never prefixed. Tool bodies are unchanged: `intents.find(...)` still
+reads the same.
+
+**Hot reload.** The registry's file hash now also covers the `oss_tools/`
+modules a shim imports (plus `_ctx.py`), and the watcher watches
+`oss_tools/` too. Editing a tool body still evicts the running server.
+Non-shim servers hash exactly as before.
+
+Verified: tool schemas served over stdio are identical before/after (44
+tools: names, descriptions, input schemas). A throwaway session lane gives
+identical answers to `main` for IBN sites (reference), IBN intents
+(prefixed) and DTW markets, and an IBN `submit_intent` lands in the lane's
+`s_…_ibn_intents` with the shared `ibn_intents` untouched.
+
+Side finding, not changed here: on both `main` and this branch, the
+generic phrasings "list all sites" / "show all intents" without
+conversation context are routed away from IBN by Stage 1 (to `acc_*` /
+`analytics_service`). With "IBN" in the query they route correctly.
+
 ## 2026-08-10 (2)
 
 ### Fix: tool selection was sampled at temperature 1.0

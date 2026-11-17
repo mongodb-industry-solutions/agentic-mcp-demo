@@ -29,7 +29,7 @@ from pymongo import MongoClient
 
 from agents.orchestrator import OrchestratorAgent
 from agents import history as shell_history
-from web import seed_runner
+from web import seed_runner, self_healing
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 log = logging.getLogger("shell")
@@ -59,6 +59,7 @@ class Session:
     lock: asyncio.Lock                       # one query/reset at a time per session
     clients: set = field(default_factory=set)
     last_activity: float = 0.0
+    responder: asyncio.Task | None = None    # self-healing (web/self_healing.py)
 
 
 def _sanitize_token(t: str | None) -> str | None:
@@ -68,19 +69,24 @@ def _sanitize_token(t: str | None) -> str | None:
     return t if _TOKEN_RE.match(t) else None
 
 
+async def _send_all(token: str, payload: dict) -> None:
+    """Send one message to every browser tab on a session."""
+    sess = _sessions.get(token)
+    if not sess:
+        return
+    data = json.dumps(payload)
+    for ws in list(sess.clients):
+        try:
+            await ws.send_text(data)
+        except Exception:
+            pass
+
+
 def _make_broadcast(token: str):
     """Per-session live-feed callback — forwards this session's
     orchestrator events only to the browser tabs on that session."""
     async def _bc(tag: str, msg: str):
-        sess = _sessions.get(token)
-        if not sess:
-            return
-        data = json.dumps({"type": "broadcast", "tag": tag, "msg": msg})
-        for ws in list(sess.clients):
-            try:
-                await ws.send_text(data)
-            except Exception:
-                pass
+        await _send_all(token, {"type": "broadcast", "tag": tag, "msg": msg})
     return _bc
 
 
@@ -139,6 +145,9 @@ async def _destroy_session_locked(token: str, drop_data: bool) -> None:
     sess = _sessions.pop(token, None)
     if not sess:
         return
+    if sess.responder:
+        sess.responder.cancel()
+        await asyncio.gather(sess.responder, return_exceptions=True)
     try:
         await sess.orch.__aexit__(None, None, None)
     except Exception as e:
@@ -190,6 +199,9 @@ async def _get_or_create_session(token: str) -> tuple["Session | None", str | No
         sess = Session(token=token, prefix=prefix, orch=orch,
                        lock=asyncio.Lock(), last_activity=time.monotonic())
         _sessions[token] = sess
+        if self_healing.ENABLED:
+            sess.responder = asyncio.create_task(
+                self_healing.run(sess, lambda payload: _send_all(token, payload)))
         log.info(f"session {token} created (lane {'seeded' if seeded else 'reused'}; "
                  f"{len(_sessions)}/{MAX_SESSIONS} active)")
         return sess, None
@@ -330,6 +342,11 @@ async def ws_endpoint(ws: WebSocket):
                 if not text:
                     continue
                 shell_history.append(text, source="web", prefix=session.prefix)
+                if session.lock.locked():
+                    await ws.send_text(json.dumps({
+                        "type": "broadcast", "tag": "AGENT",
+                        "msg": "⏳ Your query waits for the turn that is running "
+                               "(a self-healing run, or another tab)."}))
                 async with session.lock:
                     t0 = time.monotonic()
                     try:

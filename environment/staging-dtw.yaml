@@ -8,9 +8,10 @@ ownership:
 env:
   NODE_ENV: staging
   AWS_REGION: us-east-1
+  TZ: UTC   # like the Agent Engine agents' tool sandboxes
 
 envSecrets:
-  MONGODB_URI: agentic-mcp-demo-secrets
+  MONGODB_URI: agentic-mcp-demo-ae-secrets   # oss-demos, the Agent Engine agents' cluster
 
 serviceAccount:
   enabled: true

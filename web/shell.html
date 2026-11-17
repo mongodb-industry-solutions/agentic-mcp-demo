@@ -189,6 +189,9 @@
   }
   .server-badge.local   { background: rgba(0,212,255,0.10);  color: var(--cyan); }
   .server-badge.cloud   { background: rgba(204,136,255,0.12); color: #cc88ff; }
+  .server-badge.engine  { background: rgba(0,255,136,0.10);  color: var(--green); }
+  /* The Agent Engine twin's shell (web/twin_shell.py): agents, not MCP servers */
+  body.twin .server-remove, body.twin .add-server-btn, body.twin #tabWorkstreams { display: none; }
   .server-active        { font-size: 12px; color: var(--green); }
   .server-inactive      { font-size: 12px; color: var(--dim); }
   .server-remove {
@@ -358,6 +361,51 @@
     padding: 10px 14px; color: var(--red); margin: 8px 0; font-size: 14px;
   }
 
+  /* ── Self-healing run (no human prompt) ── */
+  .response-panel.autonomous { border-color: var(--cyan); }
+  .response-panel.autonomous .response-panel-title {
+    background: rgba(0,212,255,0.07); color: var(--cyan);
+    border-bottom-color: rgba(0,212,255,0.15);
+  }
+  .response-panel.autonomous.failed { border-color: var(--red); }
+  .auto-hint { color: var(--dim); font-size: 13px; margin-top: 8px; }
+
+  /* ── NOC approval card (Agent Engine twin) ── */
+  .approval-card {
+    border: 1px solid var(--yellow); border-radius: 6px;
+    margin: 10px 0 4px; overflow: hidden;
+  }
+  .approval-card-title {
+    background: rgba(255,215,0,0.07); color: var(--yellow);
+    font-size: 13px; font-weight: 600; padding: 5px 14px;
+    border-bottom: 1px solid rgba(255,215,0,0.15);
+  }
+  .approval-card-body { padding: 10px 16px; font-size: 14px; line-height: 1.45; }
+  .approval-card-body .apr-headline { color: var(--text); font-weight: 600; font-size: 15px; }
+  .approval-card-body .apr-summary { color: var(--text); margin: 4px 0 8px; }
+  .approval-card-body table { border-collapse: collapse; margin: 4px 0 10px; font-size: 13px; }
+  .approval-card-body td { border: 1px solid var(--border); padding: 3px 8px; vertical-align: top; }
+  .approval-card-body td:first-child { color: var(--cyan); white-space: nowrap; }
+  .apr-notes {
+    width: 100%; background: transparent; border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text); font-family: var(--mono); font-size: 13px; padding: 5px 8px; margin-bottom: 8px;
+  }
+  .apr-notes:focus { outline: none; border-color: var(--yellow); }
+  .apr-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .apr-actions button {
+    font-family: var(--mono); font-size: 13px; padding: 5px 12px; border-radius: 4px;
+    cursor: pointer; background: transparent; border: 1px solid #333; color: var(--text);
+  }
+  .apr-actions .apr-approve { border-color: var(--green); color: var(--green); }
+  .apr-actions .apr-approve_canary { border-color: var(--cyan); color: var(--cyan); }
+  .apr-actions .apr-reject { border-color: var(--red); color: var(--red); }
+  .apr-actions button:hover:not(:disabled) { background: rgba(255,255,255,0.05); }
+  .apr-actions button:disabled { opacity: 0.4; cursor: default; }
+  .apr-status { margin-top: 8px; color: var(--dim); font-size: 13px; }
+  .approval-card.decided { border-color: var(--border); }
+  .approval-card.decided .approval-card-title { color: var(--dim); background: transparent; }
+  .approval-card.decided .apr-notes, .approval-card.decided .apr-actions { display: none; }
+
   .info-table { border-collapse: collapse; margin: 8px 0 12px; font-size: 14px; min-width: 280px; }
   .info-table caption { text-align: left; color: var(--cyan); font-weight: 600; margin-bottom: 6px; font-size: 14px; }
   .info-table th, .info-table td { border: 1px solid var(--border); padding: 4px 10px; }
@@ -525,6 +573,10 @@ function connect() {
       // / dtw_url) and links straight to them. Fallbacks: local dev runs
       // the dashboards on their own uvicorn ports (8060 / 8080); a legacy
       // single-origin reverse proxy mounts them under /ibn and /dtw.
+      // The shell on Agent Engine (web/twin_shell.py) keeps a lane per
+      // session too, so its links carry the token as well.
+      const twin = msg.runtime === 'agent_engine';
+      if (twin) applyTwinChrome();
       if (sessionToken) {
         const q = '?session=' + encodeURIComponent(sessionToken);
         let ibn, dtw;
@@ -543,7 +595,9 @@ function connect() {
       }
       document.getElementById('bannerHost').textContent    = msg.host || '—';
       document.getElementById('bannerIndexes').textContent = msg.indexes.join(', ') || 'none';
-      if (msg.servers.length)
+      if (twin)
+        appendLog('INFO', `✓ Ready — on Atlas Agent Engine: ${msg.servers.join(', ')}`);
+      else if (msg.servers.length)
         appendLog('INFO', `✓ Ready — ${msg.servers.length} MCP server(s) active`);
       // Seed cursor-up history from the shared shell history file so
       // arrow-keys recall queries typed earlier (in this session, in a
@@ -618,10 +672,29 @@ function connect() {
       const panel = document.createElement('div');
       panel.className = 'response-panel';
       panel.innerHTML =
-        `<div class="response-panel-title">🤖 Agent Response (time needed: ${msg.elapsed} seconds)</div>` +
+        `<div class="response-panel-title">${esc(msg.title || '🤖 Agent Response')} (time needed: ${msg.elapsed} seconds)</div>` +
         `<div class="response-panel-body">${marked.parse(msg.markdown)}</div>`;
       historyEl.appendChild(panel);
       scrollChat();
+      return;
+    }
+
+    if (msg.type === 'autonomous') {
+      renderAutonomous(msg);
+      return;
+    }
+
+    if (msg.type === 'approval') {
+      renderApproval(msg.review);
+      return;
+    }
+
+    if (msg.type === 'approval_failed') {
+      const card = document.getElementById('apr-' + msg.approval_id);
+      if (card) {
+        card.querySelectorAll('.apr-actions button').forEach(b => { b.disabled = false; });
+        card.querySelector('.apr-status').textContent = '❌ ' + msg.message;
+      }
       return;
     }
 
@@ -704,6 +777,18 @@ function connect() {
     appendLog('ERROR', 'Disconnected — reconnecting in 3s…');
     setTimeout(connect, 3000);
   };
+}
+
+function applyTwinChrome() {
+  document.body.classList.add('twin');
+  document.title = 'Agentic AI for Telco OSS/BSS — Agent Engine Shell';
+  document.querySelector('.banner-title').textContent =
+    '🧠 Agentic AI Demo for Telco OSS/BSS — Web Shell on Atlas Agent Engine';
+  document.querySelector('.banner-title').nextElementSibling.textContent =
+    'noc-coordinator + ibn-agent + dtw-agent over A2A · MongoDB Atlas + Voyage AI';
+  document.getElementById('tabServers').textContent = 'Agents';
+  document.getElementById('resetBtn').title =
+    "Re-seed your session's IBN + DTW demo data and start a new Agent Engine session";
 }
 
 // ── Reverse history search (Ctrl+R / bck-i-search) ───────────────────────
@@ -928,6 +1013,98 @@ function appendTable(caption, headers, rows) {
     rows.map(r=>`<tr>${r.map(c=>`<td>${esc(c||'')}</td>`).join('')}</tr>`).join('');
   historyEl.appendChild(t);
   scrollChat();
+}
+
+// ── Self-healing run (SELF_HEALING_PLAN.md, S5) ────────────────────────────
+// The SLO monitor opened an incident and the IBN agent handles it with no
+// human prompt. A run waiting for the current turn is announced in the Agent
+// Log; its panel is created when it starts (any earlier turn has answered by
+// then) and filled in place with the report, so it stays where the run began.
+function renderAutonomous(m) {
+  const where = `${m.intent_id}${m.site ? ' · ' + m.site : ''}`;
+  if (m.phase === 'queued') {
+    const ts = new Date().toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit'});
+    appendLog('AGENT', `🤖 ${ts} [AGENT] ⏳ self-healing run for ${where} starts after the current turn`);
+    return;
+  }
+  let panel = document.getElementById('auto-' + m.incident_id);
+  if (!panel) {
+    historyEl.appendChild(Object.assign(document.createElement('hr'), {className: 'turn-sep'}));
+    panel = document.createElement('div');
+    panel.id = 'auto-' + m.incident_id;
+    panel.className = 'response-panel autonomous';
+    panel.innerHTML = '<div class="response-panel-title"></div><div class="response-panel-body"></div>';
+    historyEl.appendChild(panel);
+  }
+  const title = panel.querySelector('.response-panel-title');
+  const body = panel.querySelector('.response-panel-body');
+  if (m.phase === 'started') {
+    title.textContent = `🤖 Self-healing · no human prompt · ${where} · autonomy ${m.level}`;
+    const mode = m.level === 'L4' ? 'acts inside the autonomy envelope'
+                                  : 'diagnoses and recommends; a NOC engineer decides';
+    body.innerHTML = `<p>The SLO monitor opened an incident: ${esc(m.note)}.</p>` +
+      `<p><span class="thinking-dot">▌</span> The IBN agent ${mode}…</p>`;
+  } else {
+    title.textContent = `🤖 Self-healing report · ${where} · autonomy ${m.level} ` +
+      `(time needed: ${m.elapsed} seconds)`;
+    panel.classList.toggle('failed', !m.ok);
+    body.innerHTML = marked.parse(m.markdown || 'No report.') + (m.ok && m.level !== 'L4'
+      ? '<div class="auto-hint">Autonomy L3: nothing was applied. Say <b>apply runbook</b> ' +
+        'to apply the recommendation.</div>' : '');
+  }
+  scrollChat();
+}
+
+// ── NOC approval card (Agent Engine twin) ──────────────────────────────────
+const APR_LABELS = {approve: '✓ Approve', approve_canary: '◐ Approve as canary', reject: '✕ Reject'};
+
+function aprValue(v) {
+  if (v == null || typeof v !== 'object') return esc(v ?? '');
+  if (Array.isArray(v)) return v.map(x => typeof x === 'object' ? esc(Object.values(x).join(' · ')) : esc(x)).join('<br>');
+  return Object.entries(v).map(([k, x]) => `${esc(k)}: ${esc(typeof x === 'object' ? JSON.stringify(x) : x)}`).join('<br>');
+}
+
+function renderApproval(r) {
+  let card = document.getElementById('apr-' + r.approval_id);
+  const isNew = !card;
+  if (isNew) {
+    card = document.createElement('div');
+    card.id = 'apr-' + r.approval_id;
+    card.className = 'approval-card';
+    const rows = Object.entries(r.details || {}).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${aprValue(v)}</td></tr>`).join('');
+    const canary = r.canary ? ` · canary: ${esc(r.canary.site)}` : '';
+    const buttons = (r.allowed_decisions || []).map(d =>
+      `<button class="apr-${esc(d)}" data-decision="${esc(d)}">${esc(APR_LABELS[d] || d)}</button>`).join('');
+    card.innerHTML =
+      `<div class="approval-card-title">⏸ NOC approval ${esc(r.approval_id)} · ${esc(r.agent)} · blast radius ${esc(r.blast_radius ?? 1)}${canary}</div>` +
+      `<div class="approval-card-body">` +
+        `<div class="apr-headline">${esc(r.title)}</div>` +
+        `<div class="apr-summary">${esc(r.summary)}</div>` +
+        (rows ? `<table>${rows}</table>` : '') +
+        `<input class="apr-notes" placeholder="Reviewer notes (optional)" maxlength="500">` +
+        `<div class="apr-actions">${buttons}</div>` +
+        `<div class="apr-status"></div>` +
+      `</div>`;
+    card.querySelectorAll('.apr-actions button').forEach(b => b.addEventListener('click', () => {
+      card.querySelectorAll('.apr-actions button').forEach(x => { x.disabled = true; });
+      card.querySelector('.apr-status').textContent = `Sending “${b.dataset.decision}” and resuming ${r.agent}…`;
+      ws.send(JSON.stringify({type: 'approval_decision', approval_id: r.approval_id,
+        decision: b.dataset.decision, notes: card.querySelector('.apr-notes').value}));
+    }));
+    if (r.status !== 'pending' && !r.decided_by) return;   // not shown before: nothing to update
+    historyEl.appendChild(card);
+    scrollChat();
+  }
+  if (r.status === 'pending') {
+    if (!r.resumable) card.querySelector('.apr-status').textContent = 'This review names no paused run: decide it in the Agent Engine UI.';
+    return;
+  }
+  card.classList.add('decided');
+  const verdict = {approved: '✓ Approved', rejected: '⛔ Rejected', expired: '⌛ Expired'}[r.status] || r.status;
+  const how = r.decision === 'approve_canary' ? ' as canary' : '';
+  card.querySelector('.approval-card-title').textContent = `${verdict}${how} · ${r.approval_id} · ${r.agent}`;
+  card.querySelector('.apr-status').textContent =
+    `${verdict}${how} by ${r.decided_by || 'noc'}` + (r.reviewer_notes ? ` — ${r.reviewer_notes}` : '');
 }
 
 // ── Tab switching ──────────────────────────────────────────────────────────
