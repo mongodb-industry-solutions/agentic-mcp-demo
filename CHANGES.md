@@ -1,5 +1,21 @@
 # CHANGES.md
 
+## 2026-11-18
+
+### The IBN dashboard tells one consistent story during a morning rush
+
+The POS latency gauge now shows the same number the SLO monitor decides on
+(p95 over 20 seconds), with a line saying where the monitor stands: above
+the SLO 1 of 3, incident open, then amber while the recovery is verified,
+and green together with RECOVERY. Before, it showed one raw sample that
+could lag the events by several seconds. The page also keeps the intent
+tab you picked, instead of jumping to the newest intent whenever something
+changes.
+
+The diagnosis popup keeps the vector query on screen next to its answer,
+with numbered notes on what each part of the query does, instead of
+showing it for two seconds. In exec mode the query is one click away.
+
 ## 2026-11-17
 
 ### See the data model and the hero queries

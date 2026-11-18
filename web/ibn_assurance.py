@@ -303,8 +303,20 @@ async def slo_evaluator(db, pfx: str, notify: Notify, rushing: set) -> None:
                     continue   # no signal: hold the state
                 tracker = trackers.setdefault(intent["_id"], slo.Tracker())
                 incident = open_.get(intent["_id"])
-                action = slo.step(tracker, latency["p95"], rush.threshold(intent),
-                                  incident is not None)
+                target = rush.threshold(intent)
+                action = slo.step(tracker, latency["p95"], target, incident is not None)
+                # The page's latency gauge shows what this decision used: the
+                # window's p95 and the streak towards opening or closing. Sent
+                # before the incident is opened or closed, so the gauge never
+                # lags the events it explains.
+                await notify({"type": "slo", "intent_id": intent["_id"],
+                              "p95": round(latency["p95"], 1), "target": target,
+                              "n": latency["n"], "window_s": slo.WINDOW_S,
+                              "breach": tracker.breach, "clear": tracker.clear,
+                              "breach_needed": slo.BREACH_WINDOWS,
+                              "clear_needed": slo.CLEAR_WINDOWS,
+                              "open": (incident is not None and action != "close")
+                                      or action == "open"})
                 if action == "open":
                     await open_incident(db, pfx, intent, metrics, notify, rushing)
                 elif action == "close" and incident:

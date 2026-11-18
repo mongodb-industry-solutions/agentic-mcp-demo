@@ -64,6 +64,7 @@ class DashSession:
     tasks: list = field(default_factory=list)
     last_activity: float = 0.0
     rushing: set = field(default_factory=set)   # intent ids a morning rush is playing for
+    focus: dict = field(default_factory=dict)   # tab (WebSocket) → the intent it shows
 
 
 _sessions: dict[str, DashSession] = {}   # keyed by prefix ("" = default lane)
@@ -207,8 +208,10 @@ async def watch_compliance(db, session: DashSession):
                     if change["operationType"] == "insert":
                         doc = change.get("fullDocument")
                         if doc:
-                            await broadcast(session, {"type": "compliance_event",
-                                                      "doc": _serializable(doc)})
+                            msg = {"type": "compliance_event", "doc": _serializable(doc)}
+                            if doc.get("kind") == "diagnose":   # the modal's notes on the query
+                                msg["callouts"] = showcase.DIAGNOSE_CALLOUTS
+                            await broadcast(session, msg)
         except Exception as e:
             log.warning(f"compliance stream error ({e}); retrying in 2s")
             await asyncio.sleep(2)
@@ -266,22 +269,25 @@ async def poll_telemetry(db, session: DashSession, interval_seconds: float = 1.0
     """
     pfx = session.prefix
     log.info(f"telemetry poller started (prefix={pfx!r}, {interval_seconds:.1f}s)")
-    last_count = 0
+    last: dict = {}   # intent → newest sample's ts sent: send again when a new one lands
     while True:
         try:
             await asyncio.sleep(interval_seconds)
-            focused = await latest_focused_intent(db, pfx)
-            if not focused:
-                continue
-            samples = await recent_telemetry(db, pfx, focused["_id"], seconds=120)
-            if len(samples) == last_count and samples:
-                continue
-            last_count = len(samples)
-            await broadcast(session, {
-                "type":      "telemetry",
-                "intent_id": focused["_id"],
-                "samples":   [_serializable(s) for s in samples],
-            })
+            shown = set(session.focus.values())
+            newest = await latest_focused_intent(db, pfx)
+            if newest:
+                shown.add(newest["_id"])
+            for intent_id in shown:
+                samples = await recent_telemetry(db, pfx, intent_id, seconds=120)
+                newest_ts = samples[-1]["ts"] if samples else None
+                if last.get(intent_id) == newest_ts:
+                    continue
+                last[intent_id] = newest_ts
+                await broadcast(session, {
+                    "type":      "telemetry",
+                    "intent_id": intent_id,
+                    "samples":   [_serializable(s) for s in samples],
+                })
         except Exception as e:
             log.warning(f"telemetry poll error ({e})")
             await asyncio.sleep(2)
@@ -491,15 +497,21 @@ async def intent_snapshot(intent_id: str, session: str = ""):
     }))
 
 
-async def handle_client_message(db, pfx: str, text: str) -> None:
-    """Requests from the page. `start_rush` queues a morning rush for an
+async def handle_client_message(db, session: DashSession, ws: WebSocket, text: str) -> None:
+    """Requests from the page. `focus` names the intent the tab shows (its
+    live telemetry is sent). `start_rush` queues a morning rush for an
     active intent; the lane's rush runner plays it. `set_autonomy` is the
     L3/L4 switch (L4 only where it's allowed, see autonomy.l4_allowed)."""
+    pfx = session.prefix
     try:
         msg = json.loads(text)
     except ValueError:
         return
     if not isinstance(msg, dict):
+        return
+    if msg.get("type") == "focus":
+        if isinstance(msg.get("intent_id"), str):
+            session.focus[ws] = msg["intent_id"][:64]
         return
     if msg.get("type") == "set_autonomy":
         if not await assurance.set_autonomy_level(db, pfx, str(msg.get("level") or "")):
@@ -534,11 +546,12 @@ async def ws_endpoint(ws: WebSocket):
 
     try:
         while True:
-            await handle_client_message(app.state.db, pfx, await ws.receive_text())
+            await handle_client_message(app.state.db, session, ws, await ws.receive_text())
     except WebSocketDisconnect:
         pass
     finally:
         session.clients.discard(ws)
+        session.focus.pop(ws, None)
         session.last_activity = time.monotonic()
         log.info(f"client disconnected (prefix={pfx!r}, "
                  f"{len(session.clients)} tab(s) remain)")
