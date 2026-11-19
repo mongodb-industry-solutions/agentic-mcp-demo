@@ -125,6 +125,17 @@ async def _lane_or_shared(db, pfx: str, base: str):
     return db[base]
 
 
+# The diagnose query's notes, also sent with each diagnose event to the
+# IBN dashboard's diagnosis modal (web/ibn_dashboard.py).
+DIAGNOSE_CALLOUTS = [
+    {"find": "$vectorSearch", "label": "meaning: similar symptoms"},
+    {"find": "kind:", "label": "structure: incidents only"},
+    {"find": "ts:", "label": "time: the last 180 days"},
+    {"find": "lng:", "label": "geo: a box around the site"},
+    {"find": "$match", "label": "only this lane's learned incidents"},
+]
+
+
 # ─── IBN ────────────────────────────────────────────────────────────────────
 
 async def ibn(db, pfx: str) -> dict:
@@ -208,11 +219,7 @@ async def ibn(db, pfx: str) -> dict:
                     "inside the index by kind, time window and a geo box around the site. "
                     "Elsewhere this takes pgvector, PostGIS, TimescaleDB and a join in the "
                     "application.",
-         "callouts": [{"find": "$vectorSearch", "label": "meaning: similar symptoms"},
-                      {"find": "kind:", "label": "structure: incidents only"},
-                      {"find": "ts:", "label": "time: the last 180 days"},
-                      {"find": "lng:", "label": "geo: a box around the site"},
-                      {"find": "$match", "label": "only this lane's learned incidents"}]},
+         "callouts": DIAGNOSE_CALLOUTS},
         {"id": "spare", "title": "Nearby spare", "subtitle": "$geoNear",
          "collection": "ibn_resources", "op": "aggregate", "source": "example",
          "note": f"around {site.get('name', 'the site')}, 20 km",

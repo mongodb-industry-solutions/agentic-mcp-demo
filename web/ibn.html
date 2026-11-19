@@ -312,6 +312,12 @@
     transition: width 0.3s, background 0.3s;
   }
   .gauge-fill.violation { background: var(--red); }
+  .gauge-fill.recovering { background: var(--yellow); }
+  .sla-live.warn { color: var(--yellow); }
+  .sla-badge.warn { color: var(--yellow); }
+  .sla-note { grid-column: 1 / -1; font-family: var(--mono); font-size: 12px;
+              color: var(--text-dim); margin-top: -4px; }
+  .sla-note.viol { color: var(--red); } .sla-note.warn { color: var(--yellow); }
   .gauge-threshold {
     position: absolute; top: -2px; bottom: -2px; width: 2px;
     background: var(--yellow); opacity: 0.7;
@@ -362,7 +368,7 @@
     background: rgba(15, 15, 15, 0.96);
     border: 1px solid var(--border-hover);
     border-radius: 20px;
-    max-width: 1100px; width: 100%;
+    max-width: 1320px; width: 100%;
     max-height: 92vh; overflow-y: auto;
     padding: 32px;
     animation: slide-up 0.4s ease-out;
@@ -413,6 +419,23 @@
   }
 
   /* AHA phase — side-by-side */
+  /* The diagnosis: the query (left) stays beside its answer (right) */
+  .diag-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 28px; }
+  .diag-col-title { font-family: var(--mono); font-size: 12px; letter-spacing: .12em;
+                    text-transform: uppercase; color: var(--text-dim); margin-bottom: 10px; }
+  .diag-col-title .diag-level { text-transform: none; letter-spacing: 0; color: var(--cyan); margin-left: 8px; }
+  .diag-intro { font-size: 14px; color: var(--text-2); margin-bottom: 12px; line-height: 1.5; }
+  .diag-intro code { font-family: var(--mono); color: var(--cyan); }
+  .diag-code { max-height: 56vh; margin: 0; border: 1px solid var(--border); border-radius: 12px;
+               font-size: 12.5px !important; }
+  .diag-legend { margin-top: 10px; }
+  .diag-toggle { display: none; margin-top: 18px; background: transparent; color: var(--cyan);
+                 border: 1px solid var(--cyan); border-radius: 6px; padding: 5px 12px;
+                 font-size: 13px; cursor: pointer; }
+  body.exec-mode .diag-toggle { display: inline-block; }
+  body.exec-mode .diag-grid:not(.show-query) { grid-template-columns: minmax(0, 1fr); }
+  body.exec-mode .diag-grid:not(.show-query) .diag-query { display: none; }
+  @media (max-width: 1000px) { .diag-grid { grid-template-columns: minmax(0, 1fr); } }
   .aha-phase { display: none; }
   .aha-phase.visible { display: block; animation: fade-in 0.4s; }
 
@@ -719,17 +742,19 @@
     <button class="close-x" id="closeDiagnosis">×</button>
     <h3>Hybrid Vector Diagnosis</h3>
 
-    <div class="pipeline-phase" id="pipelinePhase">
-      <div style="font-size: 15px; color: var(--text-dim); margin-bottom: 14px;">
-        Running aggregation pipeline against
-        <code style="color:var(--cyan); font-family:var(--mono);">ibn_knowledge_chunks</code> —
-        semantic similarity + structured filter + time window + geospatial bounding box,
-        in a <strong style="color:var(--text)">single stage</strong>:
-      </div>
-      <div class="pipeline-code" id="pipelineCode"></div>
-      <div class="pipeline-hint">→ resolving matches…</div>
-    </div>
-
+    <div class="diag-grid" id="diagGrid">
+      <section class="diag-query">
+        <div class="diag-col-title">The query<span class="diag-level" id="diagLevel"></span></div>
+        <div class="diag-intro">
+          One <code>$vectorSearch</code> stage on <code>ibn_knowledge_chunks</code>: similar
+          symptoms, pre-filtered inside the index by kind, time window and a geo box around the site.
+        </div>
+        <pre class="sc-code diag-code" id="pipelineCode"></pre>
+        <div class="diag-legend" id="pipelineLegend"></div>
+      </section>
+      <section class="diag-result">
+        <div class="diag-col-title">The answer</div>
+        <div class="pipeline-hint" id="diagResolving">→ resolving matches…</div>
     <div class="aha-phase" id="ahaPhase">
       <div class="aha-grid">
         <div class="aha-col now">
@@ -761,6 +786,9 @@
         <div class="runbook-steps" id="runbookSteps"></div>
       </div>
     </div>
+      </section>
+    </div>
+    <button class="diag-toggle" id="diagToggle" type="button">Show the query</button>
   </div>
 </div>
 
@@ -798,6 +826,7 @@ let state = {
   events: [],
   rush: {},       // intent_id → latest morning-rush tick {clock, load, status}
   incident: {},   // intent_id → latest self-healing incident
+  slo: {},        // intent_id → the SLO monitor's last evaluation (p95, streaks)
   autonomy: null, // {level, policy, l4_allowed} of this lane
   clockOffset: 0, // data clock − browser clock (ms); the twin stores UTC
 };
@@ -938,6 +967,36 @@ function renderPlan() {
 }
 
 // ── Assurance panel ──
+// What the POS latency gauge shows. The SLO monitor sends its p95 over
+// the last 20 s every 2 s, the number VIOLATION and RECOVERY are decided
+// on; without a fresh one (no monitor yet) the newest raw sample.
+function latencyNow(intent) {
+  const threshold = ((intent.parsed || {}).targets || {}).pos_latency_ms;
+  const m = state.slo[intent._id];
+  if (m && Date.now() - m.at < 8000) {
+    // The incident record has the last word on open/closed: it may arrive
+    // between two of the monitor's messages.
+    const inc = state.incident[intent._id];
+    const justClosed = inc && inc.open !== true && inc.recovered_at
+                       && dataNow() - Date.parse(inc.recovered_at) < 10000;
+    const open = m.open && !justClosed;
+    let cls = 'ok', note = `p95 over ${m.window_s} s`;
+    if (m.p95 > threshold) {
+      cls = 'viol';
+      note += open ? ' · SLO breached, incident open'
+                     : ` · above SLO ${Math.min(m.breach, m.breach_needed)}/${m.breach_needed}`;
+    } else if (open) {
+      cls = 'warn';
+      note += ` · within SLO, verifying recovery ${Math.min(m.clear, m.clear_needed)}/${m.clear_needed}`;
+    }
+    return {value: m.p95, threshold, cls, note};
+  }
+  const samples = state.telemetry.filter(s => s.meta && s.meta.metric === 'pos_latency_ms');
+  const value = samples.length ? samples[samples.length - 1].value : null;
+  const cls = value == null ? 'nd' : (threshold != null && value > threshold ? 'viol' : 'ok');
+  return {value, threshold, cls, note: value == null ? '' : 'latest sample'};
+}
+
 function renderAssurance() {
   const body = document.getElementById('assuranceBody');
   const i = state.focused;
@@ -945,13 +1004,15 @@ function renderAssurance() {
 
   const t = (i.parsed && i.parsed.targets) || {};
   const threshold = t.pos_latency_ms;
-  const samples = state.telemetry.filter(s => s.meta && s.meta.metric === 'pos_latency_ms');
-  const latest = samples.length ? samples[samples.length - 1].value : null;
-  const violation = (latest != null && threshold != null && latest > threshold);
+  const lat = latencyNow(i);
+  const latest = lat.value;
+  const violation = lat.cls === 'viol';
 
   function slaRow(metric, committed, liveText, statusClass, inlineGaugeHTML) {
-    const liveClass = statusClass === 'nd' ? 'nodata' : statusClass === 'viol' ? 'viol' : '';
-    const badge     = statusClass === 'ok' ? '✓' : statusClass === 'viol' ? '✗' : '—';
+    const liveClass = statusClass === 'nd' ? 'nodata' : statusClass === 'viol' ? 'viol'
+                    : statusClass === 'warn' ? 'warn' : '';
+    const badge     = statusClass === 'ok' ? '✓' : statusClass === 'viol' ? '✗'
+                    : statusClass === 'warn' ? '…' : '—';
     return `
       <div class="sla-row">
         <span class="sla-metric">${metric}</span>
@@ -967,8 +1028,9 @@ function renderAssurance() {
   const posGauge = threshold ? `
     <div class="sla-gauge gauge-bar">
       <div class="gauge-threshold" style="left: 50%;"></div>
-      <div class="gauge-fill ${violation ? 'violation' : ''}" style="width: ${fillPct}%;"></div>
-    </div>` : '';
+      <div class="gauge-fill ${violation ? 'violation' : lat.cls === 'warn' ? 'recovering' : ''}" style="width: ${fillPct}%;"></div>
+    </div>
+    <div class="sla-note ${lat.cls}">${esc(lat.note)}</div>` : '';
 
   const isProvisioned = (i.status === 'active' || i.status === 'violated');
 
@@ -982,7 +1044,7 @@ function renderAssurance() {
       'POS latency',
       `≤ ${threshold}ms`,
       latest != null ? `${latest.toFixed(1)}ms` : (isProvisioned ? 'no data' : '—'),
-      latest == null ? 'nd' : violation ? 'viol' : 'ok',
+      lat.cls,
       posGauge
     );
   }
@@ -1244,13 +1306,11 @@ setInterval(patchHealClock, 1000);
 function patchAssuranceTelemetry() {
   const i = state.focused;
   if (!i) return;
-  const t = (i.parsed && i.parsed.targets) || {};
-  const threshold = t.pos_latency_ms;
-  const samples = state.telemetry.filter(s => s.meta && s.meta.metric === 'pos_latency_ms');
-  const latest  = samples.length ? samples[samples.length - 1].value : null;
+  const lat = latencyNow(i);
+  const latest = lat.value, threshold = lat.threshold;
   if (latest == null || threshold == null) return;
 
-  const violation = latest > threshold;
+  const violation = lat.cls === 'viol';
   const liveEl    = document.querySelector('#assuranceBody .sla-live');
   const badgeEl   = document.querySelector('#assuranceBody .sla-badge');
   const fillEl    = document.querySelector('#assuranceBody .gauge-fill');
@@ -1259,16 +1319,19 @@ function patchAssuranceTelemetry() {
   if (!liveEl) { renderAssurance(); return; }
 
   liveEl.textContent = `${latest.toFixed(1)}ms`;
-  liveEl.className   = `sla-live${violation ? ' viol' : ''}`;
+  liveEl.className   = `sla-live${violation ? ' viol' : lat.cls === 'warn' ? ' warn' : ''}`;
   if (badgeEl) {
-    badgeEl.textContent = violation ? '✗' : '✓';
-    badgeEl.className   = `sla-badge ${violation ? 'viol' : 'ok'}`;
+    badgeEl.textContent = violation ? '✗' : lat.cls === 'warn' ? '…' : '✓';
+    badgeEl.className   = `sla-badge ${lat.cls}`;
   }
   if (fillEl) {
     const pct = Math.min(100, (latest / (threshold * 2)) * 100);
     fillEl.style.width = `${pct}%`;
     fillEl.classList.toggle('violation', violation);
+    fillEl.classList.toggle('recovering', lat.cls === 'warn');
   }
+  const noteEl = document.querySelector('#assuranceBody .sla-note');
+  if (noteEl) { noteEl.textContent = lat.note; noteEl.className = `sla-note ${lat.cls}`; }
 
   // Show/hide violation banner without recreating it
   const banner = document.querySelector('#assuranceBody .violation-banner');
@@ -1307,6 +1370,14 @@ function renderTabs() {
   }).join('');
 }
 
+// Tell the dashboard which intent this tab shows, so it sends that one's
+// live telemetry.
+function tellFocus() {
+  if (state.focused && ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({type: 'focus', intent_id: state.focused._id}));
+  }
+}
+
 async function switchFocus(intentId) {
   if (state.focused && state.focused._id === intentId) return;
   try {
@@ -1317,6 +1388,7 @@ async function switchFocus(intentId) {
     state.site     = data.site;
     state.telemetry = data.telemetry || [];
     state.events   = data.events || [];
+    tellFocus();
     renderAll();
   } catch(e) {
     console.error('switchFocus failed', e);
@@ -1344,30 +1416,42 @@ function syntaxHighlightPipeline(obj) {
     .replace(/:\s*(\d+(\.\d+)?)/g, ': <span class="num">$1</span>');
 }
 
-function showDiagnosis(evt) {
-  const overlay   = document.getElementById('diagnosisOverlay');
-  const pipeP     = document.getElementById('pipelinePhase');
-  const ahaP      = document.getElementById('ahaPhase');
+function showDiagnosis(evt, callouts) {
+  const overlay = document.getElementById('diagnosisOverlay');
+  const ahaP    = document.getElementById('ahaPhase');
+  const busy    = document.getElementById('diagResolving');
   overlay.classList.add('visible');
 
-  // Pipeline phase (only meaningful in eng mode)
-  const escapedPipeline = JSON.stringify(evt.pipeline, null, 2)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/&quot;/g, '"');
-  document.getElementById('pipelineCode').innerHTML =
-    syntaxHighlightPipeline(evt.pipeline);
+  // The query stays on screen beside its answer, in the same mongosh form
+  // as the Hero queries popup (web/showcase.js; the old highlighter until
+  // that script has loaded).
+  const code = document.getElementById('pipelineCode');
+  if (window.Showcase && Showcase.renderQuery) {
+    const r = Showcase.renderQuery({collection: 'ibn_knowledge_chunks', pipeline: evt.pipeline || [],
+                                    callouts: callouts || []});
+    code.innerHTML = r.html;
+    document.getElementById('pipelineLegend').innerHTML = r.legend;
+  } else {
+    code.innerHTML = syntaxHighlightPipeline(evt.pipeline);
+    document.getElementById('pipelineLegend').innerHTML = '';
+  }
+  document.getElementById('diagLevel').textContent = evt.filter_level ? `· ${evt.filter_level}` : '';
 
-  pipeP.classList.add('visible');
+  busy.style.display = '';
   ahaP.classList.remove('visible');
-
-  const pipelineDuration = (mode === 'exec') ? 100 : 2200;
-
   setTimeout(() => {
-    pipeP.classList.remove('visible');
+    busy.style.display = 'none';
     renderAhaCard(evt);
     ahaP.classList.add('visible');
-  }, pipelineDuration);
+  }, mode === 'exec' ? 100 : 900);
 }
+
+document.getElementById('diagToggle').onclick = () => {
+  const g = document.getElementById('diagGrid');
+  g.classList.toggle('show-query');
+  document.getElementById('diagToggle').textContent =
+    g.classList.contains('show-query') ? 'Hide the query' : 'Show the query';
+};
 
 function renderAhaCard(evt) {
   const matches = evt.matches || [];
@@ -1492,6 +1576,7 @@ function connect() {
     const msg = JSON.parse(evt.data);
 
     if (msg.type === 'snapshot') {
+      const shown = state.focused && state.focused._id;   // a reconnect keeps the tab
       state.intents = msg.intents || [];
       state.focused = msg.focused;
       state.plan    = msg.plan;
@@ -1502,6 +1587,13 @@ function connect() {
       state.autonomy = msg.autonomy || null;
       syncClock(msg.server_now);
       renderAll();
+      if (shown && state.focused && shown !== state.focused._id
+          && state.intents.some(i => i._id === shown)) {
+        state.focused = null;   // switchFocus skips the intent already in focus
+        switchFocus(shown);
+      } else {
+        tellFocus();
+      }
       return;
     }
 
@@ -1510,11 +1602,17 @@ function connect() {
       const isNew = idx < 0;
       if (idx >= 0) state.intents[idx] = msg.doc; else state.intents.unshift(msg.doc);
 
-      const newFocused = state.intents.slice().sort((a, b) =>
-        new Date(b.submitted_at || 0) - new Date(a.submitted_at || 0)
-      )[0];
+      // A new intent takes the focus (the flow follows it); an update to an
+      // existing one never moves it away from the tab the presenter picked.
+      let newFocused = state.focused && state.intents.find(i => i._id === state.focused._id);
+      if (!newFocused || isNew) {
+        newFocused = state.intents.slice().sort((a, b) =>
+          new Date(b.submitted_at || 0) - new Date(a.submitted_at || 0)
+        )[0];
+      }
       const focusChanged = !state.focused || newFocused._id !== state.focused._id;
       state.focused = newFocused;
+      if (focusChanged) tellFocus();
 
       if (msg.doc._id === state.focused._id) {
         state.site = msg.site || null;
@@ -1555,6 +1653,12 @@ function connect() {
       return;
     }
 
+    if (msg.type === 'slo') {
+      state.slo[msg.intent_id] = {...msg, at: Date.now()};
+      if (state.focused && msg.intent_id === state.focused._id) patchAssuranceTelemetry();
+      return;
+    }
+
     if (msg.type === 'rush') {
       state.rush[msg.intent_id] = {...(state.rush[msg.intent_id] || {}), ...msg};
       patchRush();
@@ -1565,6 +1669,7 @@ function connect() {
       state.incident[msg.doc.intent_id] = msg.doc;
       syncClock(msg.server_now);
       patchRush();
+      if (state.focused && msg.doc.intent_id === state.focused._id) patchAssuranceTelemetry();
       if (state.focused && msg.doc.intent_id === state.focused._id) renderHeal();
       return;
     }
@@ -1582,7 +1687,7 @@ function connect() {
       renderAssurance();
 
       if (msg.doc.kind === 'diagnose') {
-        showDiagnosis(msg.doc);
+        showDiagnosis(msg.doc, msg.callouts);
       }
       if (msg.doc.kind === 'recovery') {
         document.getElementById('diagnosisOverlay').classList.remove('visible');

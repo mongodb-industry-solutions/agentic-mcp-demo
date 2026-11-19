@@ -269,28 +269,42 @@
           $(".sc-meta").innerHTML = `${badge}<code>${esc(it.collection)}</code>`
             + (it.note || ran ? `<span>${esc(it.note || "")}${ran}</span>` : "");
           $(".sc-explain").innerHTML = `<p>${esc(it.caption || "")}</p>`
-            + (out.found.length ? `<ul class="sc-legend">${out.found.map((c) =>
-                `<li><span class="sc-mk">${MARKS[c.n] || c.n + 1}</span>${esc(c.label)}</li>`).join("")}</ul>` : "");
+            + legendHtml(out.found);
         }
         if (items.length) show(0);
       })
       .catch((e) => { $(".sc-code").innerHTML = `<span class="sc-empty">Could not load: ${esc(e.message)}</span>`; });
   }
 
+  function ensureStyle() {
+    if (document.getElementById("sc-style")) return;
+    const st = document.createElement("style");
+    st.id = "sc-style"; st.textContent = ":root{--sc-mono:'JetBrains Mono','SF Mono',Menlo,monospace}" + CSS;
+    document.head.appendChild(st);
+  }
+
+  function legendHtml(found) {
+    return found.length ? `<ul class="sc-legend">${found.map((c) =>
+      `<li><span class="sc-mk">${MARKS[c.n] || c.n + 1}</span>${esc(c.label)}</li>`).join("")}</ul>` : "";
+  }
+
   window.Showcase = {
     mount(o) {
       opts = { base: "", query: "", mode: "eng", ...o };
-      if (!document.getElementById("sc-style")) {
-        const st = document.createElement("style");
-        st.id = "sc-style"; st.textContent = ":root{--sc-mono:'JetBrains Mono','SF Mono',Menlo,monospace}" + CSS;
-        document.head.appendChild(st);
-      }
+      ensureStyle();
       [["model", "{ } Data model"], ["queries", "⚡ Hero queries"]].forEach(([kind, label]) => {
         const b = document.createElement("button");
         b.type = "button"; b.className = "sc-btn"; b.textContent = label;
         b.onclick = () => open(kind);
         o.container.appendChild(b);
       });
+    },
+    // A pipeline in mongosh form for another panel (the IBN diagnosis modal):
+    // {html, legend, text}; put `html` in a <pre class="sc-code">.
+    renderQuery({ collection, pipeline, callouts, op = "aggregate", options }) {
+      ensureStyle();
+      const out = render(queryLines({ collection, pipeline, op, options }), callouts);
+      return { html: out.html, legend: legendHtml(out.found), text: out.text };
     },
     _render: { queryLines, modelLines, render },   // for tests
   };
