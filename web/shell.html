@@ -430,6 +430,8 @@
      title="Open the IBN dashboard bound to this session">📊 IBN dashboard</a>
   <a class="dash-link" id="dtwDashLink" target="_blank" rel="noopener"
      title="Open the DTW dashboard bound to this session">📊 DTW dashboard</a>
+  <a class="dash-link" id="netDashLink" target="_blank" rel="noopener" style="display:none"
+     title="Open the network map (Green Autonomous Networks, night shift)">🗺 Network map</a>
   <!-- rel="opener" (not noopener): the help page uses window.opener to
        hand focus back to this tab instead of opening a second shell. -->
   <a class="dash-link help-link" href="help" target="_blank" rel="opener"
@@ -592,6 +594,11 @@ function connect() {
         }
         document.getElementById('ibnDashLink').href = ibn;
         document.getElementById('dtwDashLink').href = dtw;
+        if (msg.net_url) {                               // the network map (Agent Engine shell only)
+          const net = document.getElementById('netDashLink');
+          net.href = msg.net_url.replace(/\/$/, '') + '/' + q;
+          net.style.display = '';
+        }
       }
       document.getElementById('bannerHost').textContent    = msg.host || '—';
       document.getElementById('bannerIndexes').textContent = msg.indexes.join(', ') || 'none';

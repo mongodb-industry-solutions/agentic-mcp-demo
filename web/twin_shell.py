@@ -834,6 +834,7 @@ async def ws_endpoint(ws: WebSocket):
                     "history": history,
                     "ibn_url": os.environ.get("TWIN_IBN_DASHBOARD_URL", "http://localhost:8160"),
                     "dtw_url": os.environ.get("TWIN_DTW_DASHBOARD_URL", "http://localhost:8180"),
+                    "net_url": os.environ.get("TWIN_NET_DASHBOARD_URL", "http://localhost:8190"),
                 })
                 for card in cards:
                     await _send(ws, {"type": "approval", "review": card})

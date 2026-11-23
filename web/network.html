@@ -1,0 +1,813 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Night Shift Network Map</title>
+<!--
+  The network dashboard (web/network_dashboard.py): Green Autonomous Networks,
+  "night shift" scenario, first version. The map is drawn from the documents
+  in Atlas (seed/ran_seed.py, web/ran_network.py); the night is simulated in
+  this page from them. Map: MapLibre GL JS + deck.gl on the OpenFreeMap dark
+  style (no API key). Every value is synthetic; sites sit near real landmarks
+  but are not Verizon's network.
+-->
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/deck.gl@9.0.38/dist.min.js"></script>
+<style>
+  :root {
+    --bg: #001E2B; --panel: #061F2B; --panel2: #0B2A38; --line: #1D3A47;
+    --text: #F2F7F5; --mute: #9FB4BE; --green: #00ED64; --amber: #FFC010;
+    --red: #FF5A5F; --blue: #6EA8FE; --violet: #B98CFF;
+    --mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+    --sans: Inter, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 var(--sans); }
+  #app { display: grid; grid-template-columns: 1fr 380px; grid-template-rows: auto 1fr auto; height: 100vh; }
+  header { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; padding: 10px 16px;
+           border-bottom: 1px solid var(--line); background: #021925; }
+  header .brand { font-weight: 700; color: var(--green); letter-spacing: .02em; }
+  header .title { font-weight: 600; }
+  header .sub { color: var(--mute); }
+  header .sp { flex: 1; }
+  select, .btn { background: transparent; color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+                 padding: 5px 9px; font: 12px var(--sans); cursor: pointer; }
+  .btn.g { border-color: rgba(0,237,100,.5); background: rgba(0,237,100,.08); font-family: var(--mono); font-weight: 600; }
+  .btn:hover { border-color: var(--green); }
+  .badge { font: 700 10px/1 var(--mono); padding: 4px 7px; border-radius: 999px; border: 1px solid var(--amber); color: var(--amber); }
+  #map { position: relative; min-height: 0; }
+  #mapEl { position: absolute; inset: 0; }
+  .legend { position: absolute; left: 12px; top: 12px; background: #021925; border: 1px solid var(--line);
+            border-radius: 8px; padding: 9px 11px; font-size: 11.5px; color: var(--mute); max-width: 340px; z-index: 2; }
+  .maplibregl-marker { z-index: 3; }   /* labels above the deck.gl canvas */
+  .site-label { font: 600 11.5px var(--sans); color: #F2F7F5; text-shadow: 0 0 3px #001E2B, 0 0 6px #001E2B;
+                white-space: nowrap; transform: translateY(14px); pointer-events: none; }
+  .alert-pin { font: 600 12px var(--sans); color: #1a1200; background: var(--amber); border-radius: 6px; padding: 4px 8px;
+               white-space: nowrap; box-shadow: 0 0 0 0 rgba(255,192,16,.7); animation: pulse 1.6s infinite; transform: translateY(-34px); }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,192,16,.7); } 70% { box-shadow: 0 0 0 16px rgba(255,192,16,0); } 100% { box-shadow: 0 0 0 0 rgba(255,192,16,0); } }
+  .legend b { color: var(--text); }
+  .legend .row { display: flex; align-items: center; gap: 7px; margin: 3px 0; }
+  .sw { width: 14px; height: 10px; border-radius: 2px; display: inline-block; }
+  .toast { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); max-width: 640px;
+           background: rgba(2,25,37,.95); border: 1px solid var(--amber); color: var(--text); border-radius: 8px;
+           padding: 9px 13px; font-size: 12.5px; display: none; box-shadow: 0 6px 24px rgba(0,0,0,.5); }
+  .toast b { color: var(--amber); }
+  aside { border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto; padding: 12px 14px; }
+  .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .kpi { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .kpi .l { color: var(--mute); font-size: 11px; }
+  .kpi .v { font: 700 19px/1.2 var(--mono); }
+  .kpi .v small { font-size: 11px; color: var(--mute); font-weight: 500; }
+  .kpi.big { grid-column: 1 / -1; }
+  .ok { color: var(--green); } .warn { color: var(--amber); } .bad { color: var(--red); }
+  h3 { margin: 14px 0 6px; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--mute); }
+  #chart { width: 100%; height: 130px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; }
+  .intent { background: rgba(0,237,100,.06); border: 1px solid rgba(0,237,100,.35); border-radius: 8px; padding: 8px 10px; }
+  .intent b { color: var(--green); }
+  #log { list-style: none; margin: 0; padding: 0; }
+  #log li { border-bottom: 1px solid var(--line); padding: 6px 0; font-size: 12px; }
+  #log li .t { font-family: var(--mono); color: var(--mute); margin-right: 6px; }
+  #log li .who { font: 700 10px var(--mono); padding: 2px 5px; border-radius: 4px; margin-right: 5px; }
+  .who.agent { background: rgba(0,237,100,.15); color: var(--green); }
+  .who.reflex { background: rgba(255,192,16,.15); color: var(--amber); }
+  .who.ext { background: rgba(110,168,254,.15); color: var(--blue); }
+  .who.net { background: rgba(185,140,255,.15); color: var(--violet); }
+  #log li a { color: var(--green); cursor: pointer; text-decoration: underline; font-size: 11px; margin-left: 4px; }
+  footer { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 8px 16px;
+           border-top: 1px solid var(--line); background: #021925; }
+  #clock { font: 700 18px var(--mono); min-width: 62px; }
+  #scrub { flex: 1; accent-color: var(--green); }
+  #marks { position: relative; height: 14px; }
+  .phase { color: var(--mute); font-size: 12px; min-width: 260px; text-align: right; }
+  /* popups */
+  .ov { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: none; align-items: center; justify-content: center;
+        z-index: 50; padding: 16px; }
+  .ov.on { display: flex; }
+  .modal { width: min(1120px, 100%); height: min(86vh, 860px); background: #07131A; border: 1px solid var(--line);
+           border-radius: 12px; display: grid; grid-template-columns: 250px minmax(0,1fr); grid-template-rows: auto minmax(0,1fr); overflow: hidden; }
+  .mh { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 11px 15px; border-bottom: 1px solid var(--line); }
+  .mh h2 { margin: 0; font-size: 15px; } .mh .sp { flex: 1; }
+  .tabs { overflow-y: auto; border-right: 1px solid var(--line); padding: 8px; background: #061118; }
+  .tab { display: block; width: 100%; text-align: left; background: none; border: 0; border-left: 3px solid transparent;
+         color: #C8D3CC; padding: 8px 10px; border-radius: 4px; cursor: pointer; font: inherit; }
+  .tab small { display: block; color: #7D8C83; font-size: 11px; }
+  .tab.on { background: #0F2230; border-left-color: var(--green); color: #fff; }
+  .body { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .meta { padding: 10px 15px; border-bottom: 1px solid var(--line); color: var(--mute); font-size: 12px; }
+  .meta b { color: var(--text); }
+  pre.code { flex: 1; margin: 0; overflow: auto; padding: 13px 15px; background: #040B10; font: 12.3px/1.6 var(--mono); white-space: pre; }
+  .explain { padding: 11px 15px; border-top: 1px solid var(--line); background: #061118; color: #D5DDD8; }
+  .k { color: #74DEFF; } .s { color: #00ED64; } .n { color: #FFD166; } .b { color: #FF7AC6; }
+  .op { color: #C792FF; font-weight: 700; } .path { color: #FF9F5A; } .d { color: #8AB4FF; } .c { color: #5F6E66; font-style: italic; }
+  .mk { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; border-radius: 9px;
+        background: #FFD166; color: #111; font: 700 11px var(--mono); margin-left: 8px; padding: 0 4px; }
+  .hl { background: rgba(255,209,102,.07); display: inline-block; min-width: 100%; }
+  .why { padding: 14px 18px; overflow: auto; grid-column: 1 / -1; }
+  .why table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .why th { text-align: left; background: var(--green); color: var(--bg); padding: 7px 9px; }
+  .why td { padding: 7px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .why tr:nth-child(even) td { background: #0A1C26; }
+  .why .lead { font-size: 15px; margin: 0 0 12px; }
+  .why .alt { margin-top: 14px; background: rgba(0,237,100,.06); border: 1px solid rgba(0,237,100,.35); border-radius: 8px; padding: 10px 12px; }
+  @media (max-width: 900px) { #app { grid-template-columns: 1fr; grid-template-rows: auto 55vh auto auto; }
+    aside { border-left: 0; border-top: 1px solid var(--line); } .modal { grid-template-columns: 1fr; } .tabs { display: flex; overflow-x: auto; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <span class="brand">◆ MongoDB × Verizon</span>
+    <span class="title">Green Autonomous Networks</span>
+    <span class="sub">Midtown Manhattan · night shift</span>
+    <span class="badge">SIMULATED NETWORK</span>
+    <span class="sp"></span>
+    <select id="scenario"><option>Scenario: Night shift</option><option disabled>Concert night (next)</option></select>
+    <button class="btn g" id="bData">{ } Data model</button>
+    <button class="btn g" id="bHero">⚡ Hero queries</button>
+    <button class="btn g" id="bWhy">Why MongoDB</button>
+  </header>
+
+  <div id="map">
+    <div id="mapEl"></div>
+    <div class="toast" id="toast"></div>
+    <div class="legend">
+      <div><b>Each site: 3 sectors, 2 layers</b></div>
+      <div class="row"><span class="sw" style="background:rgba(0,237,100,.35)"></span>Coverage layer (700 MHz LTE): always on</div>
+      <div class="row"><span class="sw" style="background:rgba(0,237,100,.9)"></span>Capacity layer (C-band 5G, 64 antennas): can sleep</div>
+      <div class="row"><span class="sw" style="background:#00ED64"></span><span class="sw" style="background:#FFC010"></span><span class="sw" style="background:#FF5A5F"></span>load: &lt;50% · 50–75% · &gt;75%</div>
+      <div class="row"><span class="sw" style="border:1px solid #9FB4BE"></span>capacity carrier asleep (grey outline)</div>
+      <div class="row"><span class="sw" style="border-radius:50%;border:1px solid #00ED64;background:rgba(0,237,100,.45)"></span>small cell on a lamp post (5G, short range): can sleep</div>
+      <div class="row"><span class="sw" style="background:#6EA8FE"></span><span class="sw" style="background:#00ED64"></span>mast height = site power now; green = saving</div>
+      <div class="row"><span class="sw" style="background:linear-gradient(90deg,#3b0764,#f97316)"></span>people (connected devices, anonymous counts)</div>
+      <div style="margin-top:4px">Click a sector to see its data.</div>
+    </div>
+  </div>
+
+  <aside>
+    <div class="intent"><b>Energy intent EI-NYC-001</b> · Reduce Midtown RAN energy by 15% between 20:00 and 06:00.
+      Never break a QoS promise; the coverage layer never sleeps.</div>
+    <h3>Right now</h3>
+    <div class="kpis">
+      <div class="kpi"><div class="l">Network power</div><div class="v" id="kPow">–</div></div>
+      <div class="kpi"><div class="l">vs. always-on</div><div class="v ok" id="kSave">–</div></div>
+      <div class="kpi"><div class="l">Saved since 18:00</div><div class="v" id="kKwh">–</div></div>
+      <div class="kpi"><div class="l">CO₂ avoided · cost saved</div><div class="v" id="kCo2">–</div></div>
+      <div class="kpi"><div class="l">Capacity carriers asleep</div><div class="v" id="kSleep">–</div></div>
+      <div class="kpi"><div class="l">QoS promises kept</div><div class="v ok" id="kQos">–</div></div>
+      <div class="kpi big"><div class="l">Energy intent progress since 20:00 (target 15%)</div><div class="v" id="kIntent">–</div></div>
+      <div class="kpi big"><div class="l">Grid (NYISO Zone J, illustrative)</div><div class="v" id="kGrid" style="font-size:14px">–</div></div>
+    </div>
+    <h3>Power tonight vs. always-on</h3>
+    <svg id="chart" viewBox="0 0 360 130" preserveAspectRatio="none"></svg>
+    <h3>Decisions</h3>
+    <ul id="log"></ul>
+  </aside>
+
+  <footer>
+    <button class="btn" id="play">▶ Play</button>
+    <select id="speed"><option value="1">1 min/s</option><option value="3" selected>3 min/s</option><option value="10">10 min/s</option></select>
+    <span id="clock">18:00</span>
+    <input type="range" id="scrub" min="0" max="539" value="0">
+    <span class="phase" id="phase">–</span>
+  </footer>
+</div>
+
+<div class="ov" id="ov">
+  <div class="modal" id="modal">
+    <div class="mh"><h2 id="mTitle"></h2><span class="sp"></span><button class="btn" id="mCopy">Copy</button><button class="btn" id="mClose">✕</button></div>
+    <nav class="tabs" id="mTabs"></nav>
+    <div class="body"><div class="meta" id="mMeta"></div><pre class="code" id="mCode"></pre><div class="explain" id="mExplain"></div></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+(async () => {
+// ═══ The network, from the documents in Atlas ══════════════════════════════
+const PREFIX = location.pathname.replace(/\/+$/, "");
+let MODEL;
+try {
+  const r = await fetch(`${PREFIX}/api/network/model${location.search}`);
+  MODEL = await r.json();
+  if (!r.ok) throw new Error(MODEL.error || `HTTP ${r.status}`);
+} catch (e) {
+  document.getElementById("map").innerHTML =
+    `<div style="padding:40px;color:#F2F7F5">The network data is not available: ${String(e.message).replace(/</g, "&lt;")}</div>`;
+  return;
+}
+const DOCS = MODEL.docs, SIM = MODEL.sim;
+const START = 18 * 60, STEPS = SIM.steps, DATE = SIM.date;
+const AREA = SIM.area, POWER = SIM.power, DISRUPTION = SIM.disruption, GRID = SIM.grid;
+const SECTORS = ["A", "B", "C"];
+const CELLDOCS = Object.fromEntries(DOCS.ran_cells.map(c => [c._id, c]));
+const POL = DOCS.energy_policy[0];
+const POLICY = { sleep_fcst_lt: POL.sleep_if.forecast_load_next_hour_lt_pct, cov_after_offload_lt: POL.sleep_if.coverage_after_offload_lt_pct,
+                 wake_cov_gt: POL.wake_if.coverage_load_gt_pct, wake_intervals: POL.wake_if.for_minutes, min_awake_min: POL.min_awake_min,
+                 max_asleep_pct: POL.max_capacity_asleep_pct, offload_factor: POL.offload_factor };
+// carriers a service promise forbids to sleep (e.g. an enterprise slice)
+const BLOCKED = new Set(DOCS.service_commitments.flatMap(p => p.cell_ids || []));
+const SITES = DOCS.ran_sites.map(d => ({ id: d._id, name: d.name, lat: d.location.coordinates[1], lng: d.location.coordinates[0],
+                                         area: d.area_type, doc: d }));
+// one seeded random source for the people dots, so every reload tells the same story
+let seed = 7;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const cells = [];                               // one entry per sector: coverage + capacity carrier
+for (const s of SITES) {
+  s.sectors = s.doc.sectors.map(sd => {
+    const capDoc = CELLDOCS[`${s.id}-N77-${sd.sector}`];
+    const c = { site: s, sec: sd.sector, az: sd.azimuth_deg, f: capDoc.load_profile.load_factor, amp: capDoc.surge_pct || 0,
+                cov: `${s.id}-B13-${sd.sector}`, cap: capDoc._id };
+    cells.push(c); return c;
+  });
+}
+const SMALLS = DOCS.ran_cells.filter(c => c.kind === "small_cell").sort((a, b) => a._id < b._id ? -1 : 1).map(c => ({
+  id: c._id.replace(/-N77$/, ""), area_name: c.area, lat: c.location.coordinates[1], lng: c.location.coordinates[0],
+  area: c.load_profile.area_type, amp: c.surge_pct || 0, f: c.load_profile.load_factor, doc: c,
+  host: cells.find(x => x.cap === c.isESCoveredBy[1]) }));
+const hourIdx = (t) => Math.min(9, Math.floor(t / 60));
+const lerpCurve = (arr, t) => { const h = t / 60, i = Math.min(8, Math.floor(h)); return arr[i] + (arr[i + 1] - arr[i]) * (h - i); };
+const ramp = (amp, t) => { const d = DISRUPTION; if (!amp || t < d.start || t > d.endAt) return 0;
+  return amp * (t < d.peakAt ? (t - d.start) / (d.peakAt - d.start) : t < d.holdTo ? 1 : 1 - (t - d.holdTo) / (d.endAt - d.holdTo)); };
+function smallDemand(sc, t) { return Math.min(100, lerpCurve(AREA[sc.area], t) * sc.f + ramp(sc.amp, t)); }
+function baseDemand(c, t) { return lerpCurve(AREA[c.site.area], t) * c.f; }
+function surge(c, t) { return ramp(c.amp, t); }
+const nextDay = (d) => new Date(Date.parse(d + "T12:00:00Z") + 864e5).toISOString().slice(0, 10);
+const fmt = (t) => { const m = (START + t) % 1440; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
+const iso = (t) => { const m = START + t, day = m >= 1440 ? nextDay(DATE) : DATE, mm = m % 1440;
+  return `${day}T${String(Math.floor(mm / 60)).padStart(2, "0")}:${String(mm % 60).padStart(2, "0")}:00-05:00`; };
+
+// ═══ Run the whole night once: states, KPIs, decisions ═════════════════════
+const frames = [], log = [], actions = [];
+let LESSON_T = 0;
+(function simulate() {
+  const st = new Map(cells.map(c => [c, { state: "active", since: 0, over: 0 }]));
+  const sst = new Map(SMALLS.map(sc => [sc, { state: "active", since: 0, over: 0 }]));
+  let kwh = 0, kwhBase = 0, co2 = 0, usd = 0, sectorMin = 0, kept = 0;   // running sums
+  for (let t = 0; t < STEPS; t++) {
+    const fr = { t, cells: [], smalls: [], sitesW: {}, baseW: 0, totalW: 0 };
+    // agent, small cells: same 15-minute check; their traffic moves to the macro sector they sit in
+    if (t % 15 === 0 && t >= 120) {
+      const slept = [];
+      for (const sc of SMALLS) {
+        const s = sst.get(sc); if (s.state !== "active" || (s.since > 0 && t - s.since < POLICY.min_awake_min)) continue;
+        let fc = 0; for (let k = 0; k <= 60; k += 15) fc = Math.max(fc, lerpCurve(AREA[sc.area], Math.min(t + k, STEPS - 1)) * sc.f);
+        if (fc < POLICY.sleep_fcst_lt && smallDemand(sc, t) < POLICY.sleep_fcst_lt) { s.state = "sleep"; s.since = t; slept.push(sc); }
+      }
+      if (slept.length) {
+        const id = `EA-${String(actions.length + 1).padStart(4, "0")}`;
+        actions.push({ id, t, kind: "sleep", site: slept[0].host.site, secs: [], smalls: slept.map(x => x.id), fc: 0, cov: 0,
+                       kw: slept.length * (POWER.small.idle - POWER.small.sleep) / 1000 });
+        log.push({ t, who: "agent", id, text: `${slept.length} small cell${slept.length > 1 ? "s" : ""} to sleep (${[...new Set(slept.map(x => x.area_name))].join(", ")}). ` +
+          `Their few users move to the macro sector they sit in.` });
+      }
+    }
+    // small cells this minute: demand, and where an asleep one's traffic lands
+    const toCov = new Map(), toCap = new Map();
+    for (const sc of SMALLS) {
+      const s = sst.get(sc), d = smallDemand(sc, t);
+      if (s.state === "active") continue;
+      const hostActive = st.get(sc.host).state === "active";
+      (hostActive ? toCap : toCov).set(sc.host, ((hostActive ? toCap : toCov).get(sc.host) || 0) + (hostActive ? 0.5 : 0.8) * d);
+    }
+    // agent: every 15 minutes (the PM granularity), deliberate sleep decisions
+    if (t % 15 === 0 && t >= 120) {
+      const asleep = cells.filter(c => st.get(c).state === "sleep").length;
+      let budget = Math.floor(cells.length * POLICY.max_asleep_pct / 100) - asleep;
+      const bySite = {};
+      for (const c of cells) {
+        const s = st.get(c); if (s.state !== "active" || budget <= 0 || BLOCKED.has(c.cap)) continue;
+        if (t - s.since < POLICY.min_awake_min && s.since > 0) continue;
+        let fc = 0; for (let k = 0; k <= 60; k += 15) fc = Math.max(fc, baseDemand(c, Math.min(t + k, STEPS - 1)));
+        const now = baseDemand(c, t) + surge(c, t);
+        const covAfter = 10 + 0.15 * fc + POLICY.offload_factor * fc;
+        if (fc < POLICY.sleep_fcst_lt && now < POLICY.sleep_fcst_lt && covAfter < POLICY.cov_after_offload_lt) {
+          s.state = "sleep"; s.since = t; budget--;
+          (bySite[c.site.id] ||= { site: c.site, secs: [], fc: 0, cov: 0 });
+          bySite[c.site.id].secs.push(c.sec); bySite[c.site.id].fc = Math.max(bySite[c.site.id].fc, fc);
+          bySite[c.site.id].cov = Math.max(bySite[c.site.id].cov, covAfter);
+        }
+      }
+      const groups = Object.values(bySite);
+      let first = null, n = 0, kw = 0, fcMax = 0, covMax = 0;
+      for (const g of groups) {
+        const saved = g.secs.length * (POWER.cap.idle - POWER.cap.sleep + POWER.cap.perPct * g.fc * 0.5) / 1000;
+        const id = `EA-${String(actions.length + 1).padStart(4, "0")}`;
+        actions.push({ id, t, kind: "sleep", site: g.site, secs: g.secs, fc: g.fc, cov: g.cov, kw: saved });
+        first ||= id; n += g.secs.length; kw += saved; fcMax = Math.max(fcMax, g.fc); covMax = Math.max(covMax, g.cov);
+      }
+      if (n) {   // one log line per 15-minute decision; the evidence stays per site
+        const names = groups.map(g => g.site.name);
+        const list = names.length > 3 ? `${names.slice(0, 3).join(", ")} +${names.length - 3}` : names.join(", ");
+        log.push({ t, who: "agent", id: first, text: `${n} capacity carrier${n > 1 ? "s" : ""} to sleep at ${list}. Forecast ≤ ${Math.round(fcMax)}% load next hour; ` +
+          `coverage after offload ≤ ${Math.round(covMax)}%; no promise blocks it. Saves ${kw.toFixed(1)} kW.` });
+      }
+    }
+    if (t === DISRUPTION.start) log.push({ t, who: "ext", text: "MTA service alert (GTFS-realtime): A C E trains suspended between 34 St–Penn Station and 59 St–Columbus Circle. Crowds leave the station. (Fictional incident.)" });
+    let asleepNow = 0;
+    for (const c of cells) {
+      const s = st.get(c), d = Math.min(100, baseDemand(c, t) + surge(c, t));
+      let cov, cap;
+      const xCov = toCov.get(c) || 0, xCap = toCap.get(c) || 0;
+      if (s.state === "sleep") { cov = Math.min(100, 10 + 0.15 * d + POLICY.offload_factor * d + xCov); cap = 0; }
+      else if (s.state === "waking") { cov = Math.min(100, 10 + 0.15 * d + POLICY.offload_factor * d + xCov); cap = 0; }
+      else { cov = Math.min(100, 10 + 0.15 * d + xCov); cap = Math.min(100, d + xCap); }
+      // reflex: deterministic, per minute, no LLM in the loop
+      if (s.state === "sleep") {
+        s.over = cov > POLICY.wake_cov_gt ? s.over + 1 : 0;
+        if (s.over >= POLICY.wake_intervals) {
+          s.state = "waking"; s.since = t; s.over = 0; s.peak = cov;
+          const id = `EA-${String(actions.length + 1).padStart(4, "0")}`;
+          actions.push({ id, t, kind: "wake", site: c.site, secs: [c.sec], cov, trigger: "reflex" });
+          log.push({ t, who: "reflex", id, text: `${c.site.name} sector ${c.sec}: coverage layer at ${Math.round(cov)}% for ${POLICY.wake_intervals} min → capacity carrier ${c.sec} waking (60 s).` });
+        }
+      } else if (s.state === "waking") {
+        s.peak = Math.max(s.peak || 0, cov);
+        if (t - s.since >= 1) {
+          s.state = "active"; s.since = t;
+          log.push({ t, who: "net", text: `${c.site.name} sector ${c.sec}: capacity carrier back. Coverage layer peaked at ${Math.round(s.peak)}%, now ${Math.round(10 + 0.15 * d)}%. Every QoS promise kept.` });
+          cov = 10 + 0.15 * d; cap = d;
+        }
+      }
+      if (s.state === "sleep") asleepNow++;
+      const users = Math.round(d * 2.2 + 6);
+      const covW = POWER.cov.idle + POWER.cov.perPct * cov;
+      const capW = s.state === "sleep" ? POWER.cap.sleep : s.state === "waking" ? POWER.cap.idle : POWER.cap.idle + POWER.cap.perPct * cap;
+      const baseCapW = POWER.cap.idle + POWER.cap.perPct * d, baseCovW = POWER.cov.idle + POWER.cov.perPct * (10 + 0.15 * d);
+      fr.cells.push({ c, state: s.state, cov, cap, d, users, covW, capW });
+      fr.sitesW[c.site.id] = (fr.sitesW[c.site.id] || POWER.site_overhead) + covW + capW;
+      fr.baseW += baseCovW + baseCapW;
+      sectorMin++; if (cov < 95 && cap < 95) kept++;
+    }
+    // small cells: reflex wake when the macro sector they rely on fills up; power and QoS
+    let smallW = 0, smallsAsleep = 0;
+    for (const sc of SMALLS) {
+      const s = sst.get(sc), d = smallDemand(sc, t), host = fr.cells.find(x => x.c === sc.host);
+      if (s.state === "sleep") {
+        s.over = (host.cov > POLICY.wake_cov_gt || host.cap > 75) ? s.over + 1 : 0;
+        if (s.over >= POLICY.wake_intervals) {
+          s.state = "waking"; s.since = t; s.over = 0;
+          const id = `EA-${String(actions.length + 1).padStart(4, "0")}`;
+          actions.push({ id, t, kind: "wake", site: sc.host.site, secs: [], smalls: [sc.id], cov: Math.max(host.cov, host.cap), trigger: "reflex" });
+          log.push({ t, who: "reflex", id, text: `Small cell ${sc.id.replace("NYC-MTN-", "")} (${sc.area_name}): its macro sector at ${Math.round(Math.max(host.cov, host.cap))}% for ${POLICY.wake_intervals} min → waking (20 s).` });
+        }
+      } else if (s.state === "waking" && t - s.since >= 1) { s.state = "active"; s.since = t; }
+      if (s.state === "sleep") smallsAsleep++;
+      const w = s.state === "sleep" ? POWER.small.sleep : s.state === "waking" ? POWER.small.idle : POWER.small.idle + POWER.small.perPct * d;
+      smallW += w; fr.baseW += POWER.small.idle + POWER.small.perPct * d;
+      fr.smalls.push({ sc, state: s.state, d: s.state === "active" ? d : 0, users: Math.round(d * 0.8) });
+      sectorMin++; if (d < 95 || s.state === "active") kept++;
+    }
+    fr.baseW += SITES.length * POWER.site_overhead;
+    fr.totalW = Object.values(fr.sitesW).reduce((a, b) => a + b, 0) + smallW;
+    fr.smallsAsleep = smallsAsleep;
+    const h = hourIdx(t);
+    kwh += fr.totalW / 60000; kwhBase += fr.baseW / 60000;
+    const minuteSaved = (fr.baseW - fr.totalW) / 60000;            // kWh saved in this minute
+    co2 += minuteSaved * GRID.carbon[h] / 1000; usd += minuteSaved * GRID.price[h] / 1000;
+    const savedKwh = kwhBase - kwh;
+    Object.assign(fr, { asleep: asleepNow, savedKwh, co2, usd, qos: kept / sectorMin, price: GRID.price[h], carbon: GRID.carbon[h] });
+    frames.push(fr);
+  }
+  // after the surge the agent's own 15-minute check puts the woken carriers back to sleep;
+  // its first such decision at Penn Station is where it writes the lesson
+  const resleep = actions.find(a => a.kind === "sleep" && a.site.id === "NYC-MTN-0412" && a.t > DISRUPTION.start);
+  LESSON_T = resleep ? resleep.t : DISRUPTION.endAt + 15;
+  log.push({ t: LESSON_T, who: "agent", id: "LESSON", text: "Lesson stored: transit disruption at 34 St–Penn after midnight → keep one capacity carrier awake on the 8th Ave side until 02:00. Proposed as a canary for LA Union Station." });
+  log.sort((a, b) => a.t - b.t);
+})();
+
+// ═══ Map ═════════════════════════════════════════════════════════════════════
+const map = new maplibregl.Map({ container: "mapEl", style: "https://tiles.openfreemap.org/styles/dark",
+  center: [-73.9905, 40.7508], zoom: 14.05, pitch: 48, bearing: -29, attributionControl: { compact: true } });
+const overlay = new deck.MapboxOverlay({ interleaved: false, layers: [], useDevicePixels: 1 });
+map.addControl(overlay);
+map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+
+function wedge(lat, lng, az, r, spread = 54) {
+  const pts = [[lng, lat]], mLat = 111320, mLng = 111320 * Math.cos(lat * Math.PI / 180);
+  for (let a = az - spread; a <= az + spread; a += 6) {
+    const rad = a * Math.PI / 180;
+    pts.push([lng + Math.sin(rad) * r / mLng, lat + Math.cos(rad) * r / mLat]);
+  }
+  pts.push([lng, lat]); return pts;
+}
+const loadColor = (p, a) => p < 50 ? [0, 237, 100, a] : p < 75 ? [255, 192, 16, a] : [255, 90, 95, a];
+const people = [];   // stable anonymous positions per sector, shown in proportion to connected devices
+seed = 99;
+for (const c of cells) {
+  c.pts = [];
+  for (let i = 0; i < 260; i++) {
+    const a = (c.az - 50 + rnd() * 100) * Math.PI / 180, r = 30 + rnd() * 330;
+    const mLat = 111320, mLng = 111320 * Math.cos(c.site.lat * Math.PI / 180);
+    c.pts.push([c.site.lng + Math.sin(a) * r / mLng, c.site.lat + Math.cos(a) * r / mLat]);
+  }
+}
+let selected = cells.find(c => c.cap === "NYC-MTN-0412-N77-B") || cells[0];
+
+// An annular slice of a sector, from r0 to r1 metres.
+function band(lat, lng, az, r0, r1, spread) {
+  const mLat = 111320, mLng = 111320 * Math.cos(lat * Math.PI / 180), out = [], inn = [];
+  for (let a = az - spread; a <= az + spread + 0.01; a += 6) {
+    const rad = a * Math.PI / 180, sx = Math.sin(rad), cy = Math.cos(rad);
+    out.push([lng + sx * r1 / mLng, lat + cy * r1 / mLat]);
+    inn.push([lng + sx * r0 / mLng, lat + cy * r0 / mLat]);
+  }
+  return r0 > 0 ? [...out, ...inn.reverse(), out[0]] : [[lng, lat], ...out, [lng, lat]];
+}
+// Coverage fades towards its edge: three bands, lighter outwards.
+const BANDS = [[0, 0.55, 1], [0.55, 0.8, 0.62], [0.8, 1, 0.3]];
+// Sector shapes never change: compute them once.
+for (const c of cells) {
+  c.covBands = BANDS.map(([a, b, k]) => ({ poly: band(c.site.lat, c.site.lng, c.az, 430 * a, 430 * b, 58), k }));
+  c.capBands = BANDS.map(([a, b, k]) => ({ poly: band(c.site.lat, c.site.lng, c.az, 210 * a, 210 * b, 42), k }));
+  c.capPoly = wedge(c.site.lat, c.site.lng, c.az, 210, 42);
+}
+// Layer data per sim minute, built once and reused (stable references let
+// deck.gl skip re-uploading and re-aggregating unchanged data).
+const layerData = new Map();
+function dataFor(t) {
+  if (layerData.has(t)) return layerData.get(t);
+  const fr = frames[t], cov = [], cap = [], asleep = [], heat = [];
+  for (const x of fr.cells) {
+    const { c } = x;
+    for (const b of c.covBands) cov.push({ poly: b.poly, color: loadColor(x.cov, Math.round(80 * b.k)), x });
+    if (x.state === "active") for (const b of c.capBands) cap.push({ poly: b.poly, color: loadColor(x.cap, Math.round(225 * b.k)), x });
+    else asleep.push({ poly: c.capPoly, x, waking: x.state === "waking" });
+    const n = Math.min(c.pts.length, Math.round(x.users));
+    for (let i = 0; i < n; i++) heat.push(c.pts[i]);
+  }
+  const sites = SITES.map(s => {
+    const own = fr.cells.filter(x => x.c.site === s);
+    const base = POWER.site_overhead + own.reduce((a, x) => a + POWER.cov.idle + POWER.cov.perPct * (10 + 0.15 * x.d)
+                                                         + POWER.cap.idle + POWER.cap.perPct * x.d, 0);
+    return { s, w: fr.sitesW[s.id], saving: fr.sitesW[s.id] < base * 0.9 };
+  });
+  const smalls = fr.smalls;
+  const d = { cov, cap, asleep, heat, sites, smalls,
+              waking: asleep.some(a => a.waking) || smalls.some(s => s.state === "waking") };
+  if (layerData.size > 60) layerData.delete(layerData.keys().next().value);
+  layerData.set(t, d);
+  return d;
+}
+let pulse = 0;
+function render(t) {
+  const d = dataFor(t);
+  overlay.setProps({ layers: [
+    new deck.HeatmapLayer({ id: "people", data: d.heat, getPosition: p => p, getWeight: 1, radiusPixels: 30, intensity: 1.5,
+      threshold: 0.06, colorRange: [[59,7,100],[109,40,217],[217,70,239],[244,114,182],[249,115,22],[253,186,116]], opacity: 0.55 }),
+    new deck.PolygonLayer({ id: "coverage", data: d.cov, getPolygon: p => p.poly, getFillColor: p => p.color,
+      stroked: false, pickable: true }),
+    new deck.PolygonLayer({ id: "capacity", data: d.cap, getPolygon: p => p.poly, getFillColor: p => p.color,
+      stroked: false, pickable: true }),
+    new deck.PolygonLayer({ id: "asleep", data: d.asleep, getPolygon: p => p.poly, filled: true,
+      getFillColor: p => p.waking ? [255, 192, 16, 60 + 140 * pulse] : [159, 180, 190, 18],
+      getLineColor: p => p.waking ? [255, 192, 16, 255] : [159, 180, 190, 200], lineWidthMinPixels: 1.4, pickable: true,
+      updateTriggers: { getFillColor: pulse } }),
+    // small cells: a short-range disc around a lamp-post radio
+    new deck.ScatterplotLayer({ id: "smallcells", data: d.smalls, getPosition: p => [p.sc.lng, p.sc.lat], radiusUnits: "meters",
+      getRadius: 80, stroked: true, filled: true, lineWidthMinPixels: 1.3, pickable: false,
+      getFillColor: p => p.state === "active" ? loadColor(p.d, 120) : p.state === "waking" ? [255, 192, 16, 60 + 140 * pulse] : [159, 180, 190, 14],
+      getLineColor: p => p.state === "active" ? loadColor(p.d, 230) : p.state === "waking" ? [255, 192, 16, 255] : [159, 180, 190, 190],
+      updateTriggers: { getFillColor: pulse } }),
+    new deck.ScatterplotLayer({ id: "smallcell-radio", data: d.smalls, getPosition: p => [p.sc.lng, p.sc.lat], radiusUnits: "meters",
+      getRadius: 6, getFillColor: [242, 247, 245, 235] }),
+    // the site: a small marker on the roof, a slim mast whose height is the site's power now
+    new deck.ScatterplotLayer({ id: "site", data: d.sites, getPosition: p => [p.s.lng, p.s.lat], radiusUnits: "meters",
+      getRadius: 14, getFillColor: [2, 25, 37, 255], getLineColor: [242, 247, 245, 220], stroked: true, lineWidthMinPixels: 1.5 }),
+    new deck.ColumnLayer({ id: "power", data: d.sites, getPosition: p => [p.s.lng, p.s.lat], diskResolution: 8, radius: 8,
+      extruded: true, getElevation: p => p.w * 0.018, pickable: true,
+      getFillColor: p => p.saving ? [0, 237, 100, 230] : [110, 168, 254, 230] }),
+  ] });
+}
+// Site names and the transit alert as HTML labels: crisp text at any zoom.
+for (const s of SITES) {
+  const el = document.createElement("div"); el.className = "site-label"; el.textContent = s.name;
+  new maplibregl.Marker({ element: el, anchor: "top" }).setLngLat([s.lng, s.lat]).addTo(map);
+}
+const pinEl = document.createElement("div"); pinEl.className = "alert-pin"; pinEl.textContent = "⚠ MTA: A C E suspended · crowds at 34 St–Penn";
+const alertPin = new maplibregl.Marker({ element: pinEl, anchor: "bottom" }).setLngLat([-73.9935, 40.7506]);
+const HOME = { center: [-73.9905, 40.7508], zoom: 14.05, pitch: 48, bearing: -29 };
+const PENN = { center: [-73.9925, 40.7512], zoom: 15.25, pitch: 56, bearing: -29 };
+let focused = false;
+function camera(t) {
+  const inSurge = t >= DISRUPTION.start && t < DISRUPTION.endAt + 10;
+  if (inSurge && !focused) { focused = true; map.flyTo({ ...PENN, duration: 2600 }); alertPin.addTo(map); }
+  if (!inSurge && focused) { focused = false; map.flyTo({ ...HOME, duration: 2600 }); alertPin.remove(); }
+}
+overlay.setProps({ onClick: (info) => {
+  const x = info.object && (info.object.x || null);
+  if (x) { selected = x.c; openData("pm"); }
+} });
+
+// ═══ Side panel ══════════════════════════════════════════════════════════════
+const $ = (id) => document.getElementById(id);
+function panel(t) {
+  const fr = frames[t];
+  $("clock").textContent = fmt(t); $("scrub").value = t;
+  $("kPow").innerHTML = `${(fr.totalW / 1000).toFixed(1)} <small>kW</small>`;
+  const pct = 100 * (1 - fr.totalW / fr.baseW);
+  $("kSave").innerHTML = `${pct.toFixed(0)}% <small>less</small>`;
+  $("kKwh").innerHTML = `${Math.max(0, fr.savedKwh).toFixed(0)} <small>kWh</small>`;
+  camera(t);
+  $("kCo2").innerHTML = `${fr.co2.toFixed(0)} <small>kg</small> · $${Math.max(0, fr.usd).toFixed(0)}`;
+  $("kSleep").innerHTML = `${fr.asleep} <small>/ ${cells.length} · small cells ${fr.smallsAsleep}/${SMALLS.length}</small>`;
+  $("kQos").innerHTML = `${(100 * fr.qos).toFixed(fr.qos === 1 ? 0 : 2)}%`;
+  $("kGrid").innerHTML = `$${fr.price}/MWh · ${fr.carbon} g CO₂/kWh`;
+  if (t < 120) $("kIntent").innerHTML = `<small>starts at 20:00</small>`;
+  else {
+    let a = 0, b = 0; for (let k = 120; k <= t; k++) { a += frames[k].totalW; b += frames[k].baseW; }
+    const p = 100 * (1 - a / b);
+    $("kIntent").innerHTML = `<span class="${p >= 15 ? "ok" : "warn"}">${p.toFixed(1)}%</span> <small>${p >= 15 ? "on target" : "building up"}</small>`;
+  }
+  const ph = t < 120 ? "Evening: offices emptying, everything awake" : t < 420 ? "The tide goes out: agent sleeps idle carriers"
+    : t < DISRUPTION.start ? "Deep night: most capacity asleep" : t < DISRUPTION.endAt ? "Unplanned spike at Penn Station: reflex re-lift"
+    : "Back to sleep, lesson learned";
+  $("phase").textContent = ph;
+  const tl = $("toast"); const alert = t >= DISRUPTION.start && t < DISRUPTION.start + 25;
+  tl.style.display = alert ? "block" : "none";
+  if (alert) tl.innerHTML = "<b>MTA alert 01:10</b> · A C E suspended between 34 St–Penn Station and 59 St–Columbus Circle (fictional). Crowds surface at Penn Station, where capacity carriers sleep.";
+  const items = log.filter(l => l.t <= t).slice(-14).reverse();
+  $("log").innerHTML = items.map(l => `<li><span class="t">${fmt(l.t)}</span><span class="who ${l.who}">${
+    { agent: "AGENT", reflex: "REFLEX", ext: "EXTERNAL", net: "NETWORK" }[l.who]}</span>${l.text}${
+    l.id ? ` <a data-id="${l.id}">evidence</a>` : ""}</li>`).join("");
+  chart(t);
+}
+$("log").addEventListener("click", (e) => { const id = e.target.dataset && e.target.dataset.id; if (id) openData(id === "LESSON" ? "lesson" : "evidence", id); });
+
+function chart(t) {
+  const W = 360, H = 130, max = Math.max(...frames.map(f => f.baseW)) * 1.08;
+  const x = (i) => i / (STEPS - 1) * W, y = (w) => H - 14 - (w / max) * (H - 24);
+  let act = "", base = "";
+  frames.forEach((f, i) => { act += `${i ? "L" : "M"}${x(i).toFixed(1)},${y(f.totalW).toFixed(1)}`; base += `${i ? "L" : "M"}${x(i).toFixed(1)},${y(f.baseW).toFixed(1)}`; });
+  const ticks = [0, 120, 240, 360, 480].map(i => `<text x="${x(i) + 2}" y="${H - 2}" fill="#9FB4BE" font-size="9">${fmt(i)}</text>`).join("");
+  $("chart").innerHTML = `<path d="${act} L${W},${H - 14} L0,${H - 14} Z" fill="rgba(0,237,100,.18)" stroke="none"/>
+    <path d="${act}" fill="none" stroke="#00ED64" stroke-width="1.6"/>
+    <path d="${base}" fill="none" stroke="#F2F7F5" stroke-width="1.1" stroke-dasharray="4 3" opacity=".7"/>
+    <rect x="${x(DISRUPTION.start)}" y="4" width="${x(DISRUPTION.endAt) - x(DISRUPTION.start)}" height="${H - 18}" fill="rgba(255,192,16,.10)"/>
+    <line x1="${x(t)}" x2="${x(t)}" y1="4" y2="${H - 14}" stroke="#FFC010" stroke-width="1.2"/>
+    <text x="6" y="12" fill="#F2F7F5" font-size="9" opacity=".8">- - always-on</text>
+    <text x="70" y="12" fill="#00ED64" font-size="9">— actual</text>${ticks}`;
+}
+
+// ═══ Playback ═══════════════════════════════════════════════════════════════
+let t = 0, playing = false, acc = 0, last = performance.now();
+function loop(now) {
+  const dt = (now - last) / 1000; last = now;
+  if (playing) { acc += dt * +$("speed").value; while (acc >= 1) { acc -= 1; t = Math.min(STEPS - 1, t + 1); if (t === STEPS - 1) playing = false; panel(t); } }
+  // Redraw only when the sim minute changed, or (8 fps) while a carrier is waking.
+  if (t !== drawnT) { drawnT = t; pulse = 0; render(t); }
+  else if (dataFor(t).waking && now - lastPulse > 125) { lastPulse = now; pulse = 0.5 + 0.5 * Math.sin(now / 160); render(t); }
+  requestAnimationFrame(loop);
+}
+let drawnT = -1, lastPulse = 0;
+$("play").onclick = () => { playing = !playing; $("play").textContent = playing ? "❚❚ Pause" : "▶ Play"; if (t >= STEPS - 1) t = 0; };
+$("scrub").oninput = (e) => { t = +e.target.value; panel(t); };
+map.on("load", () => { panel(t); requestAnimationFrame(loop); });
+const params = new URLSearchParams(location.search);
+if (params.get("t")) { t = Math.max(0, Math.min(STEPS - 1, +params.get("t"))); }
+
+// ═══ Documents: what each carrier system contributes ═══════════════════════
+function frameCell(t, capId) { return frames[t].cells.find(x => x.c.cap === capId); }
+function pmWindow(t, c) {    // a 15-minute PM record (3GPP TS 28.552 counter names)
+  const t0 = t - (t % 15), xs = []; for (let k = t0; k < Math.min(t0 + 15, STEPS); k++) xs.push(frameCell(k, c.cap));
+  const avg = (f) => xs.reduce((a, x) => a + f(x), 0) / xs.length;
+  return { t0, prb: avg(x => x.cap), prbCov: avg(x => x.cov), users: avg(x => x.users), w: avg(x => x.capW), wCov: avg(x => x.covW),
+           state: xs[xs.length - 1].state };
+}
+function docs(t, evId) {
+  const c = selected, s = c.site, x = frameCell(t, c.cap), pm = pmWindow(t, c), fr = frames[t];
+  const ev = actions.find(a => a.id === evId) || [...actions].reverse().find(a => a.t <= t && a.site.id === s.id) || actions[0];
+  return [
+    { id: "inventory", title: "Network inventory", sub: "sites, radios, antennas", src: "Network inventory / NMS (TMF639 resource style)", refresh: "on change",
+      note: "The physical truth: where the site is, which radios hang on it, how much power each draws when awake, idle or asleep, and which coverage cell takes over its users.",
+      coll: "ran_sites · ran_cells", atlas: true, body: [
+        s.doc, CELLDOCS[c.cap], CELLDOCS[c.cov], (SMALLS.find(x => x.host && x.host.site === s) || SMALLS[3]).doc ] },
+    { id: "config", title: "Configuration", sub: "energy-saving state", src: "OSS configuration management (3GPP NRM, energy-saving attributes)", refresh: "on change",
+      note: "What the network is told to do. energySavingControl is the command, energySavingState what the cell reports back; isESCoveredBy names the cell that takes over.",
+      coll: "ran_cell_state", body: [
+        { _id: c.cap, administrativeState: "UNLOCKED", operationalState: "ENABLED",
+          energySavingControl: x.state === "active" ? "toBeNotEnergySaving" : "toBeEnergySaving",
+          energySavingState: x.state === "sleep" ? "isEnergySaving" : x.state === "waking" ? "isNotEnergySaving (waking)" : "isNotEnergySaving",
+          isESCoveredBy: [c.cov], esNotAllowedTimePeriod: [{ start: "06:00", end: "09:30", days: "Mon-Fri" }],
+          changed_at: iso(ev.t), changed_by: ev.trigger === "reflex" ? "reflex (deterministic)" : "energy agent", action_id: ev.id } ] },
+    { id: "pm", title: "Performance counters", sub: "every 15 minutes", src: "OSS performance management, 3GPP TS 28.552 counters", refresh: "15 min",
+      note: "The measurements a NOC trusts: load (PRB usage), connected users, throughput, and since 3GPP Release 17 also power and energy per radio. Numbers are for this sector right now.",
+      coll: "ran_pm_counters (time series)", body: [
+        { ts: iso(pm.t0), meta: { cell_id: c.cap, site_id: s.id, granularity: "PT15M" },
+          "RRU.PrbTotDl": +pm.prb.toFixed(1), "RRC.ConnMean": Math.round(pm.users * 0.6), "DRB.UEThpDl": Math.round(pm.prb * 3150),
+          "PEE.AvgPower": Math.round(pm.w), "PEE.Energy": +(pm.w / 4000).toFixed(3) },
+        { ts: iso(pm.t0), meta: { cell_id: c.cov, site_id: s.id, granularity: "PT15M" },
+          "RRU.PrbTotDl": +pm.prbCov.toFixed(1), "RRC.ConnMean": Math.round(pm.users * 0.4), "DRB.UEThpDl": Math.round(pm.prbCov * 410),
+          "PEE.AvgPower": Math.round(pm.wCov), "PEE.Energy": +(pm.wCov / 4000).toFixed(3) } ] },
+    { id: "energy", title: "Site energy", sub: "meter and power system", src: "Site power system and utility meter (energy management platform)", refresh: "1 min",
+      note: "What the electricity bill sees: the whole site, including cooling and transport, not only the radios.",
+      coll: "site_energy (time series)", body: [
+        { ts: iso(t), meta: { site_id: s.id, meter: `CONED-${s.id.slice(-4)}-M1` }, site_kw: +(fr.sitesW[s.id] / 1000).toFixed(2),
+          rectifier_load_pct: Math.round(fr.sitesW[s.id] / 120), battery_soc_pct: 100, grid_supply: "ok", cabinet_temp_c: 21.5 } ] },
+    { id: "grid", title: "Grid signals", sub: "price and carbon", src: "Wholesale market and grid operator feeds (NYISO Zone J, illustrative values)", refresh: "5 min",
+      note: "Why savings at night are worth less money but the same carbon per kWh, and why an agent can weigh both.",
+      coll: "grid_signals (time series)", body: [
+        { ts: iso(t - (t % 5)), meta: { zone: "NYISO-J (New York City)" }, lbmp_usd_per_mwh: fr.price, carbon_g_per_kwh: fr.carbon, values: "illustrative" } ] },
+    { id: "promises", title: "Service promises", sub: "what must never break", src: "Product catalog and SLAs (plans, QoS profiles, public safety rules)", refresh: "on change",
+      note: "The rules the energy agent must obey. They come from the business side, not from the network.",
+      coll: "service_commitments", atlas: true, body: DOCS.service_commitments },
+    { id: "transit", title: "Transit alerts", sub: "external context", src: "MTA GTFS-realtime service alerts (fictional incident)", refresh: "30 s",
+      note: "Outside events explain sudden crowds. The agent reads them; the reflex does not need them to react.",
+      coll: "transit_alerts", atlas: true, body: t >= DISRUPTION.start ? DOCS.transit_alerts : [{ note: "no active alert before 01:10" }] },
+    { id: "intent", title: "Energy intent", sub: "what the business asked for", src: "Intent management (TM Forum TMF921 style)", refresh: "on change",
+      note: "The goal in business words, with its constraints. Service promises always outrank it.",
+      coll: "energy_intents", atlas: true, body: DOCS.energy_intents },
+    { id: "policy", title: "Energy policy", sub: "the autonomy envelope", src: "Operator policy (the guard rails the agent cannot change)", refresh: "on change",
+      note: "Thresholds written by people. The agent and the reflex both read them from the database, never from a prompt.",
+      coll: "energy_policy", atlas: true, body: DOCS.energy_policy },
+    { id: "evidence", title: "Evidence record", sub: "one per action", src: "Written by the agent and the reflex for every action", refresh: "per action",
+      note: "The audit trail: what was decided, on which data, under which rule, and what happened after.",
+      coll: "energy_actions", body: [
+        { _id: ev.id, intent_id: "EI-NYC-001", kind: ev.kind, by: ev.trigger === "reflex" ? "reflex (deterministic)" : "energy agent",
+          at: iso(ev.t), site_id: ev.site.id, cells: ev.secs.map(k => `${ev.site.id}-N77-${k}`),
+          inputs: ev.kind === "sleep" ? { forecast_load_next_hour_pct: Math.round(ev.fc), coverage_after_offload_pct: Math.round(ev.cov), source_collections: ["ran_pm_counters", "ran_load_forecast", "service_commitments"] }
+                                      : { coverage_load_pct: Math.round(ev.cov), minutes_over_threshold: POLICY.wake_intervals, source_collections: ["ran_pm_counters"] },
+          checks: [{ check: "service promises", ok: true }, { check: "coverage after offload", ok: true }, { check: "max asleep share", ok: true }],
+          outcome: ev.kind === "sleep" ? { kw_saved: +ev.kw.toFixed(2) } : { qos_kept: true, wake_time_s: 60 } } ] },
+    { id: "lesson", title: "Learned lessons", sub: "searchable by meaning", src: "Written by the agent after each episode", refresh: "per episode",
+      note: "Next time, the agent finds this with vector search before it puts Penn Station to sleep.",
+      coll: "ran_knowledge (vector-indexed)", body: t >= LESSON_T ? [
+        { _id: "LESSON-2026-11-25-PENN", kind: "energy_lesson", site_id: "NYC-MTN-0412", area_type: "transit", hour: 1,
+          text: "Transit disruption at 34 St–Penn after midnight brought a crowd of about 1,800 devices within 20 minutes. Coverage layer peaked at 88% before the capacity carrier woke. Keep one capacity carrier awake on the 8th Avenue side until 02:00.",
+          proposed_canary: { market: "LA", site_id: "LA-DTN-0207", name: "Union Station" } } ] : [{ note: `written after the episode, at ${fmt(LESSON_T)}` }] },
+  ];
+}
+
+const HERO = [
+  { id: "run", title: "Run it on Atlas", sub: "live, at this sim minute", run: true, coll: "ran_cells", code: "", callouts: [],
+    note: "The query from the next tab, executed now on the seeded network in Atlas for the selected sim minute." },
+  { id: "can-sleep", title: "Can this carrier sleep?", sub: "5 sources, 1 query", coll: "ran_cells",
+    note: "The agent's safety check before every sleep decision (the first tab runs it on Atlas): one aggregation joins the inventory, the live 3GPP counters (time series), the load forecast, the coverage relation (graph) and the service promises, and returns a verdict per carrier.",
+    callouts: [["$match", "the capacity carriers in the area"], ["ran_pm_counters", "live counters: p95 load of the last 15 minutes"],
+               ["$percentile", "computed in the database, on the time series"], ["ran_load_forecast", "the next hour's forecast"],
+               ["$graphLookup", "who takes over: the coverage cell (isESCoveredBy)"], ["service_commitments", "promises that forbid sleeping"],
+               ["safe_to_sleep", "one verdict, every reason visible"]],
+    code: `db.ran_cells.aggregate([
+  { $match: { market: "NYC", cluster: "Midtown", layer: "capacity" } },
+  { $lookup: {
+      from: "ran_pm_counters",
+      let: { cell: "$_id" },
+      pipeline: [
+        { $match: { $expr: { $eq: ["$meta.cell_id", "$$cell"] },
+                    ts: { $gte: ISODate("2026-11-24T22:45:00"), $lte: ISODate("2026-11-24T23:00:00") } } },
+        { $group: { _id: null,   // 3GPP counter names contain a dot: read them with $getField
+                    load_p95: { $percentile: { input: { $getField: "RRU.PrbTotDl" }, p: [0.95], method: "approximate" } },
+                    users: { $avg: { $getField: "RRC.ConnMean" } } } } ],
+      as: "now" } },
+  { $lookup: {
+      from: "ran_load_forecast", localField: "_id", foreignField: "cell_id",
+      pipeline: [ { $project: { next_hour_max: { $max: { $slice: ["$hourly_load_pct", 5, 2] } } } } ],
+      as: "forecast" } },
+  { $graphLookup: {
+      from: "ran_cells", startWith: "$isESCoveredBy",
+      connectFromField: "isESCoveredBy", connectToField: "_id",
+      maxDepth: 0, as: "takes_over" } },
+  { $lookup: {
+      from: "service_commitments", localField: "_id", foreignField: "cell_ids",
+      as: "promises" } },
+  { $set: {
+      load_now: { $first: { $first: "$now.load_p95" } },
+      load_next_hour: { $first: "$forecast.next_hour_max" },
+      coverage_after_offload: { $add: [10, { $multiply: [2.65, { $first: "$forecast.next_hour_max" }] }] } } },
+  { $project: {
+      _id: 1, site_id: 1, sector: 1, load_now: 1, load_next_hour: 1, coverage_after_offload: 1,
+      takes_over: "$takes_over._id",
+      blocking_promises: "$promises._id",
+      safe_to_sleep: { $and: [
+        { $lt: [{ $ifNull: ["$load_now", 999] }, 15] },          // no measurement: not safe
+        { $lt: [{ $ifNull: ["$load_next_hour", 999] }, 15] },
+        { $lt: [{ $ifNull: ["$coverage_after_offload", 999] }, 55] },
+        { $eq: [{ $size: "$promises" }, 0] } ] } } }
+])` },
+  { id: "lessons", title: "Have we seen this before?", sub: "$vectorSearch + filters", coll: "ran_knowledge",
+    note: "Before the agent puts a transit hub to sleep, it asks the knowledge base for similar past nights, filtered to transit sites and late hours. Tonight's lesson will be the top hit next time.",
+    callouts: [["$vectorSearch", "meaning: similar situations, embedded by Atlas"], ["area_type", "only transit hubs"], ["hour", "only after midnight"], ["$project", "the lesson and its score"]],
+    code: `db.ran_knowledge.aggregate([
+  { $vectorSearch: {
+      index: "ran_knowledge_index", path: "text",
+      query: "putting capacity carriers to sleep at a transit hub after midnight; risk of sudden crowds",
+      filter: { $and: [
+        { kind: { $eq: "energy_lesson" } },
+        { area_type: { $eq: "transit" } },
+        { hour: { $gte: 0, $lte: 4 } } ] },
+      numCandidates: 200, limit: 3 } },
+  { $project: { _id: 1, site_id: 1, text: 1, proposed_canary: 1,
+                score: { $meta: "vectorSearchScore" } } }
+])` },
+];
+
+// ═══ Popups ═════════════════════════════════════════════════════════════════
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+function hlJSON(obj) {
+  const txt = JSON.stringify(obj, null, 2)
+    .replace(/\[\s+(-?[\d.]+),\s+(-?[\d.]+)\s+\]/g, "[$1, $2]")                 // coordinates on one line
+    .replace(/"(\d{4}-\d\d-\d\dT[^"]+)"/g, 'ISODate("$1")');
+  return esc(txt)
+    .replace(/("(?:[^"\\]|\\.)*")(:)/g, '<span class="k">$1</span>$2')
+    .replace(/: ("(?:[^"\\]|\\.)*")/g, ': <span class="s">$1</span>')
+    .replace(/ISODate\("([^"]+)"\)/g, '<span class="d">ISODate("$1")</span>')
+    .replace(/: (-?\d+\.?\d*)(?=,|\n|$)/g, ': <span class="n">$1</span>')
+    .replace(/: (true|false|null)/g, ': <span class="b">$1</span>')
+    .replace(/(\[|, )(-?\d+\.\d+)/g, '$1<span class="n">$2</span>');
+}
+function hlCode(code, callouts) {
+  const lines = code.split("\n"), marks = new Map();
+  callouts.forEach(([f], i) => { const j = lines.findIndex((l, k) => !marks.has(k) && l.includes(f)); if (j >= 0) marks.set(j, i); });
+  const order = [...marks.keys()].sort((a, b) => a - b), num = new Map(order.map((j, i) => [j, i + 1]));
+  const out = lines.map((l, j) => {
+    const h = l.split(/("(?:[^"\\]|\\.)*")/).map((part, k) => {
+      if (k % 2) return part.startsWith('"$') && !part.includes(" ") ? `<span class="path">${esc(part)}</span>` : `<span class="s">${esc(part)}</span>`;
+      return esc(part)
+        .replace(/(\$[a-zA-Z]+)/g, '<span class="op">$1</span>')
+        .replace(/(^|[{\s,])([a-z_][a-zA-Z_]*)(?=\s*:)/g, '$1<span class="k">$2</span>')
+        .replace(/(^|[^\w$#">-])(\d+\.?\d*)/g, '$1<span class="n">$2</span>');
+    }).join("");
+    return marks.has(j) ? `<span class="hl">${h}<span class="mk">${num.get(j)}</span></span>` : h;
+  }).join("\n");
+  const legend = order.map((j, i) => `<span style="margin-right:14px"><span class="mk" style="margin:0 5px 0 0">${i + 1}</span>${esc(callouts[marks.get(j)][1])}</span>`).join("");
+  return { out, legend };
+}
+let copyText = "";
+function openModal(title, tabs, show) {
+  $("mTitle").textContent = title; $("ov").classList.add("on");
+  $("modal").style.gridTemplateColumns = ""; $("mTabs").style.display = "";
+  $("mTabs").innerHTML = tabs.map((x, i) => `<button class="tab" data-i="${i}">${esc(x.title)}<small>${esc(x.sub)}</small></button>`).join("");
+  $("mTabs").onclick = (e) => { const b = e.target.closest(".tab"); if (b) show(+b.dataset.i); };
+}
+function selectTab(i) { document.querySelectorAll("#mTabs .tab").forEach((b, j) => b.classList.toggle("on", j === i)); }
+function openData(which, evId) {
+  const ds = docs(t, evId);
+  openModal("Data model: one evening of a carrier's data, in MongoDB", ds, show);
+  function show(i) {
+    selectTab(i); const d = ds[i];
+    $("mMeta").innerHTML = `<span class="badge" style="border-color:${d.atlas ? "#00ED64" : "#FFC010"};color:${d.atlas ? "#00ED64" : "#FFC010"}">${d.atlas ? "FROM ATLAS" : "SIMULATED"}</span> ` +
+      `<b>${esc(d.coll)}</b> · Source: ${esc(d.src)} · Refresh: ${esc(d.refresh)} · at ${fmt(t)} · selected: ${esc(selected.site.name)} sector ${selected.sec}`;
+    $("mCode").innerHTML = d.body.map(b => hlJSON(b)).join("\n\n");
+    $("mExplain").textContent = d.note; copyText = d.body.map(b => JSON.stringify(b, null, 2)).join("\n\n");
+  }
+  show(Math.max(0, ds.findIndex(d => d.id === which)));
+}
+function openHero() {
+  openModal("Hero queries", HERO, show);
+  async function show(i) {
+    selectTab(i); const q = HERO[i];
+    if (q.run) {
+      $("mMeta").innerHTML = `<b>ran_cells</b> · running on Atlas for ${fmt(t)} …`; $("mCode").textContent = ""; $("mExplain").textContent = q.note;
+      try {
+        const r = await (await fetch(`${PREFIX}/api/network/can-sleep?minute=${t}`)).json();
+        const safe = r.rows.filter(x => x.safe_to_sleep).length;
+        $("mMeta").innerHTML = `<span class="badge" style="border-color:#00ED64;color:#00ED64">FROM ATLAS</span> <b>ran_cells</b> · ${r.rows.length} capacity carriers · ` +
+          `${safe} safe to sleep at ${fmt(t)} · ${r.ms} ms`;
+        $("mCode").innerHTML = r.rows.map(x => hlJSON(x)).join("\n\n"); copyText = JSON.stringify(r.rows, null, 2);
+        $("mExplain").textContent = "Each result is one carrier with every reason visible: its load now (p95 of the last 15 minutes), the next hour's forecast, the coverage after offload, who takes over, and any promise that forbids sleeping.";
+      } catch (e) { $("mCode").textContent = `Could not run the query: ${e.message}`; }
+      return;
+    }
+    const r = hlCode(q.code, q.callouts);
+    $("mMeta").innerHTML = `<b>${esc(q.coll)}</b> · runs on the data in the other popup`;
+    $("mCode").innerHTML = r.out; $("mExplain").innerHTML = `<p style="margin:0 0 8px">${esc(q.note)}</p>${r.legend}`; copyText = q.code;
+  }
+  show(1);
+}
+function openWhy() {
+  $("mTitle").textContent = "Why MongoDB"; $("ov").classList.add("on");
+  $("mTabs").style.display = "none"; $("modal").style.gridTemplateColumns = "1fr";
+  $("mMeta").innerHTML = "<b>One operational data layer for an autonomous network</b>";
+  $("mExplain").textContent = "";
+  copyText = "";
+  $("mCode").innerHTML = `<div class="why" style="white-space:normal;font-family:var(--sans)">
+  <p class="lead">An energy agent may only switch off what it can prove is safe. That proof needs the inventory, the live counters,
+  the forecast, the coverage relations and the business promises <b>at the same moment</b>. In MongoDB they sit in one place, in the shape
+  each source system delivers them.</p>
+  <table><tr><th>Carrier data source</th><th>How it lands in Atlas</th><th>Why it matters here</th></tr>
+  <tr><td>Inventory (sites, radios, antennas)</td><td>Documents; GeoJSON + 2dsphere index</td><td>Every vendor's radio has different fields; no schema migration per model. Map and "which sites near Penn Station" in one query.</td></tr>
+  <tr><td>Configuration (3GPP energy-saving attributes)</td><td>Documents, kept current with change streams</td><td>The map turns grey the moment a carrier reports isEnergySaving.</td></tr>
+  <tr><td>PM counters, site meters, grid prices</td><td>Time series collections</td><td>Millions of 15-minute and 1-minute readings, compressed; p95 per cell computed in the database ($percentile).</td></tr>
+  <tr><td>Coverage relations (isESCoveredBy), topology</td><td>References + $graphLookup</td><td>"Who takes over if this carrier sleeps?" without a separate graph database.</td></tr>
+  <tr><td>Service promises, intents, policy</td><td>Documents (TM Forum shapes)</td><td>Rules from the business side, read by the agent and the reflex from the database, never from a prompt.</td></tr>
+  <tr><td>Transit alerts, events</td><td>Documents as delivered (GTFS-realtime)</td><td>External context stored next to network data, no ETL into another shape.</td></tr>
+  <tr><td>Lessons from past nights</td><td>Vector Search with automatic embeddings + filters</td><td>"Have we seen this before?" by meaning, restricted to transit hubs after midnight.</td></tr>
+  <tr><td>Agents, memory, approvals, traces</td><td>Atlas Agent Engine on the same data</td><td>The decision and its evidence record live where the data lives.</td></tr></table>
+  <div class="alt"><b>The usual alternative</b>: an inventory database, a time series store for counters, a graph store for topology, a vector store
+  for lessons, a stream bus for live updates and a separate store for the agent's memory, glued by pipelines. Every glue point is a delay and
+  a place where the agent's proof can go stale. Autonomy projects stall exactly there.</div></div>`;
+}
+$("bData").onclick = () => openData("inventory");
+$("bHero").onclick = openHero;
+$("bWhy").onclick = openWhy;
+$("mClose").onclick = () => $("ov").classList.remove("on");
+$("ov").onclick = (e) => { if (e.target === $("ov")) $("ov").classList.remove("on"); };
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("ov").classList.remove("on"); });
+$("mCopy").onclick = async () => { try { await navigator.clipboard.writeText(copyText); $("mCopy").textContent = "Copied"; } catch (e) {} setTimeout(() => $("mCopy").textContent = "Copy", 1200); };
+window.__sim = { frames, log, actions, fmt, get LESSON_T() { return LESSON_T; } };
+})();
+</script>
+</body>
+</html>
