@@ -67,6 +67,24 @@ steps:
     when:
       event: [push]
 
+  - name: publish-network
+    image: plugins/kaniko-ecr
+    settings:
+      create_repository: true
+      registry: 795250896452.dkr.ecr.us-east-1.amazonaws.com
+      repo: industrysolutions/agentic-mcp-demo-network
+      dockerfile: Dockerfile.network
+      context: .
+      tags:
+        - git-${DRONE_COMMIT_SHA:0:7}
+        - latest
+      access_key:
+        from_secret: ecr_access_key
+      secret_key:
+        from_secret: ecr_secret_key
+    when:
+      event: [push]
+
   - name: publish-portfolio
     image: plugins/kaniko-ecr
     settings:
@@ -163,6 +181,31 @@ steps:
     when:
       event: [push]
 
+  - name: deploy-network-staging
+    image: public.ecr.aws/kanopy/drone-helm:v3
+    settings:
+      chart: mongodb/web-app
+      chart_version: 4.30.0
+      add_repos: [mongodb=https://10gen.github.io/helm-charts]
+      namespace: industrysolutions
+      release: agentic-mcp-demo-network
+      values:
+        - "image.tag=git-${DRONE_COMMIT_SHA:0:7}"
+        - "image.repository=795250896452.dkr.ecr.us-east-1.amazonaws.com/industrysolutions/agentic-mcp-demo-network"
+        - "ingress.enabled=true"
+        - "ingress.hosts[0]=agentic-mcp-demo-network.industrysolutions.staging.corp.mongodb.com"
+        - "mesh.enabled=true"
+        - "resources.limits.cpu=500m"
+        - "resources.limits.memory=512Mi"
+        - "resources.requests.cpu=100m"
+        - "resources.requests.memory=256Mi"
+      api_server: https://api.staging.corp.mongodb.com
+      kubernetes_token:
+        from_secret: staging_kubernetes_token
+      values_files: ["environment/staging-network.yaml"]
+    when:
+      event: [push]
+
   - name: deploy-portfolio-staging
     image: public.ecr.aws/kanopy/drone-helm:v3
     settings:
@@ -245,6 +288,24 @@ steps:
       registry: 795250896452.dkr.ecr.us-east-1.amazonaws.com
       repo: industrysolutions/agentic-mcp-demo-dtw-prod
       dockerfile: Dockerfile.dtw
+      context: .
+      tags:
+        - git-${DRONE_COMMIT_SHA:0:7}-prod
+        - prod-latest
+      access_key:
+        from_secret: ecr_access_key
+      secret_key:
+        from_secret: ecr_secret_key
+    when:
+      event: [push]
+
+  - name: publish-network-prod
+    image: plugins/kaniko-ecr
+    settings:
+      create_repository: true
+      registry: 795250896452.dkr.ecr.us-east-1.amazonaws.com
+      repo: industrysolutions/agentic-mcp-demo-network-prod
+      dockerfile: Dockerfile.network
       context: .
       tags:
         - git-${DRONE_COMMIT_SHA:0:7}-prod
@@ -346,6 +407,31 @@ steps:
       kubernetes_token:
         from_secret: prod_kubernetes_token
       values_files: ["environment/production-dtw.yaml"]
+    when:
+      event: [push]
+
+  - name: deploy-network-prod
+    image: public.ecr.aws/kanopy/drone-helm:v3
+    settings:
+      chart: mongodb/web-app
+      chart_version: 4.30.0
+      add_repos: [mongodb=https://10gen.github.io/helm-charts]
+      namespace: industrysolutions
+      release: agentic-mcp-demo-network-prod
+      values:
+        - "image.tag=git-${DRONE_COMMIT_SHA:0:7}-prod"
+        - "image.repository=795250896452.dkr.ecr.us-east-1.amazonaws.com/industrysolutions/agentic-mcp-demo-network-prod"
+        - "ingress.enabled=true"
+        - "ingress.hosts[0]=agentic-mcp-demo-network.industrysolutions.prod.corp.mongodb.com"
+        - "mesh.enabled=true"
+        - "resources.limits.cpu=500m"
+        - "resources.limits.memory=512Mi"
+        - "resources.requests.cpu=150m"
+        - "resources.requests.memory=256Mi"
+      api_server: https://api.prod.corp.mongodb.com
+      kubernetes_token:
+        from_secret: prod_kubernetes_token
+      values_files: ["environment/production-network.yaml"]
     when:
       event: [push]
 
