@@ -1,0 +1,852 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robotaxi Fleet Network</title>
+<!--
+  The network map's robotaxi scenarios (web/network_dashboard.py, web/fleet_network.py),
+  first version: /ota (network-aware OTA downloads) and /rides (connectivity-aware rides),
+  each a demo on its own. Midtown Manhattan, the Tuesday afternoon before the night shift,
+  the same 17 sites. The network, the fleet, the campaign, the network's per-vehicle offers,
+  the backhaul, the price tiers, the ride request and the forecasts are documents in Atlas
+  (seed/ran_seed.py); the afternoon is simulated in this page from them. Streets from
+  OpenStreetMap (seed/fleet_streets.py). Every value is synthetic; the fleet is an anonymized
+  operator; prices are tiers.
+-->
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/deck.gl@9.0.38/dist.min.js"></script>
+<style>
+  :root {
+    --bg: #001E2B; --panel: #061F2B; --panel2: #0B2A38; --line: #1D3A47;
+    --text: #F2F7F5; --mute: #9FB4BE; --green: #00ED64; --amber: #FFC010;
+    --red: #FF5A5F; --blue: #6EA8FE; --violet: #B98CFF;
+    --mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+    --sans: Inter, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 var(--sans); }
+  #app { display: grid; grid-template-columns: 1fr 400px; grid-template-rows: auto 1fr auto; height: 100vh; }
+  header { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; padding: 10px 16px;
+           border-bottom: 1px solid var(--line); background: #021925; flex-wrap: wrap; }
+  header .brand { font-weight: 700; color: var(--green); letter-spacing: .02em; }
+  header .title { font-weight: 600; }
+  header .sub { color: var(--mute); }
+  header .sp { flex: 1; }
+  select, .btn { background: transparent; color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+                 padding: 5px 9px; font: 12px var(--sans); cursor: pointer; }
+  .btn.g { border-color: rgba(0,237,100,.5); background: rgba(0,237,100,.08); font-family: var(--mono); font-weight: 600; }
+  .btn:hover { border-color: var(--green); }
+  .badge { font: 700 10px/1 var(--mono); padding: 4px 7px; border-radius: 999px; border: 1px solid var(--amber); color: var(--amber); }
+  #map { position: relative; min-height: 0; }
+  #mapEl { position: absolute; inset: 0; }
+  .legend { position: absolute; left: 12px; top: 12px; background: rgba(2,25,37,.94); border: 1px solid var(--line);
+            border-radius: 8px; padding: 9px 11px; font-size: 11.5px; color: var(--mute); max-width: 320px; z-index: 2; }
+  .legend b { color: var(--text); }
+  .legend .row { display: flex; align-items: center; gap: 7px; margin: 3px 0; }
+  .sw { width: 14px; height: 10px; border-radius: 2px; display: inline-block; flex: none; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+  .maplibregl-marker { z-index: 3; }
+  .site-label { font: 600 11px var(--sans); color: #DDE7E3; text-shadow: 0 0 3px #001E2B, 0 0 6px #001E2B;
+                white-space: nowrap; transform: translateY(13px); pointer-events: none; opacity: .85; }
+  .pin { font: 600 12px var(--sans); color: #1a1200; background: var(--amber); border-radius: 6px; padding: 4px 8px;
+         white-space: nowrap; transform: translateY(-30px); box-shadow: 0 4px 14px rgba(0,0,0,.5); }
+  .pin.red { background: var(--red); color: #fff; }
+  .pin.green { background: var(--green); color: #00281a; }
+  .toast { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: 680px;
+           background: rgba(2,25,37,.95); border: 1px solid var(--green); color: var(--text); border-radius: 8px;
+           padding: 9px 13px; font-size: 12.5px; display: none; box-shadow: 0 6px 24px rgba(0,0,0,.5); z-index: 4; }
+  .toast b { color: var(--green); }
+  aside { border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto; padding: 12px 14px; }
+  .card { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; margin-bottom: 9px; }
+  .card .hd { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 4px; }
+  .card .hd .sp { flex: 1; }
+  .card .who { font: 700 10px var(--mono); padding: 2px 6px; border-radius: 4px; }
+  .card.fleet { border-color: rgba(110,168,254,.45); }
+  .card.net { border-color: rgba(0,237,100,.45); }
+  .card.noc { border-color: rgba(255,192,16,.6); }
+  .chip { font: 700 10px var(--mono); padding: 2px 6px; border-radius: 999px; border: 1px solid currentColor; }
+  .muted { color: var(--mute); }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+  .split div { background: rgba(255,255,255,.03); border-radius: 6px; padding: 6px 8px; }
+  .split .v { font: 700 18px var(--mono); }
+  .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .kpi { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .kpi .l { color: var(--mute); font-size: 11px; }
+  .kpi .v { font: 700 18px/1.25 var(--mono); }
+  .kpi .v small { font-size: 11px; color: var(--mute); font-weight: 500; }
+  .kpi.big { grid-column: 1 / -1; }
+  .ok { color: var(--green); } .warn { color: var(--amber); } .bad { color: var(--red); } .vio { color: var(--violet); } .blu { color: var(--blue); }
+  h3 { margin: 14px 0 6px; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--mute); }
+  #chart { width: 100%; height: 120px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; }
+  table.routes { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 4px; }
+  table.routes th { text-align: left; color: var(--mute); font-weight: 500; padding: 3px 4px; border-bottom: 1px solid var(--line); }
+  table.routes td { padding: 5px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.routes tr.pick td { background: rgba(0,237,100,.07); }
+  .bar { height: 6px; border-radius: 3px; background: #12303d; overflow: hidden; margin-top: 4px; }
+  .bar i { display: block; height: 100%; background: var(--green); }
+  #log { list-style: none; margin: 0; padding: 0; }
+  #log li { border-bottom: 1px solid var(--line); padding: 6px 0; font-size: 12px; }
+  #log li .t { font-family: var(--mono); color: var(--mute); margin-right: 6px; }
+  #log li .w { font: 700 10px var(--mono); padding: 2px 5px; border-radius: 4px; margin-right: 5px; }
+  .w.fleet, .who.fleet { background: rgba(110,168,254,.15); color: var(--blue); }
+  .w.agent, .who.agent { background: rgba(0,237,100,.15); color: var(--green); }
+  .w.noc, .who.noc { background: rgba(255,192,16,.15); color: var(--amber); }
+  .w.net { background: rgba(185,140,255,.15); color: var(--violet); }
+  #log li a { color: var(--green); cursor: pointer; text-decoration: underline; font-size: 11px; margin-left: 4px; }
+  footer { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 8px 16px;
+           border-top: 1px solid var(--line); background: #021925; }
+  #clock { font: 700 18px var(--mono); min-width: 62px; }
+  #scrub { flex: 1; accent-color: var(--green); }
+  .phase { color: var(--mute); font-size: 12px; min-width: 280px; text-align: right; }
+  .deck-tooltip { font: 12px/1.45 var(--sans) !important; background: rgba(2,25,37,.96) !important; border: 1px solid var(--line);
+                  border-radius: 8px; padding: 8px 10px !important; max-width: 340px; color: var(--text) !important; }
+  /* popups */
+  .ov { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: none; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+  .ov.on { display: flex; }
+  .modal { width: min(1120px, 100%); height: min(86vh, 860px); background: #07131A; border: 1px solid var(--line);
+           border-radius: 12px; display: grid; grid-template-columns: 250px minmax(0,1fr); grid-template-rows: auto minmax(0,1fr); overflow: hidden; }
+  .mh { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 11px 15px; border-bottom: 1px solid var(--line); }
+  .mh h2 { margin: 0; font-size: 15px; } .mh .sp { flex: 1; }
+  .tabs { overflow-y: auto; border-right: 1px solid var(--line); padding: 8px; background: #061118; }
+  .tab { display: block; width: 100%; text-align: left; background: none; border: 0; border-left: 3px solid transparent;
+         color: #C8D3CC; padding: 8px 10px; border-radius: 4px; cursor: pointer; font: inherit; }
+  .tab small { display: block; color: #7D8C83; font-size: 11px; }
+  .tab.on { background: #0F2230; border-left-color: var(--green); color: #fff; }
+  .body { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .meta { padding: 10px 15px; border-bottom: 1px solid var(--line); color: var(--mute); font-size: 12px; }
+  .meta b { color: var(--text); }
+  pre.code { flex: 1; margin: 0; overflow: auto; padding: 13px 15px; background: #040B10; font: 12.3px/1.6 var(--mono); white-space: pre; }
+  .explain { padding: 11px 15px; border-top: 1px solid var(--line); background: #061118; color: #D5DDD8; }
+  .k { color: #74DEFF; } .s { color: #00ED64; } .n { color: #FFD166; } .b { color: #FF7AC6; }
+  .op { color: #C792FF; font-weight: 700; } .path { color: #FF9F5A; } .d { color: #8AB4FF; } .c { color: #5F6E66; font-style: italic; }
+  .mk { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; border-radius: 9px;
+        background: #FFD166; color: #111; font: 700 11px var(--mono); margin-left: 8px; padding: 0 4px; }
+  .hl { background: rgba(255,209,102,.07); display: inline-block; min-width: 100%; }
+  .why { padding: 14px 18px; overflow: auto; grid-column: 1 / -1; }
+  .why table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .why th { text-align: left; background: var(--green); color: var(--bg); padding: 7px 9px; }
+  .why td { padding: 7px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .why tr:nth-child(even) td { background: #0A1C26; }
+  .why .lead { font-size: 15px; margin: 0 0 12px; }
+  .why .alt { margin-top: 14px; background: rgba(0,237,100,.06); border: 1px solid rgba(0,237,100,.35); border-radius: 8px; padding: 10px 12px; }
+  @media (max-width: 900px) { #app { grid-template-columns: 1fr; grid-template-rows: auto 55vh auto auto; }
+    aside { border-left: 0; border-top: 1px solid var(--line); } .modal { grid-template-columns: 1fr; } .tabs { display: flex; overflow-x: auto; }
+    .legend { display: none; } .phase { display: none; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <span class="brand">◆ MongoDB × Verizon</span>
+    <span class="title">Network intelligence for robotaxi fleets</span>
+    <span class="sub" id="hSub">Midtown Manhattan · Tuesday afternoon</span>
+    <span class="badge">SIMULATED NETWORK · ANONYMIZED FLEET</span>
+    <span class="sp"></span>
+    <select id="scenario"><option value="night">Scenario: Night shift</option>
+      <option value="ota">Scenario: OTA downloads</option><option value="rides">Scenario: Connected rides</option></select>
+    <button class="btn g" id="bData">{ } Data model</button>
+    <button class="btn g" id="bHero">⚡ Hero queries</button>
+    <button class="btn g" id="bWhy">Why MongoDB</button>
+  </header>
+
+  <div id="map">
+    <div id="mapEl"></div>
+    <div class="toast" id="toast"></div>
+    <div class="legend">
+      <div><b>5G capacity cells, by price tier</b> (what the fleet sees)</div>
+      <div class="row"><span class="sw" style="background:rgba(0,237,100,.6)"></span>discounted · <span class="sw" style="background:rgba(255,192,16,.6)"></span>standard · <span class="sw" style="background:rgba(255,90,95,.6)"></span>congested</div>
+      <div id="lgOta"><div style="margin-top:6px"><b>Robotaxis (Fleet A, 300)</b></div>
+      <div class="row"><span class="dot" style="background:#9FB4BE"></span>waiting for the update ·
+        <span class="dot" style="background:#6EA8FE"></span>downloading</div>
+      <div class="row"><span class="dot" style="background:#FFC010"></span>paused in a congested cell ·
+        <span class="dot" style="background:#B98CFF"></span>deferred, next ride ends in a cheaper cell</div>
+      <div class="row"><span class="dot" style="background:#00ED64"></span>updated</div>
+      <div class="row"><span class="sw" style="height:2px;background:#FF5A5F"></span>backhaul link, full · <span class="sw" style="height:2px;background:#4b6b78"></span>backhaul link</div>
+      <div style="margin-top:4px">Hover a robotaxi for the network's answer; click it to quote it on Atlas.</div></div>
+      <div id="lgRide" style="display:none"><div style="margin-top:6px"><b>Candidate routes</b>, predicted downlink for the car</div>
+      <div class="row"><span class="sw" style="height:4px;background:#00ED64"></span>≥ 12 Mbit/s · <span class="sw" style="height:4px;background:#FFC010"></span>8–12 · <span class="sw" style="height:4px;background:#FF5A5F"></span>&lt; 8 (call drops)</div>
+      <div class="row"><span class="dot" style="background:#9FB4BE"></span>other robotaxis of the fleet · <span class="dot" style="background:#fff;border:2px solid #00ED64"></span>this ride</div></div>
+    </div>
+  </div>
+
+  <aside>
+    <div class="card fleet" id="cReq"></div>
+    <div class="card net" id="cQuote" style="display:none"></div>
+    <div class="card noc" id="cNoc" style="display:none"></div>
+    <div class="card fleet" id="cRide" style="display:none"></div>
+    <div id="otaPanel">
+    <h3>Campaign right now</h3>
+    <div class="kpis">
+      <div class="kpi"><div class="l">Vehicles updated</div><div class="v" id="kDone">–</div></div>
+      <div class="kpi"><div class="l">Downloading · paused</div><div class="v" id="kNow">–</div></div>
+      <div class="kpi"><div class="l">Projected completion</div><div class="v" id="kEta">–</div></div>
+      <div class="kpi"><div class="l">Telemetry headroom kept</div><div class="v ok" id="kHead">5 <small>Mbit/s per car</small></div></div>
+      <div class="kpi big"><div class="l">Retail users protected: cells pushed past 80% by the campaign</div><div class="v" id="kRetail">–</div></div>
+      <div class="kpi big"><div class="l">Delivered by tier (what Verizon bills)</div><div class="v" id="kTier" style="font-size:14px">–</div></div>
+    </div>
+    <h3>Vehicles updated</h3>
+    <div class="muted" style="font-size:11px;margin:-2px 0 4px"><span class="ok">— planned (paced, deferred)</span> · <span style="color:#F2F7F5">- - all at 13:05</span> · <span class="bad">▮ cells pushed past 80% (all at 13:05)</span></div>
+    <svg id="chart" viewBox="0 0 380 120" preserveAspectRatio="none"></svg>
+    </div>
+    <h3>Decisions</h3>
+    <ul id="log"></ul>
+  </aside>
+
+  <footer>
+    <button class="btn" id="play">▶ Play</button>
+    <select id="speed"><option value="1">1 min/s</option><option value="3" selected>3 min/s</option><option value="10">10 min/s</option></select>
+    <span id="clock">13:00</span>
+    <input type="range" id="scrub" min="0" max="300" value="0">
+    <span class="phase" id="phase">–</span>
+  </footer>
+</div>
+
+<div class="ov" id="ov">
+  <div class="modal" id="modal">
+    <div class="mh"><h2 id="mTitle"></h2><span class="sp"></span><button class="btn" id="mCopy">Copy</button><button class="btn" id="mClose">✕</button></div>
+    <nav class="tabs" id="mTabs"></nav>
+    <div class="body"><div class="meta" id="mMeta"></div><pre class="code" id="mCode"></pre><div class="explain" id="mExplain"></div></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+(async () => {
+// ═══ The network and the fleet, from the documents in Atlas ════════════════
+const PREFIX = location.pathname.replace(/\/(night|ota|rides)\/?$/, "").replace(/\/+$/, "");
+const MODE = /\/rides\/?$/.test(location.pathname) ? "ride" : "ota";      // each scenario is a demo on its own
+let MODEL;
+try {
+  const r = await fetch(`${PREFIX}/api/fleet/model${location.search}`);
+  MODEL = await r.json();
+  if (!r.ok) throw new Error(MODEL.error || `HTTP ${r.status}`);
+} catch (e) {
+  document.getElementById("map").innerHTML =
+    `<div style="padding:40px;color:#F2F7F5">The fleet data is not available: ${String(e.message).replace(/</g, "&lt;")}</div>`;
+  return;
+}
+const DOCS = MODEL.docs, SIMP = MODEL.sim, P = SIMP.params;
+const CELLDOCS = Object.fromEntries(DOCS.ran_cells.map(c => [c._id, c]));
+const CAMPAIGN = DOCS.ota_campaigns[0], RIDEDOC = DOCS.ride_requests[0], TIERDOC = DOCS.price_tiers[0];
+const OFFERS = Object.fromEntries(DOCS.ota_offers.map(o => [o.vehicle_id, o]));
+const VEHDOCS = Object.fromEntries(DOCS.fleet_vehicles.map(o => [o._id, o]));
+const FC = Object.fromEntries(DOCS.ran_load_forecast.map(f => [f.cell_id, f]));
+const D = {
+  sites: DOCS.ran_sites.map(d => ({ id: d._id, name: d.name, lat: d.location.coordinates[1], lng: d.location.coordinates[0] })),
+  sectors: DOCS.ran_sites.flatMap(d => d.sectors.map(sd => { const c = CELLDOCS[`${d._id}-N77-${sd.sector}`];
+    return { id: c._id, site: d._id, sec: sd.sector, az: sd.azimuth_deg, lat: d.location.coordinates[1], lng: d.location.coordinates[0],
+             f: Math.round((0.92 + (c.load_profile.load_factor - 0.8) / 0.45 * 0.16) * 1000) / 1000 }; })),
+  load: SIMP.load, loops: SIMP.loops, locals: SIMP.locals, targets: SIMP.targets, vehicles: SIMP.vehicles, rides: SIMP.rides,
+};
+// ═══ The network this afternoon ═════════════════════════════════════════════
+const START = 13 * 60, STEPS = SIMP.steps;          // 13:00 → 18:00, one step per sim minute
+const DATE = SIMP.date;                             // the Tuesday before the night shift
+const CAP_MBPS = P.cap_mbps;                        // usable downlink of one C-band sector
+const RETAIL_CAP = CAMPAIGN.constraints.retail_prb_cap_pct, HEADROOM = CAMPAIGN.constraints.telemetry_reserve_mbps;
+const MAX_RATE = P.max_rate_mbps, GB = CAMPAIGN.package.size_gb;
+const QUOTE_T = P.quote_t, REVIEW_T = P.review_t, APPROVE_T = P.approve_t, GO_T = P.go_t, REQUOTE_T = P.requote_t;
+const RIDE_BOOK = P.ride_book_t, RIDE_PICK = P.ride_pick_t, RIDE_GO = P.ride_go_t;
+const VIEW = MODE === "ride" ? [RIDE_BOOK - 3, RIDE_BOOK + 37] : [0, P.ota_end_t];   // the scenario's time window
+const M_LAT = 111320, M_LNG = 111320 * Math.cos(40.752 * Math.PI / 180);
+const SITE = Object.fromEntries(D.sites.map(s => [s.id, s]));
+const SECT = D.sectors.map((c, i) => ({ ...c, i, name: SITE[c.site].name }));
+const BYSITE = {}; for (const c of SECT) (BYSITE[c.site] ||= []).push(c);
+const fmt = (t) => { const m = Math.round(START + t); return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
+const iso = (t) => `${DATE}T${fmt(t)}:00-05:00`;
+function loadAt(c, t) {
+  const a = D.load[c.site], h = Math.min(4.999, Math.max(0, t) / 60), i = Math.floor(h);
+  return Math.min(99, Math.max(5, (a[i] + (a[i + 1] - a[i]) * (h - i)) * c.f));
+}
+const TIER_LT = TIERDOC.tiers.filter(x => x.if_load_pct_lt != null).map(x => x.if_load_pct_lt);   // [55, 75], from price_tiers
+const tierOf = (l) => l < TIER_LT[0] ? "discounted" : l < TIER_LT[1] ? "standard" : "congested";
+const TIERC = { discounted: [0, 237, 100], standard: [255, 192, 16], congested: [255, 90, 95] };
+const dlOf = (l) => Math.max(0.5, 120 * (1 - l / 100) ** 2);   // what one more device can expect, Mbit/s
+function serving(x, y) {
+  let best = null, bd = 1e9;
+  for (const s of D.sites) { const d = (s.lat - y) ** 2 + ((s.lng - x) * 0.757) ** 2; if (d < bd) { bd = d; best = s; } }
+  const br = (Math.atan2((x - best.lng) * 0.757, y - best.lat) * 180 / Math.PI + 360) % 360;
+  return BYSITE[best.id].reduce((a, c) => Math.abs(((c.az - br + 540) % 360) - 180) < Math.abs(((a.az - br + 540) % 360) - 180) ? c : a);
+}
+const miles = (a, b) => Math.hypot((a[0] - b[0]) * M_LNG, (a[1] - b[1]) * M_LAT) / 1609.34;
+
+// Backhaul, from transport_links: each site hangs off an aggregation router; AGG-MTN-W2's uplink is full.
+const AGG = {};
+for (const n of DOCS.transport_links.filter(x => x.kind === "node" && x.role === "aggregation router"))
+  AGG[n._id] = { pos: n.location.coordinates, util: n.uplink_util_pct, sites: [] };
+for (const l of DOCS.transport_links.filter(x => x.kind === "link" && AGG[x.to] && SITE[x.from])) AGG[l.to].sites.push(l.from);
+const AGG_PE = Object.fromEntries(DOCS.transport_links.filter(x => x.kind === "link" && AGG[x.from]).map(l => [l.from, l.to]));
+const AGG_OF = {}; for (const [a, g] of Object.entries(AGG)) for (const s of g.sites) AGG_OF[s] = a;
+
+// ═══ Streets: robotaxi loops, deferral trips, local loops, ride candidates ═════
+function prep(r) {
+  const c = [0]; for (let i = 1; i < r.coords.length; i++) {
+    const [x1, y1] = r.coords[i - 1], [x2, y2] = r.coords[i]; c.push(c[i - 1] + Math.hypot((x2 - x1) * M_LNG, (y2 - y1) * M_LAT)); }
+  r.cum = c; r.len = c[c.length - 1]; return r;
+}
+function along(r, d) {
+  d = Math.max(0, Math.min(r.len, d)); let lo = 0, hi = r.cum.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (r.cum[m] <= d) lo = m; else hi = m; }
+  const k = (d - r.cum[lo]) / ((r.cum[hi] - r.cum[lo]) || 1), a = r.coords[lo], b = r.coords[hi];
+  return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k];
+}
+D.loops.forEach(prep); for (const t of D.targets) D.locals[t].forEach(prep);
+const SPEED = P.speed_m_per_min;                       // metres per sim minute
+// A trip plan: leave the loop at a waypoint, ride to a cheaper cell, download parked, then work locally.
+const mkPlan = (x) => ({ tDep: x.tDep, tArr: x.tArr, target: x.target, tgtName: SITE[x.target].name,
+  trip: prep({ coords: x.tr }), local: D.locals[x.target][x.tp] });
+const V = D.vehicles.map((v, i) => { v.i = i; v.sp = SPEED * v.vf; v.L = D.loops[v.loop];
+  if (v.defer) { v.plan = mkPlan(v); v.tgtName = v.plan.tgtName; } if (v.re) v.plan2 = mkPlan(v.re); return v; });
+function vpos(v, t) {
+  const p = v.plan;
+  if (!p || t < p.tDep) return along(v.L, (v.off + v.sp * t) % v.L.len);
+  if (t < p.tArr) return along(p.trip, v.sp * (t - p.tDep));
+  if (v.doneT == null || t < v.doneT + 4) return p.trip.coords[p.trip.coords.length - 1];
+  return along(p.local, (v.sp * (t - v.doneT - 4)) % p.local.len);
+}
+const RIDE = {};
+for (const c of RIDEDOC.candidates) RIDE[c.route_id] = { ...prep({ coords: D.rides[c.route_id].coords }), k: c.route_id, label: c.label, mins: c.duration_min };
+
+// ═══ The quote: the network's answer per vehicle (13:01), from ota_offers ══════
+const BETTER = D.targets;                              // cells the agent may route deferred downloads into
+const SECTBYID = Object.fromEntries(SECT.map(c => [c.id, c]));
+for (const v of V) {
+  const o = OFFERS[v.id], vd = VEHDOCS[v.id];
+  v.q = { pos: vd.position.coordinates, cell: SECTBYID[o.serving_cell], tier: o.tier, dl: o.expected_dl_mbps, offer: o };
+  if (o.alternative) v.q.alt = { site: o.alternative.site_id, name: o.alternative.area_name, tier: o.alternative.tier,
+                                 dl: o.alternative.expected_dl_mbps, mi: o.alternative.distance_mi };
+}
+const NNOW = V.filter(v => !v.defer).length, NDEF = V.length - NNOW;
+
+// ═══ Run the afternoon twice: planned (paced, deferred) and naive (all at 13:05) ══
+const frames = [], log = [];
+const ST = { WAIT: 0, DL: 1, PAUSE: 2, ENROUTE: 3, QUEUED: 4, DONE: 5 };
+(function simulate() {
+  const prog = new Float64Array(V.length), nprog = new Float64Array(V.length), ndone = new Array(V.length).fill(null);
+  const byTier = { discounted: 0, standard: 0, congested: 0 };
+  let marks = [0.25, 0.5, 0.75, 1], lastPaused = 0;
+  for (let t = 0; t < STEPS; t++) {
+    const fr = { t, st: new Uint8Array(V.length), rate: new Float32Array(V.length), prog: null, done: 0, dl: 0, paused: 0,
+                 secAdd: new Float32Array(SECT.length), naiveDone: 0, naivePushed: 0, naiveLoss: 0, tiers: null };
+    // planned: paced per sector so retail load + campaign stays under 80%; congested cells carry no campaign traffic
+    if (t === REQUOTE_T) {        // revised offers: cars still waiting keep crossing busy cells, so their next rides end in cheaper ones
+      const re = V.filter(v => !v.plan && v.doneT == null && v.plan2);
+      for (const v of re) { v.plan = v.plan2; v.requoted = true; }
+      frames.REQUOTED = re.length;
+      log.push({ t, who: "agent", id: "requote", text: `Revised offers for <b>${re.length}</b> cars still waiting: they keep crossing congested cells, so their next rides now end in ${BETTER.map(b => SITE[b].name).join(", ")}. Pushed to the fleet by change stream.` });
+    }
+    const budget = SECT.map(c => { const l = loadAt(c, t); return tierOf(l) === "congested" ? 0 : Math.max(0, (RETAIL_CAP - l) / 100 * CAP_MBPS); });
+    for (const v of V) {
+      const i = v.i;
+      if (v.doneT != null && t >= v.doneT) { fr.st[i] = ST.DONE; continue; }
+      if (t < GO_T) { fr.st[i] = v.defer && t >= QUOTE_T ? ST.ENROUTE : ST.WAIT; continue; }
+      if (v.plan && t < v.plan.tArr) { fr.st[i] = v.requoted && t < v.plan.tDep ? ST.PAUSE : ST.ENROUTE; if (fr.st[i] === ST.PAUSE) fr.paused++; continue; }
+      const c = serving(...vpos(v, t)), l = loadAt(c, t);
+      const want = Math.min(MAX_RATE, dlOf(l) - HEADROOM, budget[c.i]);
+      if (tierOf(l) === "congested") { fr.st[i] = ST.PAUSE; fr.paused++; continue; }
+      if (want < 2) { fr.st[i] = v.plan ? ST.QUEUED : ST.PAUSE; if (!v.plan) fr.paused++; continue; }
+      budget[c.i] -= want; fr.secAdd[c.i] += want; fr.rate[i] = want; fr.st[i] = ST.DL; fr.dl++;
+      const gb = want * 60 / 8 / 1000; prog[i] += gb; byTier[tierOf(l)] += gb;
+      if (prog[i] >= GB) { prog[i] = GB; v.doneT = t + 1; }
+    }
+    fr.prog = Float32Array.from(prog); fr.done = V.filter(v => v.doneT != null && v.doneT <= t).length; fr.tiers = { ...byTier };
+    // naive: everyone pulls 2.4 GB from 13:05 where they are; the cell's capacity is shared with retail users
+    if (t >= GO_T) {
+      const n = new Array(SECT.length).fill(0), where = [];
+      for (const v of V) { if (ndone[v.i] != null) { where.push(null); continue; } const c = serving(...along(v.L, (v.off + v.sp * t) % v.L.len)); n[c.i]++; where.push(c); }
+      let pushed = 0, loss = 0;
+      const k = SECT.map((c, j) => { const retail = loadAt(c, t) / 100 * CAP_MBPS, dem = retail + n[j] * MAX_RATE, kk = Math.min(1, CAP_MBPS / dem);
+        if (n[j] && loadAt(c, t) < RETAIL_CAP && (retail + n[j] * MAX_RATE * kk) / CAP_MBPS * 100 > RETAIL_CAP) pushed++;
+        if (n[j]) loss = Math.max(loss, 1 - kk); return kk; });
+      V.forEach((v, j) => { const c = where[j]; if (!c) return; nprog[j] += MAX_RATE * k[c.i] * 60 / 8 / 1000; if (nprog[j] >= GB) ndone[j] = t + 1; });
+      fr.naivePushed = pushed; fr.naiveLoss = loss;
+    }
+    fr.naiveDone = ndone.filter(x => x != null && x <= t).length;
+    // decisions worth a line
+    for (const m of marks.slice()) if (fr.done >= m * V.length) {
+      marks = marks.filter(x => x !== m);
+      log.push({ t, who: "net", text: m === 1 ? `Campaign complete: all ${V.length} vehicles updated at ${fmt(t)}, deadline 18:00.`
+        : `${Math.round(m * 100)}% of the fleet updated (${fr.done}/${V.length}). ${fr.paused} paused in congested cells right now.` });
+    }
+    if (t > 60 && t % 30 === 0 && fr.paused > lastPaused + 4) log.push({ t, who: "net", text: `Rush building: ${fr.paused} downloads paused while their cars cross congested cells. They resume as the cars leave.` });
+    if (t % 30 === 0) lastPaused = fr.paused;
+    frames.push(fr);
+  }
+  frames.DONE_T = Math.max(...V.map(v => v.doneT ?? 0));
+  frames.NAIVE_DONE_T = Math.max(...ndone.map(x => x ?? 0));
+  frames.NAIVE_PUSHED = Math.max(...frames.map(f => f.naivePushed));
+  frames.NAIVE_LOSS = Math.max(...frames.map(f => f.naiveLoss));
+})();
+
+// ═══ The ride (17:03): score three candidate routes over the ride's time window ═══
+const PROFILE = { ...RIDEDOC.app_profile, call_min: RIDEDOC.app_profile.duration_min };
+// the forecast for a cell in a quarter hour, from ran_load_forecast (what the route query reads)
+const fcLoad = (id, tt) => FC[id].quarter_hour_load_pct[Math.min(19, Math.floor(tt / 15))];
+for (const r of Object.values(RIDE)) {
+  r.samples = []; const cells = new Map();
+  for (let d = 0; d <= r.len; d += 40) {
+    const p = along(r, d), tt = RIDE_GO + d / r.len * r.mins, c = serving(...p), l = fcLoad(c.id, tt), dl = dlOf(l);
+    r.samples.push({ p, d, tt, c, l, dl }); const e = cells.get(c.id) || { c, min: 1e9, t0: tt, t1: tt };
+    e.min = Math.min(e.min, dl); e.t1 = tt; cells.set(c.id, e);
+  }
+  r.cells = [...cells.values()]; r.min = Math.min(...r.samples.map(s => s.dl));
+  r.dips = r.cells.filter(e => e.min < PROFILE.min_dl_mbps).map(e => e.c.name).filter((x, i, a) => a.indexOf(x) === i);
+  r.segs = []; for (let i = 1; i < r.samples.length; i++) r.segs.push({ path: [r.samples[i - 1].p, r.samples[i].p], dl: r.samples[i].dl });
+}
+const BEST = Object.values(RIDE).sort((a, b) => b.min - a.min)[0];
+const RIDE_END = RIDE_GO + BEST.mins;
+const forecastBump = BEST.cells.reduce((a, e) => e.min < a.min ? e : a);
+
+// ═══ Decisions log ══════════════════════════════════════════════════════════
+const congestedNames = [...new Set(V.filter(v => v.defer).map(v => v.q.cell.name))];
+log.push(
+  { t: 0, who: "fleet", text: `Quote request OTA-FA-2026-48: ${V.length} vehicles, ${GB} GB each (FW 2026.48.1), done by 18:00, keep ${HEADROOM} Mbit/s per car for remote assistance.` },
+  { t: QUOTE_T, who: "agent", id: "quote", text: `Answer per vehicle: <b>${NNOW}</b> download now in discounted or standard cells, paced. <b>${NDEF}</b> sit in congested cells (${congestedNames.slice(0, 4).join(", ")}…), about ${Math.round(V.filter(v => v.defer).reduce((a, v) => a + v.q.dl, 0) / NDEF)} Mbit/s: their next rides end in ${BETTER.map(b => SITE[b].name).join(", ")}, discounted tier.` },
+  { t: QUOTE_T, who: "agent", id: "backhaul", text: `Hell's Kitchen not offered: its radio is quiet, but backhaul AGG-MTN-W2 runs at 91% (followed the topology, not only the cell).` },
+  { t: REVIEW_T, who: "noc", text: `Campaign above 100 vehicles: paused for a NOC review.` },
+  { t: APPROVE_T, who: "noc", text: `Approved by the NOC on-call engineer. Downloads start 13:05.` },
+  { t: GO_T, who: "net", text: `Downloads start, paced per cell so no cell passes 80% for retail users. Congested cells carry no campaign traffic.` },
+  { t: RIDE_BOOK, who: "fleet", text: `Ride request: Chelsea → near the UN, 17:05. The passenger needs a ${PROFILE.call_min}-minute video call (${PROFILE.min_dl_mbps} Mbit/s).` },
+  { t: RIDE_BOOK, who: "agent", id: "routes", text: `Scored 3 routes over 17:05–17:30: ${Object.values(RIDE).map(r => `${r.k} ${r.mins} min, lowest ${r.min.toFixed(1)} Mbit/s`).join(" · ")}.` },
+  { t: RIDE_PICK, who: "fleet", text: `Passenger picks route ${BEST.k}, the connected ride (premium). Slice requested for the cells along it, 17:05–${fmt(RIDE_END)}.` },
+  { t: RIDE_GO, who: "net", text: `Slice active on the ${BEST.cells.length} cells along route ${BEST.k}: ${PROFILE.min_dl_mbps} Mbit/s guaranteed for the car.` },
+  { t: RIDE_GO + Math.round(BEST.mins * 0.45), who: "agent", text: `Forecast update: ${forecastBump.c.name} sector ${forecastBump.c.sec} at ${tierOf(loadAt(forecastBump.c, forecastBump.t0))} by ${fmt(forecastBump.t0)}. The slice holds ${PROFILE.min_dl_mbps} Mbit/s; no reroute.` },
+  { t: RIDE_END, who: "fleet", text: `Ride complete. The call stayed HD: lowest predicted ${BEST.min.toFixed(1)} Mbit/s, never below the slice's ${PROFILE.min_dl_mbps}.` },
+);
+log.sort((a, b) => a.t - b.t);
+
+// ═══ Map ═════════════════════════════════════════════════════════════════════
+const HOME = { center: [-73.9895, 40.7522], zoom: 14.0, pitch: 45, bearing: -29 };
+const RIDEVIEW = { center: [-73.9862, 40.7452], zoom: 14.35, pitch: 40, bearing: -29 };
+const map = new maplibregl.Map({ container: "mapEl", style: "https://tiles.openfreemap.org/styles/dark", ...HOME, attributionControl: { compact: true } });
+const overlay = new deck.MapboxOverlay({ interleaved: false, layers: [], useDevicePixels: 1, getTooltip });
+map.addControl(overlay);
+map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+for (const s of D.sites) { const el = document.createElement("div"); el.className = "site-label"; el.textContent = s.name;
+  new maplibregl.Marker({ element: el, anchor: "top" }).setLngLat([s.lng, s.lat]).addTo(map); }
+const mkPin = (cls, html, ll) => { const el = document.createElement("div"); el.className = "pin " + cls; el.innerHTML = html;
+  return new maplibregl.Marker({ element: el, anchor: "bottom" }).setLngLat(ll); };
+const pinHK = mkPin("red", "Backhaul full · not offered", [SITE["NYC-MTN-0702"].lng, SITE["NYC-MTN-0702"].lat]);
+const pinPick = mkPin("green", "Pickup · video call", RIDEDOC.pickup.coordinates);
+const pinDrop = mkPin("", "Drop-off", RIDEDOC.dropoff.coordinates);
+
+function wedge(c, r = 230, spread = 50) {
+  const pts = [[c.lng, c.lat]], ml = M_LNG;
+  for (let a = c.az - spread; a <= c.az + spread + .01; a += 6) { const rad = a * Math.PI / 180; pts.push([c.lng + Math.sin(rad) * r / ml, c.lat + Math.cos(rad) * r / M_LAT]); }
+  pts.push([c.lng, c.lat]); return pts;
+}
+for (const c of SECT) c.poly = wedge(c);
+const LINKS = Object.entries(AGG).flatMap(([a, g]) => g.sites.map(s => ({ a, from: [SITE[s].lng, SITE[s].lat], to: g.pos, util: g.util })));
+const AGGS = Object.entries(AGG).map(([id, g]) => ({ id, ...g }));
+const VCOL = [[159, 180, 190], [110, 168, 254], [255, 192, 16], [185, 140, 255], [185, 140, 255], [0, 237, 100]];
+
+const cache = new Map();
+function staticFor(t) {
+  if (cache.has(t)) return cache.get(t);
+  const fr = frames[t];
+  const sect = SECT.map(c => { const l = loadAt(c, t), tr = tierOf(l); return { c, l, tr, add: fr.secAdd[c.i], color: [...TIERC[tr], 95] }; });
+  const d = { sect }; cache.set(t, d); return d;
+}
+function getTooltip({ object: o, layer }) {
+  if (!o || !layer) return null;
+  if (layer.id === "vehicles") return { html: vehicleCard(o.v, curT) };
+  if (layer.id === "cells") return { html: `<b>${o.c.id}</b><br>${o.c.name}, sector ${o.c.sec}<br>Tier: <b>${o.tr}</b> · ${dlOf(o.l).toFixed(0)} Mbit/s for one more device` +
+    (o.add ? `<br>Campaign traffic: ${o.add.toFixed(0)} Mbit/s (paced)` : "") + `<br><span style="color:#9FB4BE">The fleet sees the tier and expected Mbit/s, never the raw load.</span>` };
+  if (layer.id === "aggs") return { html: `<b>${o.id}</b> backhaul, ${o.util}% used${o.util > 80 ? "<br>Cells behind it are not offered for downloads." : ""}` };
+  if (layer.id === "routes") return { html: `Route ${o.r.k}: predicted ${o.dl.toFixed(1)} Mbit/s here` };
+  return null;
+}
+function vehicleCard(v, t) {
+  const q = v.q, st = frames[Math.floor(t)].st[v.i], pr = frames[Math.floor(t)].prog[v.i];
+  const now = ["waiting for the update", "downloading", "paused (congested cell)", "deferred, on its way", "parked, in the queue", "updated"][st];
+  let ans = `<b>${v.id}</b> · ${now}<br>At 13:01: ${q.cell.name} (${q.cell.id}), <b>${q.tier}</b>, ${q.dl.toFixed(1)} Mbit/s expected<br>`;
+  ans += v.defer ? `Answer: <b class="vio">defer</b>. Next ride ends in ${q.alt.name} (${q.alt.mi.toFixed(1)} mi, ${q.alt.tier}, ${q.alt.dl.toFixed(0)} Mbit/s), arrives ${fmt(v.plan.tArr)}`
+    : `Answer: <b class="blu">download now</b>, paced. Pauses in congested cells.`;
+  if (v.requoted && t >= REQUOTE_T) ans += `<br>15:30 revised: <b class="vio">defer</b>, next ride ends in ${v.plan.tgtName}, arrives ${fmt(v.plan.tArr)}`;
+  ans += `<br>Progress: ${pr.toFixed(1)} / ${GB} GB${v.doneT != null ? ` · done ${fmt(v.doneT)}` : ""} · deadline 18:00`;
+  return ans;
+}
+let curT = 0;
+function render(t) {
+  const it = Math.floor(t), fr = frames[it], s = staticFor(it);
+  const vehicles = V.map(v => ({ v, p: vpos(v, t), st: MODE === "ride" ? 0 : fr.st[v.i] }));   // rides: the fleet just drives
+  const layers = [
+    new deck.PolygonLayer({ id: "cells", data: s.sect, getPolygon: o => o.c.poly, getFillColor: o => o.color, stroked: true,
+      getLineColor: o => o.add > 0 ? [110, 168, 254, 220] : [255, 255, 255, 30], getLineWidth: o => o.add > 0 ? 2 : 1, lineWidthUnits: "pixels", pickable: true }),
+    new deck.LineLayer({ id: "backhaul", data: MODE === "ota" ? LINKS : [], getSourcePosition: o => o.from, getTargetPosition: o => o.to,
+      getColor: o => o.util > 80 ? [255, 90, 95, 200] : [75, 107, 120, 150], getWidth: o => o.util > 80 ? 2.5 : 1.2 }),
+    new deck.ScatterplotLayer({ id: "aggs", data: MODE === "ota" ? AGGS : [], getPosition: o => o.pos, getRadius: 22, radiusUnits: "meters", pickable: true,
+      getFillColor: o => o.util > 80 ? [255, 90, 95] : [75, 107, 120], stroked: true, getLineColor: [0, 30, 43], lineWidthMinPixels: 1 }),
+    new deck.ScatterplotLayer({ id: "sites", data: D.sites, getPosition: o => [o.lng, o.lat], getRadius: 9, radiusUnits: "meters",
+      getFillColor: [242, 247, 245] }),
+  ];
+  if (MODE === "ota" && t >= QUOTE_T && t < 215) {
+    const arcs = V.filter(v => v.plan && t < v.plan.tArr && (v.defer || t >= REQUOTE_T)).map(v => ({ from: vpos(v, t), to: v.plan.trip.coords[v.plan.trip.coords.length - 1] }));
+    layers.push(new deck.ArcLayer({ id: "defer", data: arcs, getSourcePosition: o => o.from, getTargetPosition: o => o.to,
+      getSourceColor: [185, 140, 255, t < 15 ? 200 : 90], getTargetColor: [0, 237, 100, t < 15 ? 200 : 90], getWidth: t < 15 ? 1.6 : 1, getHeight: 0.35 }));
+  }
+  const rideOn = MODE === "ride" && t >= RIDE_BOOK;
+  if (rideOn) {
+    const segs = Object.values(RIDE).flatMap(r => r.segs.map(sg => ({ ...sg, r })));
+    layers.push(new deck.PathLayer({ id: "routes", data: segs, getPath: o => o.path, pickable: true, widthUnits: "pixels",
+      getWidth: o => o.r === BEST && t >= RIDE_PICK ? 7 : 3.5, capRounded: true,
+      getColor: o => { const a = o.r === BEST || t < RIDE_PICK ? 235 : 150; return o.dl >= 12 ? [0, 237, 100, a] : o.dl >= PROFILE.min_dl_mbps ? [255, 192, 16, a] : [255, 90, 95, a]; } }));
+  }
+  layers.push(new deck.ScatterplotLayer({ id: "vehicles", data: vehicles, getPosition: o => o.p, getRadius: 4.2, radiusUnits: "pixels",
+    getFillColor: o => VCOL[o.st], stroked: true, getLineColor: [0, 30, 43], lineWidthMinPixels: 1, pickable: true }));
+  if (MODE === "ride" && t >= RIDE_GO) {
+    const p = along(BEST, Math.min(1, (t - RIDE_GO) / BEST.mins) * BEST.len);
+    layers.push(new deck.ScatterplotLayer({ id: "ride", data: [p], getPosition: o => o, getRadius: 9, radiusUnits: "pixels",
+      getFillColor: [255, 255, 255], stroked: true, getLineColor: [0, 237, 100], lineWidthMinPixels: 3 }));
+  }
+  overlay.setProps({ layers });
+}
+let view = null, rideCamC = null;
+function rideCam() {             // frame all three candidate routes, clear of the legend
+  if (rideCamC) return rideCamC;
+  const pts = Object.values(RIDE).flatMap(r => r.coords), xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  const c = map.cameraForBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]],
+    { padding: { top: 70, bottom: 60, left: 340, right: 70 }, bearing: -29, pitch: 40 });
+  return (rideCamC = c ? { center: c.center, zoom: c.zoom, bearing: -29, pitch: 40 } : RIDEVIEW);
+}
+function camera(t) {
+  const want = MODE === "ride" ? "ride" : "home";
+  if (want !== view) { const first = view === null; view = want; const cam = want === "ride" ? rideCam() : HOME;
+    first ? map.jumpTo(cam) : map.flyTo({ ...cam, duration: 2400 }); }
+  const q = MODE === "ota" && t >= QUOTE_T && t < 30; q ? pinHK.addTo(map) : pinHK.remove();
+  const r = want === "ride"; r ? (pinPick.addTo(map), pinDrop.addTo(map)) : (pinPick.remove(), pinDrop.remove());
+}
+
+// ═══ Side panel ══════════════════════════════════════════════════════════════
+const $ = (id) => document.getElementById(id);
+function panel(t) {
+  const fr = frames[t];
+  $("clock").textContent = fmt(t); $("scrub").value = t; camera(t);
+  const status = t < QUOTE_T ? `<span class="chip warn">REQUESTING</span>` : t < APPROVE_T ? `<span class="chip warn">IN REVIEW</span>`
+    : fr.done >= V.length ? `<span class="chip ok">COMPLETE</span>` : `<span class="chip blu">RUNNING</span>`;
+  $("cReq").innerHTML = `<div class="hd"><span class="who fleet">FLEET CONSOLE</span>Fleet A <span class="muted">(anonymized)</span><span class="sp"></span>${status}</div>
+    Campaign <b>OTA-FA-2026-48</b>: firmware 2026.48.1, <b>${GB} GB</b> to <b>${V.length}</b> vehicles, done by <b>18:00</b>.
+    Keep ${HEADROOM} Mbit/s per car for safety and remote assistance.`;
+  $("cReq").style.display = MODE === "ota" ? "" : "none";
+  $("cQuote").style.display = MODE === "ota" && t >= QUOTE_T ? "" : "none";
+  $("cQuote").innerHTML = `<div class="hd"><span class="who agent">VERIZON NETWORK AGENT</span>Quote, per vehicle<span class="sp"></span><a style="color:var(--green);cursor:pointer;font-size:11px" id="qEv">evidence</a></div>
+    <div class="split"><div><div class="muted">Download now</div><div class="v blu">${NNOW}</div><div class="muted">discounted or standard cells, paced</div></div>
+    <div><div class="muted">Defer into cheaper cells</div><div class="v vio">${NDEF}</div><div class="muted">next rides end in ${BETTER.map(b => SITE[b].name).join(", ")}</div></div></div>
+    <div style="margin-top:6px" class="muted">Not offered: <b style="color:var(--red)">Hell's Kitchen</b>, radio quiet but backhaul AGG-MTN-W2 at 91%.</div>`;
+  const qe = $("qEv"); if (qe) qe.onclick = () => openHero(0);   // run the quote on Atlas
+  $("cNoc").style.display = MODE === "ota" && t >= REVIEW_T && t < 60 ? "" : "none";
+  $("cNoc").innerHTML = `<div class="hd"><span class="who noc">NOC REVIEW</span>Campaign above 100 vehicles<span class="sp"></span>${t >= APPROVE_T ? `<span class="chip ok">APPROVED 13:04</span>` : `<span class="chip warn">PENDING</span>`}</div>
+    ${V.length} vehicles · ${(V.length * GB).toFixed(0)} GB · projected completion ${fmt(frames.DONE_T)} · no cell above 80% for retail users.`;
+  $("cRide").style.display = MODE === "ride" ? "" : "none";
+  if (MODE === "ride" && t < RIDE_BOOK) $("cRide").innerHTML = `<div class="hd"><span class="who fleet">RIDE BOOKING</span>Fleet A <span class="muted">(anonymized)</span></div>
+    <span class="muted">Waiting for a booking. At 17:03 a passenger asks for a ride from Chelsea to near the UN, with a video call on the way.</span>`;
+  if (MODE === "ride" && t >= RIDE_BOOK) {
+    const rows = Object.values(RIDE).sort((a, b) => a.mins - b.mins).map(r => {
+      const pick = r === BEST && t >= RIDE_PICK;
+      return `<tr class="${pick ? "pick" : ""}"><td><b>${r.k}</b> ${esc(r.label)}</td><td>${r.mins} min</td>
+      <td class="${r.min >= PROFILE.min_dl_mbps ? "ok" : "bad"}">${r.min.toFixed(1)}</td><td>${r === BEST ? "<b class='ok'>Connected ride</b><br><span class='muted'>premium, slice-backed</span>" : r.dips.length ? `<span class="muted">call poor in ${r.dips.length} cell${r.dips.length > 1 ? "s" : ""}: ${r.dips.slice(0, 3).join(", ")}</span>` : "standard"}</td></tr>`; }).join("");
+    let live = "";
+    if (t >= RIDE_GO && t <= RIDE_END) {
+      const smp = BEST.samples[Math.min(BEST.samples.length - 1, Math.floor((t - RIDE_GO) / BEST.mins * BEST.samples.length))];
+      const got = Math.max(PROFILE.min_dl_mbps, smp.dl);
+      live = `<div style="margin-top:6px">In the car now: ${smp.c.name} · call <b class="ok">HD</b>, ${got.toFixed(1)} Mbit/s (slice floor ${PROFILE.min_dl_mbps})
+        <div class="bar"><i style="width:${Math.min(100, (t - RIDE_GO) / BEST.mins * 100)}%"></i></div></div>`;
+    }
+    $("cRide").innerHTML = `<div class="hd"><span class="who fleet">RIDE BOOKING</span>Chelsea → near the UN, 17:05<span class="sp"></span><a style="color:var(--green);cursor:pointer;font-size:11px" id="rEv">evidence</a></div>
+      <span class="muted">Passenger needs a ${PROFILE.call_min}-min video call (≥ ${PROFILE.min_dl_mbps} Mbit/s). Lowest predicted Mbit/s per route, over the ride's window:</span>
+      <table class="routes"><tr><th>Route</th><th>Time</th><th>Lowest</th><th>Offer</th></tr>${rows}</table>${live}`;
+    $("rEv").onclick = () => openHero(0);   // score the routes on Atlas
+  }
+  $("kDone").innerHTML = `${fr.done} <small>/ ${V.length}</small>`;
+  $("kNow").innerHTML = `<span class="blu">${fr.dl}</span> <small>·</small> <span class="warn">${fr.paused}</span>`;
+  $("kEta").innerHTML = t < QUOTE_T ? "–" : `${fmt(frames.DONE_T)} <small class="ok">✓ before 18:00</small>`;
+  $("kRetail").innerHTML = t < GO_T ? `<small>from 13:05</small>` : `<span class="ok">0</span> <small>planned · if all ${V.length} downloaded at 13:05 (done ${fmt(frames.NAIVE_DONE_T)}):</small> <span class="bad">${frames.NAIVE_PUSHED}</span> <small>cells, retail downlink −${Math.round(100 * frames.NAIVE_LOSS)}% in the worst</small>`;
+  const T = fr.tiers; $("kTier").innerHTML = `<span class="ok">${T.discounted.toFixed(0)} GB</span> discounted · <span class="warn">${T.standard.toFixed(0)} GB</span> standard · <span class="bad">${T.congested.toFixed(0)} GB</span> congested`;
+  $("phase").textContent = MODE === "ride"
+    ? (t < RIDE_BOOK ? "The evening rush: the fleet's cars on Midtown's streets" : t < RIDE_GO ? "Three candidate routes, scored on the forecast"
+       : t <= RIDE_END ? "On the connected route: the call stays HD" : "Ride complete, call never dropped")
+    : t < QUOTE_T ? "The fleet asks before a large update" : t < GO_T ? "Per-vehicle answers, NOC review"
+    : t < REQUOTE_T ? "Paced downloads now, deferred downloads in cheaper cells" : fr.done < V.length ? "Revised offers: the last cars finish in cheaper cells as the rush builds"
+    : "Campaign done before the rush, retail users never noticed";
+  const tl = $("toast"), show = MODE === "ota" ? t >= QUOTE_T && t < 14 : t >= RIDE_BOOK && t < RIDE_GO + 3;
+  tl.style.display = show ? "block" : "none";
+  if (MODE === "ota") tl.innerHTML = `<b>13:01 · Network agent</b> · ${NDEF} robotaxis sit in congested cells. Instead of 3 Mbit/s there, their next rides end in cheaper cells nearby (arcs), where they download at discounted tier.`;
+  else tl.innerHTML = `<b>17:03 · Connected ride</b> · Route ${BEST.k} takes ${BEST.mins - Math.min(...Object.values(RIDE).map(r => r.mins))} minutes longer, but the predicted downlink never drops below ${BEST.min.toFixed(0)} Mbit/s. The fleet sells it as a premium ride.`;
+  const items = log.filter(l => l.t <= t && (MODE === "ride" ? l.t >= RIDE_BOOK : l.t < RIDE_BOOK)).slice(-14).reverse();
+  $("log").innerHTML = items.map(l => `<li><span class="t">${fmt(l.t)}</span><span class="w ${l.who}">${
+    { fleet: "FLEET", agent: "AGENT", noc: "NOC", net: "NETWORK" }[l.who]}</span>${l.text}${l.id ? ` <a data-id="${l.id}">evidence</a>` : ""}</li>`).join("");
+  if (MODE === "ota") chart(t);
+}
+$("log").addEventListener("click", (e) => { const id = e.target.dataset && e.target.dataset.id; if (id) openHero(id === "requote" ? 2 : 0); });
+
+function chart(t) {
+  const W = 380, H = 120, x = (i) => (i - VIEW[0]) / (VIEW[1] - VIEW[0]) * W, y = (n) => H - 14 - n / V.length * (H - 26);
+  let a = "", b = "", red = "";
+  frames.slice(VIEW[0], VIEW[1] + 1).forEach((f, i) => { a += `${i ? "L" : "M"}${x(i).toFixed(1)},${y(f.done).toFixed(1)}`; b += `${i ? "L" : "M"}${x(i).toFixed(1)},${y(f.naiveDone).toFixed(1)}`;
+    if (f.naivePushed && i % 2 === 0) red += `<rect x="${x(i).toFixed(1)}" y="${(H - 14 - f.naivePushed * 1.6).toFixed(1)}" width="1.4" height="${(f.naivePushed * 1.6).toFixed(1)}" fill="rgba(255,90,95,.55)"/>`; });
+  const ticks = [0, 60, 120, 180, 240].map(i => `<text x="${x(i) + 2}" y="${H - 2}" fill="#9FB4BE" font-size="9">${fmt(i)}</text>`).join("");
+  $("chart").innerHTML = `${red}<path d="${b}" fill="none" stroke="#F2F7F5" stroke-width="1.1" stroke-dasharray="4 3" opacity=".7"/>
+    <path d="${a}" fill="none" stroke="#00ED64" stroke-width="1.8"/>
+    <line x1="${x(t)}" x2="${x(t)}" y1="4" y2="${H - 14}" stroke="#FFC010" stroke-width="1.2"/>
+${ticks}`;
+}
+
+// ═══ Playback ═══════════════════════════════════════════════════════════════
+let t = VIEW[0], playing = false, acc = 0, last = performance.now(), lastDraw = 0;
+$("scrub").min = VIEW[0]; $("scrub").max = VIEW[1];
+function loop(now) {
+  const dt = (now - last) / 1000; last = now;
+  if (playing) { acc += dt * +$("speed").value; while (acc >= 1) { acc -= 1; t = Math.min(VIEW[1], t + 1); if (t === VIEW[1]) { playing = false; $("play").textContent = "▶ Play"; } panel(t); } }
+  if (now - lastDraw > 50) { lastDraw = now; curT = Math.min(VIEW[1], t + (playing ? acc : 0)); render(curT); }   // vehicles move smoothly at 20 fps
+  requestAnimationFrame(loop);
+}
+$("play").onclick = () => { playing = !playing; $("play").textContent = playing ? "❚❚ Pause" : "▶ Play"; if (t >= VIEW[1]) t = VIEW[0]; };
+$("scrub").oninput = (e) => { t = +e.target.value; acc = 0; panel(t); };
+$("scenario").value = MODE === "ride" ? "rides" : "ota";
+$("scenario").onchange = (e) => { const q = new URLSearchParams(location.search); q.delete("t");
+  location.href = `${PREFIX}/${e.target.value}${q.toString() ? "?" + q : ""}`; };
+$("hSub").textContent = MODE === "ride" ? "Connectivity-aware rides · Midtown Manhattan · Tuesday 17:00"
+  : "Network-aware OTA downloads · Midtown Manhattan · Tuesday 13:00–17:00";
+document.title = MODE === "ride" ? "Connected Rides Map" : "OTA Downloads Map";
+$("lgOta").style.display = MODE === "ota" ? "" : "none"; $("lgRide").style.display = MODE === "ride" ? "" : "none";
+$("otaPanel").style.display = MODE === "ota" ? "" : "none";
+map.on("load", () => { panel(t); requestAnimationFrame(loop); });
+const params = new URLSearchParams(location.search);
+if (params.get("t")) t = Math.max(VIEW[0], Math.min(VIEW[1], +params.get("t")));
+
+// ═══ Documents ══════════════════════════════════════════════════════════════
+const pt = (p) => ({ type: "Point", coordinates: [+p[0].toFixed(5), +p[1].toFixed(5)] });
+const r1 = (x) => Math.round(x * 10) / 10;
+let selected = null;           // the robotaxi the popups talk about (click one on the map)
+function sample() { return selected || V.find(v => v.defer && v.q.cell.site === "NYC-MTN-0151") || V.find(v => v.defer); }
+function docs(t) {
+  const v = sample(), w = V.find(x => !x.defer), c = v.q.cell, t15 = t - (t % 15), l = loadAt(c, t15 + 7.5);
+  const rideCell = BEST.cells[Math.floor(BEST.cells.length / 2)].c;
+  const trimRide = (d) => ({ ...d, candidates: d.candidates.map(x => ({ ...x, legs: [...x.legs.slice(0, 2), `… ${x.legs.length} legs in all, one per cell and quarter hour`] })) });
+  const all = {
+    vehicle: { title: "fleet_vehicles", sub: "the fleet's cars, as reported", coll: "fleet_vehicles", src: "fleet platform (the fleet's API call)", refresh: "every 10 s", atlas: true,
+      body: [VEHDOCS[v.id], VEHDOCS[w.id]], note: "What the fleet shares with the network: position, the serving cell from the car's modem, software version, and the bandwidth it keeps for safety. No passenger data. GeoJSON with a 2dsphere index. Seeded as reported at the 13:01 quote; the page moves the cars." },
+    campaign: { title: "ota_campaigns", sub: "the fleet's request", coll: "ota_campaigns", src: "fleet console (scripted request)", refresh: "per campaign", atlas: true,
+      body: [CAMPAIGN], note: "One document per campaign: the request, its constraints and the NOC decision. Campaigns above the threshold pause for a NOC review, like the demo's other blast-radius actions." },
+    offers: { title: "ota_offers", sub: "the network's answer, per vehicle", coll: "ota_offers", src: "network agent (quote_ota_campaign)", refresh: "on change, pushed by change stream", atlas: true,
+      body: [OFFERS[v.id], OFFERS[w.id]], note: "One answer per vehicle: tier and expected throughput, the decision and, for a deferred car, the better cell its next ride ends in, with the backhaul check. The page draws every car's answer from these documents. Raw cell load never leaves the network." },
+    cells: { title: "ran_cells", sub: "same collection as the night shift", coll: "ran_cells", src: "network inventory (simulated)", refresh: "on change", atlas: true,
+      body: [CELLDOCS[MODE === "ride" ? rideCell.id : c.id]], note: "The cells the night-shift map puts to sleep at night are the cells the fleet buys in the afternoon. One inventory, three scenarios." },
+    pm: { title: "ran_pm_counters", sub: "time series, 15-min, 3GPP", coll: "ran_pm_counters", src: "OSS performance management (TS 28.552)", refresh: "every 15 min", atlas: false,
+      body: [{ ts: iso(t15), meta: { cell_id: c.id, site_id: c.site, granularity: "PT15M" }, "RRU.PrbTotDl": r1(l), "RRC.ConnMean": Math.round(l * 1.3), "DRB.UEThpDl": Math.round(l * 3150) }],
+      note: "The record for this quarter hour, as the page computes it; the seeded afternoon records in Atlas have the same values, in the same time series collection and with the same counter names as the night shift. The quote reads their p95." },
+    forecast: { title: "ran_load_forecast", sub: "per cell, per quarter hour", coll: "ran_load_forecast", src: "network analytics (NWDAF-style load prediction)", refresh: "hourly", atlas: true,
+      body: [FC[rideCell.id]], note: "What the route query reads: the predicted load for the quarter hour the car will be in the cell. The night shift's forecast for the same cell has the same shape, by hour." },
+    transport: { title: "transport_links", sub: "backhaul topology (graph)", coll: "transport_links", src: "transport inventory + link monitoring", refresh: "every 5 min", atlas: true,
+      body: DOCS.transport_links.filter(x => ["NYC-MTN-0702>AGG-MTN-W2", "AGG-MTN-W2>PE-NYC-1", "AGG-MTN-W2"].includes(x._id)),
+      note: "Nodes and links in one collection. $graphLookup follows the links from a cell's site to the provider edge, so a quiet radio behind a full uplink (Hell's Kitchen) is not offered." },
+    tiers: { title: "price_tiers", sub: "what the fleet may see", coll: "price_tiers", src: "product catalog", refresh: "on change", atlas: true,
+      body: [TIERDOC], note: "Three tiers. The thresholds live in the database: the agent's query and this page read the same rule." },
+    ride: { title: "ride_requests", sub: "the connected ride", coll: "ride_requests", src: "fleet booking (route candidates, no identity)", refresh: "per booking", atlas: true,
+      body: [trimRide(RIDEDOC)], note: "The fleet sends candidate routes, the cells each one crosses with the quarter hour, and the application's need, not who the passenger is. Legs shortened here; Copy has them all." },
+  };
+  const order = MODE === "ride" ? ["ride", "forecast", "cells", "vehicle"] : ["vehicle", "campaign", "offers", "cells", "pm", "transport", "tiers"];
+  return order.map(id => ({ id, ...all[id], copy: id === "ride" ? [RIDEDOC] : all[id].body }));
+}
+
+// ═══ Hero queries ════════════════════════════════════════════════════════════
+const QUOTE_CODE = `// For one robotaxi: its cell now, and the cells nearby worth deferring into
+db.ran_cells.aggregate([
+  { $geoNear: {
+      near: { type: "Point", coordinates: [__POS__] },   // __VID__, from fleet_vehicles
+      distanceField: "distance_m", maxDistance: 3219, spherical: true,   // 2 miles
+      query: { layer: "capacity", kind: "macro", cluster: "Midtown" } } },
+  { $lookup: {
+      from: "ran_pm_counters", let: { cell: "$_id" },
+      pipeline: [
+        { $match: { $expr: { $eq: ["$meta.cell_id", "$$cell"] },
+                    ts: { $gte: ISODate("__T0__"), $lte: ISODate("__T1__") } } },
+        { $group: { _id: null, load_p95: { $percentile: {
+            input: { $getField: "RRU.PrbTotDl" }, p: [0.95], method: "approximate" } } } } ],
+      as: "now" } },
+  { $graphLookup: {
+      from: "transport_links", startWith: "$site_id", connectFromField: "to", connectToField: "from",
+      maxDepth: 2, restrictSearchWithMatch: { kind: "link" }, as: "backhaul" } },
+  { $set: {
+      load: { $first: { $first: "$now.load_p95" } },
+      backhaul_max_util: { $max: "$backhaul.util_pct" },
+      serving: { $eq: ["$_id", "__CELL__"] } } },
+  { $set: {
+      tier: { $switch: { branches: [
+        { case: { $lt: ["$load", 55] }, then: "discounted" },
+        { case: { $lt: ["$load", 75] }, then: "standard" } ], default: "congested" } },
+      expected_dl_mbps: { $round: [{ $max: [0.5, { $multiply: [120,
+        { $pow: [{ $subtract: [1, { $divide: ["$load", 100] }] }, 2] }] }] }, 1] } } },
+  { $set: { reason: { $switch: { branches: [
+      { case: "$serving", then: "the car's cell now" },
+      { case: { $gte: ["$backhaul_max_util", 80] }, then: "not offered: backhaul full" },
+      { case: { $eq: ["$tier", "congested"] }, then: "not offered: congested" } ], default: "offered" } } } },
+  { $sort: { serving: -1, expected_dl_mbps: -1 } },
+  { $group: { _id: "$site_id", best: { $first: "$$ROOT" } } },   // one sector per site
+  { $replaceRoot: { newRoot: "$best" } },
+  { $set: { rank: { $switch: { branches: [                      // the car's cell, then cheaper cells
+      { case: "$serving", then: 0 }, { case: { $ne: ["$tier", "congested"] }, then: 1 } ], default: 2 } } } },
+  { $sort: { rank: 1, expected_dl_mbps: -1 } }, { $limit: 7 },
+  { $project: { site_id: 1, tier: 1, expected_dl_mbps: 1, reason: 1,      // never the raw load
+      distance_mi: { $round: [{ $divide: ["$distance_m", 1609.34] }, 1] } } } ])`;
+const ROUTE_CODE = `// For a booking: the lowest predicted downlink per route, over the ride's minutes
+db.ride_requests.aggregate([
+  { $match: { _id: "${RIDEDOC._id}" } },
+  { $unwind: "$candidates" },
+  { $unwind: "$candidates.legs" },              // a leg: a cell the car is in, and the quarter hour
+  { $lookup: {
+      from: "ran_load_forecast", localField: "candidates.legs.cell_id", foreignField: "cell_id",
+      pipeline: [{ $match: { date: "${DATE}", window: "13:00-18:00" } }], as: "fc" } },
+  { $set: {
+      load: { $arrayElemAt: [{ $first: "$fc.quarter_hour_load_pct" }, "$candidates.legs.quarter"] } } },
+  { $set: {
+      dl: { $max: [0.5, { $multiply: [120, { $pow: [{ $subtract: [1, { $divide: ["$load", 100] }] }, 2] }] }] } } },
+  { $group: {
+      _id: "$candidates.route_id", label: { $first: "$candidates.label" },
+      minutes: { $first: "$candidates.duration_min" },
+      lowest_dl_mbps: { $min: "$dl" },
+      need: { $first: "$app_profile.min_dl_mbps" },
+      cells: { $addToSet: "$candidates.legs.cell_id" },
+      dips: { $addToSet: { $cond: [{ $lt: ["$dl", "$app_profile.min_dl_mbps"] }, "$candidates.legs.cell_id", null] } } } },
+  { $set: { dips: { $setDifference: ["$dips", [null]] }, cells: { $size: "$cells" },
+            call_ok: { $gte: ["$lowest_dl_mbps", "$need"] },
+            lowest_dl_mbps: { $round: ["$lowest_dl_mbps", 1] } } },
+  { $sort: { call_ok: -1, minutes: 1 } } ])`;
+const STREAM_CODE = `// The fleet's agent (or this dashboard) is told the moment an answer changes
+const stream = db.ota_offers.watch([
+  { $match: {
+      operationType: { $in: ["insert", "update", "replace"] },
+      "fullDocument.campaign_id": "${CAMPAIGN._id}" } },
+  { $project: {
+      "fullDocument.vehicle_id": 1, "fullDocument.decision": 1,
+      "fullDocument.tier": 1, "fullDocument.expected_dl_mbps": 1, "fullDocument.alternative": 1 } }
+], { fullDocument: "updateLookup" })`;
+const HERO = MODE === "ride" ? [
+  { run: "routes", title: "Run it on Atlas", sub: "score the three routes, live", coll: "ride_requests" },
+  { title: "Score candidate routes", sub: "route_quality", coll: "ride_requests", code: ROUTE_CODE,
+    callouts: [["$unwind: \"$candidates.legs\"", "Each route becomes the cells it crosses, with the quarter hour the car is there"],
+      ["ran_load_forecast", "The forecast for that cell and time, not a snapshot at pickup"], ["$min", "A call is as good as its worst cell"],
+      ["$setDifference", "The cells where the call would drop"], ["$sort", "Routes that keep the call first, then the shortest"]],
+    note: "Forecast, not snapshot: the ride happens in the next 15 to 25 minutes. The answer per route is what the fleet sells; the slice makes it a guarantee. The first tab runs it on Atlas." },
+] : [
+  { run: "quote", title: "Run it on Atlas", sub: "quote the selected robotaxi, live", coll: "ran_cells" },
+  { title: "Quote one vehicle", sub: "quote_ota_campaign", coll: "ran_cells", code: QUOTE_CODE,
+    callouts: [["$geoNear", "Cells near the car, from its GeoJSON position (2dsphere)"], ["$percentile", "Live load: p95 of the last 15 minutes of 3GPP counters (time series)"],
+      ["$graphLookup", "Follow the backhaul: cell → aggregation → provider edge (graph)"], ["$switch: { branches: [", "Tier thresholds as stored in price_tiers (55% / 75%)"],
+      ["backhaul full", "A quiet radio behind a full uplink is not offered (Hell's Kitchen)"], ["$project", "The fleet gets tier and Mbit/s, never the raw load"]],
+    note: "One aggregation answers one vehicle: geospatial, time series, graph and business rules in the same database. The network agent runs it per car and writes the answer to ota_offers. The first tab runs it on Atlas for the selected car (click one on the map)." },
+  { title: "Revised offers, live", sub: "change stream", coll: "ota_offers", code: STREAM_CODE,
+    callouts: [["watch", "Change streams: push, no polling"], ["campaign_id", "Only this campaign's answers"], ["$project", "Only what the fleet may see"]],
+    note: "When load changes, the network agent rewrites a car's offer; the change stream pushes it to the fleet. That is how the 15:30 revised offers reach the cars still waiting." },
+];
+function heroCode(q) {
+  const v = sample(), p = vpos(v, Math.max(1, t)), at = Math.max(1, t);
+  return q.code.replace("__POS__", p.map(x => x.toFixed(5)).join(", ")).replace("__VID__", v.id)
+    .replace("__T0__", iso(Math.max(0, at - 15))).replace("__T1__", iso(at)).replace("__CELL__", serving(...p).id);
+}
+
+// ═══ Popups ═════════════════════════════════════════════════════════════════
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+function hlJSON(obj) {
+  const txt = JSON.stringify(obj, null, 2).replace(/\[\s+(-?[\d.]+),\s+(-?[\d.]+)\s+\]/g, "[$1, $2]").replace(/"(\d{4}-\d\d-\d\dT[^"]+)"/g, 'ISODate("$1")');
+  return esc(txt).replace(/("(?:[^"\\]|\\.)*")(:)/g, '<span class="k">$1</span>$2').replace(/: ("(?:[^"\\]|\\.)*")/g, ': <span class="s">$1</span>')
+    .replace(/ISODate\("([^"]+)"\)/g, '<span class="d">ISODate("$1")</span>').replace(/: (-?\d+\.?\d*)(?=,|\n|$)/g, ': <span class="n">$1</span>')
+    .replace(/: (true|false|null)/g, ': <span class="b">$1</span>').replace(/(\[|, )(-?\d+\.\d+)/g, '$1<span class="n">$2</span>');
+}
+function hlCode(code, callouts) {
+  const lines = code.split("\n"), marks = new Map();
+  callouts.forEach(([f], i) => { const j = lines.findIndex((l, k) => !marks.has(k) && l.includes(f)); if (j >= 0) marks.set(j, i); });
+  const order = [...marks.keys()].sort((a, b) => a - b), num = new Map(order.map((j, i) => [j, i + 1]));
+  const out = lines.map((l, j) => {
+    const ci = l.indexOf("//"), body = ci >= 0 ? l.slice(0, ci) : l, cm = ci >= 0 ? l.slice(ci) : "";
+    const h = body.split(/("(?:[^"\\]|\\.)*")/).map((part, k) => {
+      if (k % 2) return part.startsWith('"$') && !part.includes(" ") ? `<span class="path">${esc(part)}</span>` : `<span class="s">${esc(part)}</span>`;
+      return esc(part).replace(/(\$[a-zA-Z]+)/g, '<span class="op">$1</span>').replace(/(^|[{\s,])([a-z_][a-zA-Z_]*)(?=\s*:)/g, '$1<span class="k">$2</span>')
+        .replace(/(^|[^\w$#">-])(\d+\.?\d*)/g, '$1<span class="n">$2</span>');
+    }).join("") + (cm ? `<span class="c">${esc(cm)}</span>` : "");
+    return marks.has(j) ? `<span class="hl">${h}<span class="mk">${num.get(j)}</span></span>` : h;
+  }).join("\n");
+  const legend = order.map((j, i) => `<span style="margin-right:14px;display:inline-block"><span class="mk" style="margin:0 5px 0 0">${i + 1}</span>${esc(callouts[marks.get(j)][1])}</span>`).join("");
+  return { out, legend };
+}
+let copyText = "";
+function openModal(title, tabs, show) {
+  $("mTitle").textContent = title; $("ov").classList.add("on"); $("modal").style.gridTemplateColumns = ""; $("mTabs").style.display = "";
+  $("mTabs").innerHTML = tabs.map((x, i) => `<button class="tab" data-i="${i}">${esc(x.title)}<small>${esc(x.sub)}</small></button>`).join("");
+  $("mTabs").onclick = (e) => { const b = e.target.closest(".tab"); if (b) show(+b.dataset.i); };
+}
+const selectTab = (i) => document.querySelectorAll("#mTabs .tab").forEach((b, j) => b.classList.toggle("on", j === i));
+const badge = (atlas) => `<span class="badge" style="border-color:${atlas ? "#00ED64" : "#FFC010"};color:${atlas ? "#00ED64" : "#FFC010"}">${atlas ? "FROM ATLAS" : "SIMULATED"}</span> `;
+function openData(which) {
+  const ds = docs(t);
+  openModal(MODE === "ride" ? "Data model: the booking, the forecast and the network, in MongoDB" : "Data model: the fleet's request and the network's answer, in MongoDB", ds, show);
+  function show(i) { selectTab(i); const d = ds[i];
+    $("mMeta").innerHTML = `${badge(d.atlas)}<b>${esc(d.coll)}</b> · Source: ${esc(d.src)} · Refresh: ${esc(d.refresh)} · at ${fmt(t)}`;
+    $("mCode").innerHTML = d.body.map(hlJSON).join("\n\n"); $("mExplain").textContent = d.note; copyText = d.copy.map(b => JSON.stringify(b, null, 2)).join("\n\n"); }
+  show(Math.max(0, ds.findIndex(d => d.id === which)));
+}
+function openHero(i0 = 0) {
+  openModal("Hero queries", HERO, show);
+  async function show(i) {
+    selectTab(i); const q = HERO[i];
+    if (q.run) {
+      const v = sample(), at = Math.max(1, t), p = vpos(v, at);
+      $("mMeta").innerHTML = `<b>${esc(q.coll)}</b> · running on Atlas for ${q.run === "quote" ? `${v.id} at ${fmt(at)}` : RIDEDOC._id} …`;
+      $("mCode").textContent = ""; $("mExplain").textContent = "";
+      try {
+        const url = q.run === "quote" ? `${PREFIX}/api/fleet/quote?vehicle=${encodeURIComponent(v.id)}&lng=${p[0].toFixed(5)}&lat=${p[1].toFixed(5)}&minute=${at}`
+                                      : `${PREFIX}/api/fleet/routes`;
+        const res = await fetch(url), r = await res.json();
+        if (!res.ok) throw new Error(r.detail || r.error || `HTTP ${res.status}`);
+        $("mCode").innerHTML = r.rows.map(hlJSON).join("\n\n"); copyText = JSON.stringify(r.rows, null, 2);
+        if (q.run === "quote") {
+          const offered = r.rows.filter(x => x.reason === "offered").length;
+          $("mMeta").innerHTML = `${badge(true)}<b>ran_cells</b> · ${v.id} at ${fmt(at)} · its cell ${esc(r.serving_cell)} · ${offered} cells offered nearby · ${r.ms} ms`;
+          $("mExplain").textContent = "The car's cell first, then the best sector of each site within 2 miles: tier, expected Mbit/s and the reason. A cell behind a full backhaul says so. This is what the network agent writes into ota_offers; the next tab shows the query.";
+        } else {
+          $("mMeta").innerHTML = `${badge(true)}<b>ride_requests</b> · ${esc(RIDEDOC._id)} · ${r.rows.length} routes scored · ${r.ms} ms`;
+          $("mExplain").textContent = "One row per candidate route: minutes, the lowest predicted downlink over the cells and quarter hours it crosses, and the cells where a video call would drop. The connected ride is the route that keeps the call; the next tab shows the query.";
+        }
+      } catch (e) { $("mCode").textContent = `Could not run the query: ${e.message}`; }
+      return;
+    }
+    const code = heroCode(q), r = hlCode(code, q.callouts);
+    $("mMeta").innerHTML = `<b>${esc(q.coll)}</b> · ${esc(q.sub)} · runs on the documents in the Data model popup`;
+    $("mCode").innerHTML = r.out; $("mExplain").innerHTML = `<p style="margin:0 0 8px">${esc(q.note)}</p>${r.legend}`; copyText = code;
+  }
+  show(i0);
+}
+function openWhy() {
+  $("mTitle").textContent = "Why MongoDB"; $("ov").classList.add("on"); $("mTabs").style.display = "none"; $("modal").style.gridTemplateColumns = "1fr";
+  $("mMeta").innerHTML = "<b>Intelligence as a service needs one operational record</b>"; $("mExplain").textContent = ""; copyText = "";
+  $("mCode").innerHTML = `<div class="why" style="white-space:normal;font-family:var(--sans)">
+  <p class="lead">A quote for one robotaxi joins where the car is, how loaded its cell is right now, what the backhaul behind a cheaper cell can carry,
+  and what the fleet may be told. A ride offer adds the forecast for every cell along a route, at the minute the car will be there.
+  In MongoDB that is one aggregation over one copy of the data.</p>
+  <table><tr><th>Data</th><th>How it lands in Atlas</th><th>Why it matters here</th></tr>
+  <tr><td>Fleet positions</td><td>GeoJSON + 2dsphere</td><td>$geoNear finds the cells near each car; the same index serves the map.</td></tr>
+  <tr><td>Live cell load (3GPP counters)</td><td>Time series collection</td><td>p95 over the last 15 minutes, computed in the database, per quote.</td></tr>
+  <tr><td>Backhaul topology</td><td>Edges + $graphLookup</td><td>A quiet radio behind a full link is caught without a separate graph store.</td></tr>
+  <tr><td>Forecasts per cell and quarter hour</td><td>Documents with arrays</td><td>Route scoring reads the minute the car is in each cell.</td></tr>
+  <tr><td>Campaigns, offers, rides</td><td>Documents, one per business object</td><td>The request, the answer and the NOC decision stay together, with their evidence.</td></tr>
+  <tr><td>Price tiers and exposure rules</td><td>Documents</td><td>The agent and the dashboard read the same rule; raw load never leaves.</td></tr>
+  <tr><td>Revised offers</td><td>Change streams</td><td>Pushed to the fleet the moment the network's answer changes.</td></tr>
+  <tr><td>Agents, approvals, memory</td><td>Atlas Agent Engine on the same data</td><td>The network agent, the NOC review and, later, the fleet's own agent over A2A.</td></tr></table>
+  <div class="alt"><b>The same data as the night shift.</b> The cells the energy agent puts to sleep at night are the cells the fleet buys in the afternoon:
+  one inventory, one set of counters, two products.</div></div>`;
+}
+$("bData").onclick = () => openData(MODE === "ride" ? "ride" : "vehicle");
+$("bHero").onclick = () => openHero(0);
+overlay.setProps({ onClick: (info) => {   // click a robotaxi: the popups talk about that car
+  if (MODE === "ota" && info.layer && info.layer.id === "vehicles" && info.object) { selected = info.object.v; openHero(0); } } });
+$("bWhy").onclick = openWhy;
+$("mClose").onclick = () => $("ov").classList.remove("on");
+$("ov").onclick = (e) => { if (e.target === $("ov")) $("ov").classList.remove("on"); };
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("ov").classList.remove("on"); });
+$("mCopy").onclick = async () => { try { await navigator.clipboard.writeText(copyText); $("mCopy").textContent = "Copied"; } catch (e) {} setTimeout(() => $("mCopy").textContent = "Copy", 1200); };
+window.__sim = { frames, V, RIDE, BEST, log, fmt, NNOW, NDEF, MODE };
+})();
+</script>
+</body>
+</html>

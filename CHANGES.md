@@ -1,5 +1,33 @@
 # CHANGES.md
 
+## 2026-11-24
+
+### The network map gets two robotaxi demos: OTA downloads and connected rides
+
+The network map now has three scenarios, switched in its header, and each one
+can be presented on its own: the night shift (`/night`), OTA downloads
+(`/ota`) and connected rides (`/rides`). The two new ones use the same
+Midtown network on the Tuesday afternoon before the night shift, with an
+anonymized robotaxi operator and 300 cars on real streets.
+
+- **OTA downloads, 13:00 to 17:00.** The fleet asks before pushing a 2.4 GB
+  update to all 300 cars. The network answers each car: download now, paced
+  so no cell passes 80% for retail users, or wait until the car's next ride
+  ends in a cheaper cell nearby. A cell behind a full backhaul link is not
+  offered. Above 100 cars the campaign waits for a NOC review. At 15:30 the
+  last cars get revised offers. All 300 are updated by 16:19, before the
+  18:00 deadline, and nothing was delivered in congested cells.
+- **Connected rides, 17:00 to 17:40.** A passenger needs a video call on the
+  way. Three routes are scored on the forecast for the minutes the car will
+  spend in each cell; the fastest drops the call, the connected route keeps
+  it above 8 Mbit/s and is sold as a premium ride backed by a network slice.
+
+The fleet's request, the network's answer per car, the backhaul, the price
+tiers, the ride request and the forecasts are in MongoDB; the Data model popup
+marks what comes from Atlas. "Run it on Atlas" in the Hero queries popup
+quotes any car (click it on the map) or scores the routes live. The help page
+now walks all five demos. Agents acting on these scenarios come next.
+
 ## 2026-11-23
 
 ### A network map: Green Autonomous Networks, night shift (first version)
