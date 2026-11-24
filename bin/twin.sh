@@ -45,6 +45,7 @@ TWIN_SERVICES=(
   "twin_shell|8170|web.twin_shell:app"
   "twin_ibn_dashboard|8160|web.ibn_dashboard:app"
   "twin_dtw_dashboard|8180|web.dtw_dashboard:app"
+  "twin_network_dashboard|8190|web.network_dashboard:app"
 )
 
 export PYTHONUNBUFFERED=1
@@ -89,6 +90,7 @@ start() {
     echo "  Web shell:      http://localhost:8170   (your agentengine CLI login: agentengine auth status)"
     echo "  IBN dashboard:  http://localhost:8160   (?mode=exec for the exec view)"
     echo "  DTW dashboard:  http://localhost:8180"
+    echo "  Network map:    http://localhost:8190"
 }
 
 stop() {

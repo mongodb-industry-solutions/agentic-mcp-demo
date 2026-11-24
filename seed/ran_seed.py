@@ -1,0 +1,67 @@
+#
+# Copyright (c) 2026 MongoDB Inc.
+# Author: Benjamin Lorenz <benjamin.lorenz@mongodb.com>
+#
+
+"""
+Seed the Midtown radio network of the night-shift scenario (Green
+Autonomous Networks) into agent_registry: the carrier's inventory, 3GPP PM
+counters, forecasts, service promises, energy policy and intent, grid and
+transit signals (web/ran_network.py). Shared reference data, not per lane.
+
+    MONGODB_URI=... python seed/ran_seed.py [--reset]
+
+Refuses a cluster whose host does not contain "oss-demos" unless
+--any-cluster is given: the legacy demo's cluster must not get these.
+"""
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from pymongo import MongoClient  # noqa: E402
+
+from web import ran_network  # noqa: E402
+
+DB = "agent_registry"
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--reset", action="store_true", help="drop the collections first")
+    ap.add_argument("--any-cluster", action="store_true", help="allow a cluster other than oss-demos")
+    args = ap.parse_args()
+    uri = os.environ["MONGODB_URI"]
+    if "oss-demos" not in uri and not args.any_cluster:
+        sys.exit("refusing: MONGODB_URI is not the oss-demos cluster (use --any-cluster to override)")
+    db = MongoClient(uri)[DB]
+    docs = ran_network.documents()
+    existing = set(db.list_collection_names())
+    for name, rows in docs.items():
+        if args.reset and name in existing:
+            db.drop_collection(name)
+            existing.discard(name)
+        if name in ran_network.TIMESERIES and name not in existing:
+            db.create_collection(name, timeseries={"timeField": "ts", "metaField": "meta",
+                                                   "granularity": ran_network.TIMESERIES[name]})
+        coll = db[name]
+        if name in ran_network.TIMESERIES:
+            coll.delete_many({})
+            coll.insert_many(rows)
+        else:
+            for row in rows:
+                coll.replace_one({"_id": row["_id"]}, row, upsert=True)
+        print(f"{name}: {len(rows)} documents")
+    db["ran_sites"].create_index([("location", "2dsphere")])
+    db["ran_cells"].create_index([("location", "2dsphere")])
+    db["ran_cells"].create_index([("cluster", 1), ("layer", 1)])
+    db["ran_load_forecast"].create_index([("cell_id", 1)])
+    db["service_commitments"].create_index([("cell_ids", 1)])
+    print("indexes ready")
+
+
+if __name__ == "__main__":
+    main()

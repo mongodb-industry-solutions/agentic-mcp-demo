@@ -1,5 +1,27 @@
 # CHANGES.md
 
+## 2026-11-23
+
+### A network map: Green Autonomous Networks, night shift (first version)
+
+A new dashboard, linked from the shell's banner as "🗺 Network map", shows a
+simulated night of the radio network in Midtown Manhattan: 17 rooftop sites
+and 8 small cells, their coverage, load and power. As offices empty, the
+network puts idle 5G capacity carriers to sleep; the coverage layer always
+stays on. At 01:10 a subway disruption sends crowds up at Penn Station, where
+carriers sleep: they wake within a minute, every service promise holds, and
+the saving resumes at 02:30 once people have gone home. The network's data
+(inventory, 3GPP performance counters, forecasts, service promises, energy
+policy and intent, grid and transit signals) is in MongoDB, the map is drawn
+from it, and the hero query "Can this carrier sleep?" runs on Atlas from the
+page. Agents acting on the network come next.
+
+On Kanopy the map is its own service (`Dockerfile.network`,
+`environment/{staging,production}-network.yaml`, on oss-demos like the
+other Agent Engine dashboards) at `agentic-mcp-demo-network.industrysolutions.{staging,prod}.corp.mongodb.com`;
+the shell's banner links there through `TWIN_NET_DASHBOARD_URL`. The seed
+(`seed/ran_seed.py`) has already run on oss-demos.
+
 ## 2026-11-18
 
 ### The IBN dashboard tells one consistent story during a morning rush
