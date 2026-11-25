@@ -108,7 +108,7 @@
 
   <div class="banner">
     <div class="banner-title">❔ Help — how to drive this demo</div>
-    <div class="banner-meta">Two workflows · Intent-Based Networking (IBN) and What-if scenarios (DTW network digital twin)</div>
+    <div class="banner-meta">Five demos, each one can be driven on its own · Intent-Based Networking (IBN) · What-if scenarios (DTW network digital twin) · Green networking · OTA downloads · Connected rides</div>
   </div>
 
   <p>
@@ -282,9 +282,148 @@
     </div>
   </div>
 
-  <h2>Interleaving the two flows</h2>
+  <h2>3 · Green networking (night shift)</h2>
   <p>
-    The two demos are independent: separate domains, separate agents, separate
+    The <b>🗺 Network map</b> in the banner opens a map of the Midtown Manhattan
+    radio network, scenario <i>Night shift</i>. As offices empty, the network
+    puts idle 5G capacity carriers to sleep; the coverage layer always stays on.
+    No shell prompts: press <b>▶ Play</b> and narrate. The map is drawn from the
+    network's documents in Atlas; the night is simulated in the page.
+  </p>
+  <div class="flow" style="border-left-color:#00ED64">
+    <div class="flow-title" style="color:#00ED64">Night shift: sleep → unplanned spike → reflex → resume → lesson</div>
+    <div class="flow-sub">Page: /night · same session token as the shell</div>
+
+    <div class="step">
+      <div class="step-n">1</div>
+      <div class="step-body">
+        <p style="margin:0"><b>18:00 to 01:00, the tide goes out</b></p>
+        <p class="why">Offices empty; the agent's 15-minute check puts idle capacity carriers and small cells to sleep. Power falls against the always-on line; every service promise holds (the hospital slice never sleeps).</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">2</div>
+      <div class="step-body">
+        <p style="margin:0"><b>01:10, the train</b></p>
+        <p class="why">A subway disruption sends crowds up at Penn Station, where carriers sleep. Within a minute the deterministic reflex wakes them: the energy saving stops right away where it has to.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">3</div>
+      <div class="step-body">
+        <p style="margin:0"><b>02:30, back to sleep</b></p>
+        <p class="why">Once most people are home, the saving resumes and the agent stores the lesson. The night ends at about 29% less power.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">4</div>
+      <div class="step-body">
+        <p style="margin:0"><b>Hero queries → Run it on Atlas</b></p>
+        <p class="why">"Can this carrier sleep?" runs live on Atlas for the current minute: inventory, p95 of the 3GPP counters, the forecast, the coverage relation ($graphLookup) and the service promises in one aggregation. At 01:30 Penn Station shows 85% measured load against a 10% forecast: not safe.</p>
+      </div>
+    </div>
+  </div>
+
+  <h2>4 · OTA downloads (robotaxi fleet)</h2>
+  <p>
+    Same network, the Tuesday afternoon before. An anonymized robotaxi operator
+    asks before pushing a 2.4 GB update to 300 cars. Open the network map and
+    pick <i>Scenario: OTA downloads</i>, then press <b>▶ Play</b> (13:00 to 17:00).
+  </p>
+  <div class="flow" style="border-left-color:#6EA8FE">
+    <div class="flow-title" style="color:#6EA8FE">OTA: request → per-vehicle answer → NOC review → paced and deferred downloads → done</div>
+    <div class="flow-sub">Page: /ota · hover a robotaxi for its answer, click it to quote it on Atlas</div>
+
+    <div class="step">
+      <div class="step-n">1</div>
+      <div class="step-body">
+        <p style="margin:0"><b>13:00, the fleet asks</b></p>
+        <p class="why">The fleet console sends the campaign: 300 cars, 2.4 GB each, done by 18:00, keep 5 Mbit/s per car for remote assistance.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">2</div>
+      <div class="step-body">
+        <p style="margin:0"><b>13:01, one answer per vehicle</b></p>
+        <p class="why">169 cars download now, paced so no cell passes 80% for retail users. 131 sit in congested cells: their next rides end in cheaper cells nearby (the arcs). Hell's Kitchen is not offered: its radio is quiet, but the backhaul behind it is full.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">3</div>
+      <div class="step-body">
+        <p style="margin:0"><b>13:02, NOC review</b></p>
+        <p class="why">Above 100 vehicles the campaign waits for the NOC; approved at 13:04.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">4</div>
+      <div class="step-body">
+        <p style="margin:0"><b>15:30, revised offers</b></p>
+        <p class="why">The cars still waiting keep crossing busy cells, so their offers are revised and pushed by change stream. All 300 are done by 16:19, before the deadline; nothing was delivered in congested cells.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">5</div>
+      <div class="step-body">
+        <p style="margin:0"><b>Hero queries → Run it on Atlas</b></p>
+        <p class="why">"Quote one vehicle" runs live: $geoNear for the cells near the car, the p95 of live counters, $graphLookup over the backhaul, the tier rule. The fleet gets tier and Mbit/s, never the raw load.</p>
+      </div>
+    </div>
+  </div>
+
+  <h2>5 · Connected rides (robotaxi fleet)</h2>
+  <p>
+    Same network and fleet, at the evening rush. A passenger needs a video call on
+    the way. Pick <i>Scenario: Connected rides</i> and press <b>▶ Play</b> (17:00 to 17:40).
+  </p>
+  <div class="flow" style="border-left-color:#B98CFF">
+    <div class="flow-title" style="color:#B98CFF">Rides: booking → three routes scored on the forecast → connected ride → call stays HD</div>
+    <div class="flow-sub">Page: /rides</div>
+
+    <div class="step">
+      <div class="step-n">1</div>
+      <div class="step-body">
+        <p style="margin:0"><b>17:03, the booking</b></p>
+        <p class="why">Chelsea to near the UN, with a 20-minute video call (8 Mbit/s). The fleet sends candidate routes, not who the passenger is.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">2</div>
+      <div class="step-body">
+        <p style="margin:0"><b>Three routes, scored</b></p>
+        <p class="why">The fastest route (14 min) drops the call near Penn Station and Herald Square; the route via 23rd St and 1st Ave (20 min) never falls below about 11 Mbit/s. The fleet sells it as a premium connected ride, backed by a network slice.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">3</div>
+      <div class="step-body">
+        <p style="margin:0"><b>17:05 to 17:25, the ride</b></p>
+        <p class="why">The car follows the connected route; the panel shows the call quality in the car. A forecast update mid-ride needs no reroute.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">4</div>
+      <div class="step-body">
+        <p style="margin:0"><b>Hero queries → Run it on Atlas</b></p>
+        <p class="why">"Score candidate routes" runs live: each route becomes the cells it crosses with the quarter hour, joined to the forecast; a call is as good as its worst cell.</p>
+      </div>
+    </div>
+  </div>
+
+  <h2>Interleaving the IBN and DTW flows</h2>
+  <p>
+    Each of the five demos stands on its own. IBN and DTW are driven from the
+    shell: separate domains, separate agents, separate
     collections, separate workstreams. You can switch between them mid-session
     and each thread keeps its own state — start the IBN intent, jump to DTW, come
     back and continue with <i>propose and activate</i>.
@@ -311,6 +450,12 @@
         own isolated demo lane. Append <code>&amp;mode=exec</code> for the
         narrative, non-technical rendering, or leave it out for the engineering
         view with raw pipelines.</li>
+    <li><b>🗺 Network map</b> (Agent Engine shell) — the network map's three
+        scenarios: <i>Night shift</i>, <i>OTA downloads</i>, <i>Connected rides</i>,
+        switched in its header; each has its own address (<code>/night</code>,
+        <code>/ota</code>, <code>/rides</code>). The agents acting on these
+        scenarios come in a later version: today they are played back in the page,
+        with their queries live on Atlas.</li>
     <li><b>Agent Log · MCP Servers · Workstreams</b> tabs on the right — live
         routing/tool trace, the auto-discovered service registry (you can add a
         new MCP server at runtime), and the agent's per-thread memory.</li>
