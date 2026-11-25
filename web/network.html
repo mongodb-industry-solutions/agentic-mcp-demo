@@ -123,7 +123,8 @@
     <span class="sub">Midtown Manhattan · night shift</span>
     <span class="badge">SIMULATED NETWORK</span>
     <span class="sp"></span>
-    <select id="scenario"><option>Scenario: Night shift</option><option disabled>Concert night (next)</option></select>
+    <select id="scenario"><option value="night">Scenario: Night shift</option>
+      <option value="ota">Scenario: OTA downloads</option><option value="rides">Scenario: Connected rides</option></select>
     <button class="btn g" id="bData">{ } Data model</button>
     <button class="btn g" id="bHero">⚡ Hero queries</button>
     <button class="btn g" id="bWhy">Why MongoDB</button>
@@ -186,7 +187,10 @@
 "use strict";
 (async () => {
 // ═══ The network, from the documents in Atlas ══════════════════════════════
-const PREFIX = location.pathname.replace(/\/+$/, "");
+const PREFIX = location.pathname.replace(/\/night\/?$/, "").replace(/\/+$/, "");
+document.getElementById("scenario").onchange = (e) => {   // each scenario is its own page, same session
+  const q = new URLSearchParams(location.search); q.delete("t");
+  location.href = `${PREFIX}/${e.target.value}${q.toString() ? "?" + q : ""}`; };
 let MODEL;
 try {
   const r = await fetch(`${PREFIX}/api/network/model${location.search}`);
