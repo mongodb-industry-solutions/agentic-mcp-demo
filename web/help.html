@@ -284,8 +284,8 @@
 
   <h2>3 · Green networking (night shift)</h2>
   <p>
-    The <b>🗺 Network map</b> in the banner opens a map of the Midtown Manhattan
-    radio network, scenario <i>Night shift</i>. As offices empty, the network
+    The <b>🌙 Night shift</b> button in the banner opens a map of the Midtown
+    Manhattan radio network, scenario <i>Night shift</i>. As offices empty, the network
     puts idle 5G capacity carriers to sleep; the coverage layer always stays on.
     No shell prompts: press <b>▶ Play</b> and narrate. The map is drawn from the
     network's documents in Atlas; the night is simulated in the page.
@@ -330,8 +330,8 @@
   <h2>4 · OTA downloads (robotaxi fleet)</h2>
   <p>
     Same network, the Tuesday afternoon before. An anonymized robotaxi operator
-    asks before pushing a 2.4 GB update to 300 cars. Open the network map and
-    pick <i>Scenario: OTA downloads</i>, then press <b>▶ Play</b> (13:00 to 17:00).
+    asks before pushing a 2.4 GB update to 300 cars. Open <b>📦 OTA downloads</b> in the
+    banner (or pick <i>Scenario: OTA downloads</i> in the map), then press <b>▶ Play</b> (13:00 to 17:00).
   </p>
   <div class="flow" style="border-left-color:#6EA8FE">
     <div class="flow-title" style="color:#6EA8FE">OTA: request → per-vehicle answer → NOC review → paced and deferred downloads → done</div>
@@ -381,7 +381,8 @@
   <h2>5 · Connected rides (robotaxi fleet)</h2>
   <p>
     Same network and fleet, at the evening rush. A passenger needs a video call on
-    the way. Pick <i>Scenario: Connected rides</i> and press <b>▶ Play</b> (17:00 to 17:40).
+    the way. Open <b>🚕 Connected rides</b> in the banner (or pick <i>Scenario: Connected
+    rides</i> in the map) and press <b>▶ Play</b> (17:00 to 17:40).
   </p>
   <div class="flow" style="border-left-color:#B98CFF">
     <div class="flow-title" style="color:#B98CFF">Rides: booking → three routes scored on the forecast → connected ride → call stays HD</div>
@@ -450,10 +451,10 @@
         own isolated demo lane. Append <code>&amp;mode=exec</code> for the
         narrative, non-technical rendering, or leave it out for the engineering
         view with raw pipelines.</li>
-    <li><b>🗺 Network map</b> (Agent Engine shell) — the network map's three
-        scenarios: <i>Night shift</i>, <i>OTA downloads</i>, <i>Connected rides</i>,
-        switched in its header; each has its own address (<code>/night</code>,
-        <code>/ota</code>, <code>/rides</code>). The agents acting on these
+    <li><b>🌙 Night shift</b> / <b>📦 OTA downloads</b> / <b>🚕 Connected rides</b>
+        (Agent Engine shell) — the network map's three scenarios, each a demo on
+        its own and bound to your session like the dashboards; the menu in the
+        map's header switches between them. The agents acting on these
         scenarios come in a later version: today they are played back in the page,
         with their queries live on Atlas.</li>
     <li><b>Agent Log · MCP Servers · Workstreams</b> tabs on the right — live

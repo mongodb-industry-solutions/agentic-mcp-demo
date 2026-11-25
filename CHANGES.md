@@ -1,5 +1,15 @@
 # CHANGES.md
 
+## 2026-11-25
+
+### One button per network map scenario in the shell
+
+The Agent Engine shell's banner now opens each of the network map's three
+scenarios directly: 🌙 Night shift, 📦 OTA downloads and 🚕 Connected rides
+replace the single 🗺 Network map button, so all five demos (with the IBN and
+DTW dashboards) start from the shell. Each keeps your session, and the menu
+in the map's header still switches between them.
+
 ## 2026-11-24
 
 ### The network map gets two robotaxi demos: OTA downloads and connected rides
