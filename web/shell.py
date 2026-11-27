@@ -23,8 +23,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse
 from pymongo import MongoClient
 
 from agents.orchestrator import OrchestratorAgent
@@ -259,6 +259,17 @@ async def index():
 async def help_page():
     """Static walkthrough of the two demo flows (IBN + DTW)."""
     return HELP_PATH.read_text()
+
+
+HELP_IMG = Path(__file__).parent / "help_img"
+
+
+@app.get("/help/img/{name}")
+async def help_image(name: str):
+    """The help page's diagrams (web/help_img/*.png, drawn by tools/diagrams/)."""
+    if not re.fullmatch(r"[a-z0-9-]+\.png", name) or not (HELP_IMG / name).is_file():
+        raise HTTPException(404)
+    return FileResponse(HELP_IMG / name, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
 
 
 @app.websocket("/ws")

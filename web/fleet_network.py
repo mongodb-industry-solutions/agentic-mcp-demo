@@ -10,9 +10,12 @@ robotaxi fleets), first version: the same Midtown network as the night shift
 
   OTA downloads (/ota)        an anonymized fleet asks before a 2.4 GB update
                               for 300 cars; the network answers per vehicle
-                              (download now, paced, or defer into a cheaper
-                              cell the car's next ride ends in), a NOC review,
-                              revised offers at 15:30, done before 18:00
+                              (download now, paced, or not now with a menu of
+                              cheaper cells nearby: ota_offers), the fleet picks
+                              the cell its car's next ride ends in
+                              (ota_fleet_choices: the network never sees the
+                              rides), a NOC review, revised offers at 15:30
+                              delivered by change stream, done before 18:00
   Connected rides (/rides)    a passenger needs a video call; three candidate
                               routes are scored on the forecast for the minutes
                               the car is in each cell
@@ -33,7 +36,7 @@ from pathlib import Path
 from web import ran_network as rn
 
 DATE = rn.DATE
-START = datetime.datetime(2026, 11, 24, 13, 0)   # 13:00 local (UTC-5)
+START = datetime.datetime(2026, 11, 24, 13, 0, tzinfo=rn.NY)   # 13:00 in New York, stored as 18:00Z
 STEPS = 301                                      # sim minutes, 13:00 → 18:00
 TZ = rn.TZ
 MARKET, CLUSTER = rn.MARKET, rn.CLUSTER
@@ -160,8 +163,9 @@ def ride_minutes(k: str) -> int:
 
 
 def ride_legs(k: str) -> list[dict]:
-    """The cells a candidate route crosses, one leg per (cell, quarter hour) with its entry time
-    (sampled every 40 m; the page samples the same way)."""
+    """The cells a candidate route crosses, with the time the car enters each one; a cell gets a second
+    leg when the car is still in it as the forecast's quarter hour changes (sampled every 40 m; the page
+    samples the same way). The route query finds each leg's forecast slot from its time."""
     r = streets()["rides"][k]
     coords, cm, mins = r["coords"], cum(r["coords"]), ride_minutes(k)
     legs, last, d = [], None, 0.0
@@ -170,7 +174,7 @@ def ride_legs(k: str) -> list[dict]:
         tt = SIM["ride_go_t"] + d / cm[-1] * mins
         key = (serving(x, y)["id"], int(tt // 15))
         if key != last:
-            legs.append({"cell_id": key[0], "quarter": key[1], "enter": iso(tt)})
+            legs.append({"cell_id": key[0], "enter": iso(tt)})
             last = key
         d += 40
     return legs
@@ -188,14 +192,40 @@ def vehicle_at_quote(v: dict) -> tuple:
     return along(lp["coords"], cm, (v["off"] + SIM["speed_m_per_min"] * v["vf"] * SIM["quote_t"]) % cm[-1])
 
 
+def counter_load(sc: dict, t: float) -> float:
+    """The load the latest 15-minute PM counter at or before minute t reports (what the quote query reads)."""
+    return load_at(sc, (int(t) // 15) * 15 + 7.5)
+
+
+def offer_menu(lng: float, lat: float, serving_cell: str, t: float, radius_mi: float = 2.0) -> tuple[list, list]:
+    """The network's menu for a car, as the quote query builds it: the best sector of each site within
+    2 miles, offered unless congested or behind a full backhaul; the car's own site is not on it."""
+    site = {s[0]: s for s in rn.SITES}
+    serving_site = serving_cell.rsplit("-", 2)[0]
+    best = {}
+    for c in sectors():
+        d = miles((lng, lat), (c["lng"], c["lat"]))
+        if d > radius_mi or c["site"] == serving_site:
+            continue
+        load = counter_load(c, t)
+        if c["site"] not in best or dl_of(load) > best[c["site"]][1]:
+            best[c["site"]] = (c, dl_of(load), load, d)
+    offered, excluded = [], []
+    # like the query: the car's cell, then the six best non-congested sites (a full backhaul shows, with its reason)
+    for sid, (c, dl, load, d) in sorted(((k, b) for k, b in best.items() if tier_of(b[2]) != "congested"),
+                                        key=lambda kv: -kv[1][1])[:6]:
+        if AGG[AGG_OF[sid]]["util"] >= 80:
+            excluded.append({"site_id": sid, "area_name": site[sid][1], "reason": "backhaul full"})
+        else:
+            offered.append({"site_id": sid, "area_name": site[sid][1], "cell_id": c["id"], "tier": tier_of(load),
+                            "expected_dl_mbps": round(dl, 1), "distance_mi": round(d, 1)})
+    return offered, excluded
+
+
 def documents() -> dict[str, list[dict]]:
     st, qt = streets(), SIM["quote_t"]
     quote_at = iso(qt)
-    vehicles, offers = [], []
-    site = {s[0]: s for s in rn.SITES}
-    by_site = {}
-    for c in sectors():
-        by_site.setdefault(c["site"], []).append(c)
+    vehicles, offers, choices = [], [], []
     for v in st["vehicles"]:
         x, y = vehicle_at_quote(v)
         c = serving(x, y)
@@ -204,19 +234,21 @@ def documents() -> dict[str, list[dict]]:
                          "reported_at": quote_at, "state": "on_ride", "modem": {"serving_cell": c["id"], "rat": "NR"},
                          "software": {"current": "2026.44.2", "target": "2026.48.1"},
                          "telemetry_reserve_mbps": SIM["headroom_mbps"]})
-        offer = {"_id": f"OF-48-{v['id']}", "campaign_id": CAMPAIGN_ID, "vehicle_id": v["id"], "quoted_at": quote_at,
-                 "serving_cell": c["id"], "tier": tier_of(load), "expected_dl_mbps": round(dl_of(load), 1),
-                 "decision": "defer" if v.get("defer") else "download_now",
-                 "latest_completion": iso(300), "status": "active", "exposure": "tier and expected throughput only"}
+        # the network's answer: what it offers this car, nothing about where the car will go
+        offer = {"_id": f"OF-48-{v['id']}", "campaign_id": CAMPAIGN_ID, "vehicle_id": v["id"], "revision": 1,
+                 "quoted_at": quote_at, "serving_cell": c["id"], "tier": tier_of(load),
+                 "expected_dl_mbps": round(dl_of(load), 1),
+                 "decision": "not_now" if v.get("defer") else "download_now",
+                 "valid_until": iso(300), "status": "active", "exposure": "tier and expected throughput only"}
         if v.get("defer"):
-            tgt = v["target"]
-            tl = min(load_at(sc, v["tArr"]) for sc in by_site[tgt])
-            agg = AGG_OF[tgt]
-            offer["alternative"] = {
-                "site_id": tgt, "area_name": site[tgt][1], "tier": tier_of(tl), "expected_dl_mbps": round(dl_of(tl), 1),
-                "distance_mi": round(miles((x, y), (site[tgt][3], site[tgt][2])), 1), "via": "next ride ends there",
-                "eta": iso(v["tArr"]),
-                "backhaul": {"path": [tgt, agg, AGG[agg]["pe"]], "max_util_pct": AGG[agg]["util"]}}
+            offer["offered_cells"], offer["not_offered"] = offer_menu(x, y, c["id"], qt)
+            # the fleet's choice: it knows the car's next ride, the network never sees it
+            pick = next((m for m in offer["offered_cells"] if m["site_id"] == v["target"]), None)
+            assert pick, f"{v['id']}: the fleet's cell {v['target']} is not on the network's menu"
+            choices.append({"_id": f"CH-48-{v['id']}", "campaign_id": CAMPAIGN_ID, "vehicle_id": v["id"],
+                            "offer_id": offer["_id"], "offer_revision": 1, "chosen_site": v["target"],
+                            "area_name": pick["area_name"], "why": "the car's next ride ends there",
+                            "eta": iso(v["tArr"]), "chosen_at": quote_at, "source": "fleet dispatch"})
         else:
             offer["pacing"] = {"max_mbps": SIM["max_rate_mbps"], "pause_in": "congested"}
         offers.append(offer)
@@ -254,14 +286,15 @@ def documents() -> dict[str, list[dict]]:
                          "window": "13:00-18:00", "starts_at": iso(0),
                          "quarter_hour_load_pct": [round(load_at(c, q * 15 + 7.5), 1) for q in range(20)],
                          "unit": "PRB %, capacity layer", "model": "seasonal profile + planned events",
-                         "generated_at": datetime.datetime(2026, 11, 24, 12, 0)})
+                         "generated_at": datetime.datetime(2026, 11, 24, 12, 0, tzinfo=rn.NY)})
         for q in range(0, 300, 15):
             load = load_at(c, q + 7.5)
             pm.append({"ts": iso(q), "meta": {"cell_id": c["id"], "site_id": c["site"], "granularity": "PT15M"},
                        "RRU.PrbTotDl": round(load, 1), "RRC.ConnMean": round(load * 1.3),
                        "DRB.UEThpDl": round(load * 3150), "PEE.AvgPower": round(420 + 6 * load),
                        "PEE.Energy": round((420 + 6 * load) / 4000, 3)})
-    return {"fleet_vehicles": vehicles, "ota_campaigns": campaign, "ota_offers": offers, "transport_links": transport,
+    return {"fleet_vehicles": vehicles, "ota_campaigns": campaign, "ota_offers": offers, "ota_fleet_choices": choices,
+            "transport_links": transport,
             "price_tiers": tiers, "ride_requests": ride, "ran_load_forecast": forecast, "ran_pm_counters": pm}
 
 
@@ -324,15 +357,24 @@ def quote_pipeline(lng: float, lat: float, serving_cell: str, at: datetime.datet
 
 
 def route_quality_pipeline(request_id: str = RIDE_ID) -> list[dict]:
-    """'Score candidate routes': the lowest predicted downlink per route, over the minutes the car is in each cell."""
+    """'Score candidate routes': the lowest predicted downlink per route, over the minutes the car is in each cell.
+    Each leg reads the forecast slot its entry time falls in; a leg no forecast covers counts as a dip."""
     return [
         {"$match": {"_id": request_id}},
         {"$unwind": "$candidates"},
         {"$unwind": "$candidates.legs"},
-        {"$lookup": {"from": "ran_load_forecast", "localField": "candidates.legs.cell_id", "foreignField": "cell_id",
-                     "pipeline": [{"$match": {"date": DATE.isoformat(), "window": "13:00-18:00"}}], "as": "fc"}},
-        {"$set": {"load": {"$arrayElemAt": [{"$first": "$fc.quarter_hour_load_pct"}, "$candidates.legs.quarter"]}}},
-        {"$set": {"dl": _dl_expr("$load")}},
+        {"$lookup": {
+            "from": "ran_load_forecast", "let": {"cell": "$candidates.legs.cell_id", "at": "$candidates.legs.enter"},
+            "pipeline": [
+                {"$match": {"$expr": {"$and": [
+                    {"$eq": ["$cell_id", "$$cell"]}, {"$lte": ["$starts_at", "$$at"]},
+                    {"$lt": ["$$at", {"$dateAdd": {"startDate": "$starts_at", "unit": "minute",
+                                                   "amount": {"$multiply": [15, {"$size": "$quarter_hour_load_pct"}]}}}]}]}}},
+                {"$project": {"_id": 0, "load": {"$arrayElemAt": ["$quarter_hour_load_pct", {"$toInt": {"$floor": {
+                    "$divide": [{"$dateDiff": {"startDate": "$starts_at", "endDate": "$$at", "unit": "minute"}}, 15]}}}]}}}],
+            "as": "fc"}},
+        {"$set": {"load": {"$first": "$fc.load"}}},
+        {"$set": {"dl": {"$cond": [{"$eq": [{"$ifNull": ["$load", None]}, None]}, 0, _dl_expr("$load")]}}},
         {"$group": {"_id": "$candidates.route_id", "label": {"$first": "$candidates.label"},
                     "minutes": {"$first": "$candidates.duration_min"}, "lowest_dl_mbps": {"$min": "$dl"},
                     "need": {"$first": "$app_profile.min_dl_mbps"}, "cells": {"$addToSet": "$candidates.legs.cell_id"},
