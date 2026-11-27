@@ -58,8 +58,8 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse
 from pymongo import AsyncMongoClient, MongoClient
 
 from agents import history as shell_history
@@ -788,6 +788,17 @@ async def index():
 @app.get("/help", response_class=HTMLResponse)
 async def help_page():
     return HELP_PATH.read_text()
+
+
+HELP_IMG = Path(__file__).parent / "help_img"
+
+
+@app.get("/help/img/{name}")
+async def help_image(name: str):
+    """The help page's diagrams (web/help_img/*.png, drawn by tools/diagrams/)."""
+    if not re.fullmatch(r"[a-z0-9-]+\.png", name) or not (HELP_IMG / name).is_file():
+        raise HTTPException(404)
+    return FileResponse(HELP_IMG / name, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
 
 
 def _agent_rows() -> list[dict]:

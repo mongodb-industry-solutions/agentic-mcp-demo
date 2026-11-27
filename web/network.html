@@ -244,7 +244,7 @@ const iso = (t) => { const m = START + t, day = m >= 1440 ? nextDay(DATE) : DATE
 
 // ═══ Run the whole night once: states, KPIs, decisions ═════════════════════
 const frames = [], log = [], actions = [];
-let LESSON_T = 0;
+let LESSON_T = 0, PENN_PEAK = 0;   // the lesson's numbers come from the simulated night
 (function simulate() {
   const st = new Map(cells.map(c => [c, { state: "active", since: 0, over: 0 }]));
   const sst = new Map(SMALLS.map(sc => [sc, { state: "active", since: 0, over: 0 }]));
@@ -330,6 +330,7 @@ let LESSON_T = 0;
         s.peak = Math.max(s.peak || 0, cov);
         if (t - s.since >= 1) {
           s.state = "active"; s.since = t;
+          if (c.site.id === "NYC-MTN-0412") PENN_PEAK = Math.max(PENN_PEAK, s.peak);
           log.push({ t, who: "net", text: `${c.site.name} sector ${c.sec}: capacity carrier back. Coverage layer peaked at ${Math.round(s.peak)}%, now ${Math.round(10 + 0.15 * d)}%. Every QoS promise kept.` });
           cov = 10 + 0.15 * d; cap = d;
         }
@@ -639,7 +640,7 @@ function docs(t, evId) {
       note: "Next time, the agent finds this with vector search before it puts Penn Station to sleep.",
       coll: "ran_knowledge (vector-indexed)", body: t >= LESSON_T ? [
         { _id: "LESSON-2026-11-25-PENN", kind: "energy_lesson", site_id: "NYC-MTN-0412", area_type: "transit", hour: 1,
-          text: "Transit disruption at 34 St–Penn after midnight brought a crowd of about 1,800 devices within 20 minutes. Coverage layer peaked at 88% before the capacity carrier woke. Keep one capacity carrier awake on the 8th Avenue side until 02:00.",
+          text: `Transit disruption at 34 St–Penn after midnight: the coverage layer peaked at ${Math.round(PENN_PEAK)}% before the capacity carrier woke. Keep one capacity carrier awake on the 8th Avenue side until 02:00.`,
           proposed_canary: { market: "LA", site_id: "LA-DTN-0207", name: "Union Station" } } ] : [{ note: `written after the episode, at ${fmt(LESSON_T)}` }] },
   ];
 }
@@ -660,7 +661,7 @@ const HERO = [
       let: { cell: "$_id" },
       pipeline: [
         { $match: { $expr: { $eq: ["$meta.cell_id", "$$cell"] },
-                    ts: { $gte: ISODate("2026-11-24T22:45:00"), $lte: ISODate("2026-11-24T23:00:00") } } },
+                    ts: { $gte: ISODate("2026-11-24T22:45:00-05:00"), $lte: ISODate("2026-11-24T23:00:00-05:00") } } },
         { $group: { _id: null,   // 3GPP counter names contain a dot: read them with $getField
                     load_p95: { $percentile: { input: { $getField: "RRU.PrbTotDl" }, p: [0.95], method: "approximate" } },
                     users: { $avg: { $getField: "RRC.ConnMean" } } } } ],

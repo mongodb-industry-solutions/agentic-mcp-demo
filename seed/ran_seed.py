@@ -4,7 +4,7 @@
 #
 
 """
-Seed the Midtown radio network of the network map into agent_registry:
+Seed the Midtown radio network of the network map into network_twin (NETWORK_DB):
 the night shift (Green Autonomous Networks, web/ran_network.py: the
 carrier's inventory, 3GPP PM counters, forecasts, service promises, energy
 policy and intent, grid and transit signals) and the robotaxi afternoon
@@ -30,7 +30,7 @@ from pymongo import MongoClient  # noqa: E402
 
 from web import fleet_network, ran_network  # noqa: E402
 
-DB = "agent_registry"
+DB = os.environ.get("NETWORK_DB", "network_twin")   # the network scenarios' own database (until 2026-11-28: agent_registry)
 
 
 def main():
@@ -68,6 +68,9 @@ def main():
     db["service_commitments"].create_index([("cell_ids", 1)])
     db["fleet_vehicles"].create_index([("position", "2dsphere")])
     db["ota_offers"].create_index([("campaign_id", 1), ("vehicle_id", 1)])
+    db["ota_fleet_choices"].create_index([("campaign_id", 1), ("vehicle_id", 1)])
+    for name in ("ota_offers", "ota_fleet_choices"):   # the live re-quote runs expire after an hour
+        db[name].create_index([("expires_at", 1)], expireAfterSeconds=0)
     db["transport_links"].create_index([("from", 1)])
     print("indexes ready")
 

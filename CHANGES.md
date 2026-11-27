@@ -1,5 +1,42 @@
 # CHANGES.md
 
+## 2026-11-28
+
+### OTA downloads: revised offers arrive by change stream, live on Atlas
+
+In the OTA scenario, Hero queries → "Revised offers, live" now runs the 15:30
+re-quote on Atlas instead of only describing it. Press Run: the network
+agent re-quotes the 34 cars still waiting and writes a revised offer for
+each, the fleet writes its pick, and a change stream delivers every write
+to the page with its resume token. Stop the consumer halfway and resume
+from the token: every event arrives, none twice. The tab next to it shows
+the change stream and how Postgres would have to do the same.
+
+### The network offers, the fleet picks
+
+A car that should not download in its cell now gets a menu from the
+network: the cheaper cells nearby, with tier and expected speed, and the
+cells not offered and why. The fleet, which knows where each car's next
+ride ends, picks one, and that pick is the fleet's own data. Before, the
+network's answer named the car's next ride, which only the fleet can know.
+
+### Corrections
+
+- Times are stored as true moments (UTC) and shown in New York time. The
+  popups were five hours apart from the data before, so a query copied
+  from them found nothing.
+- Route scoring takes each leg's forecast from the time the car enters the
+  cell, so rides past 18:00 are scored correctly.
+- The night shift's lesson takes its numbers from the simulated night (the
+  coverage layer peaked at 84%, not 88%).
+- The network map's data moved to its own database, `network_twin`.
+
+### Diagrams in the help page
+
+The help page now shows five diagrams for the network map's scenarios: the
+data flow of the robotaxi scenarios, and, for each hero query, its input
+documents beside the question it answers.
+
 ## 2026-11-25
 
 ### One button per network map scenario in the shell

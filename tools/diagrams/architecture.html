@@ -1,0 +1,121 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Lexend+Deca:wght@400;500;600&family=Source+Code+Pro:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; background: #0D1B26; }
+  svg { display: block; }
+  text { font-family: "Lexend Deca", "Helvetica Neue", Arial, sans-serif; fill: #E6EEF2; }
+  .mono { font-family: "Source Code Pro", Menlo, monospace; }
+  .h { font-size: 13px; font-weight: 600; letter-spacing: .08em; }
+  .t { font-size: 11.5px; font-weight: 500; }
+  .s { font-size: 9.5px; fill: #93A9B8; }
+  .c { font-size: 9.5px; fill: #B9E8CF; }
+  .tag { font-size: 8px; font-weight: 600; letter-spacing: .06em; }
+</style></head>
+<body>
+<svg width="960" height="540" viewBox="0 0 960 540" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="ag" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#00ED64"/></marker>
+    <marker id="ab" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#6EA8FE"/></marker>
+    <marker id="aa" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#F5B83D"/></marker>
+    <marker id="ap" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#B98CFF"/></marker>
+  </defs>
+
+  <!-- column labels -->
+  <text x="22" y="30" class="h" style="fill:#93A9B8">IN</text>
+  <text x="480" y="30" class="h" text-anchor="middle" style="fill:#00ED64">MONGODB ATLAS · OPERATIONAL DATA LAYER</text>
+  <text x="938" y="30" class="h" text-anchor="end" style="fill:#93A9B8">OUT</text>
+
+  <!-- ───────── IN ───────── -->
+  <!-- Network (OSS) -->
+  <rect x="20" y="46" width="200" height="186" rx="8" fill="#12283A" stroke="#6EA8FE" stroke-opacity=".55"/>
+  <text x="32" y="66" class="tag" style="fill:#6EA8FE">NETWORK · OSS · OPERATOR</text>
+  <text x="32" y="88" class="t">Inventory &amp; configuration</text><text x="32" y="101" class="s">sites, cells, sectors, locations</text>
+  <text x="32" y="124" class="t">Performance counters</text><text x="32" y="137" class="s">3GPP TS 28.552, every 15 min</text>
+  <text x="32" y="160" class="t">Load forecasts</text><text x="32" y="173" class="s">per cell and quarter hour</text>
+  <text x="32" y="196" class="t">Transport topology</text><text x="32" y="209" class="s">backhaul links and their load</text>
+
+  <!-- Business (BSS) -->
+  <rect x="20" y="244" width="200" height="88" rx="8" fill="#12283A" stroke="#6EA8FE" stroke-opacity=".55"/>
+  <text x="32" y="264" class="tag" style="fill:#6EA8FE">BUSINESS · BSS · OPERATOR</text>
+  <text x="32" y="286" class="t">Price tiers</text><text x="32" y="299" class="s">discounted · standard · congested</text>
+  <text x="32" y="318" class="t">Service commitments</text>
+
+  <!-- Partners -->
+  <rect x="20" y="344" width="200" height="132" rx="8" fill="#2A2412" stroke="#F5B83D" stroke-opacity=".7"/>
+  <text x="32" y="364" class="tag" style="fill:#F5B83D">PARTNERS · EXTERNAL</text>
+  <text x="32" y="386" class="t">Fleet operator</text><text x="32" y="399" class="s">positions, OTA campaign, its picks</text>
+  <text x="32" y="422" class="t">Ride platform</text><text x="32" y="435" class="s">ride request, app need (8 Mbit/s),</text><text x="32" y="447" class="s">candidate routes</text>
+  <text x="32" y="466" class="s" style="fill:#F5B83D">anonymized: no passenger identity</text>
+
+  <!-- arrows in -->
+  <path d="M220,139 L272,139" stroke="#6EA8FE" stroke-width="1.6" fill="none" marker-end="url(#ab)"/>
+  <path d="M220,288 L272,288" stroke="#6EA8FE" stroke-width="1.6" fill="none" marker-end="url(#ab)"/>
+  <path d="M220,410 L272,410" stroke="#F5B83D" stroke-width="1.6" fill="none" marker-end="url(#aa)"/>
+
+  <!-- ───────── ATLAS ───────── -->
+  <rect x="276" y="46" width="408" height="430" rx="10" fill="#0F2A22" stroke="#00ED64" stroke-width="1.6"/>
+
+  <!-- network twin -->
+  <text x="292" y="68" class="tag" style="fill:#00ED64">NETWORK TWIN</text>
+  <g class="mono">
+    <rect x="292" y="76" width="376" height="26" rx="5" fill="#123A2E"/><text x="302" y="93" class="c mono">ran_sites · ran_cells</text><text x="658" y="93" class="s" text-anchor="end">geospatial · 2dsphere</text>
+    <rect x="292" y="106" width="376" height="26" rx="5" fill="#123A2E"/><text x="302" y="123" class="c mono">ran_pm_counters</text><text x="658" y="123" class="s" text-anchor="end">time series collection</text>
+    <rect x="292" y="136" width="376" height="26" rx="5" fill="#123A2E"/><text x="302" y="153" class="c mono">ran_load_forecast</text><text x="658" y="153" class="s" text-anchor="end">documents · arrays per quarter hour</text>
+    <rect x="292" y="166" width="376" height="26" rx="5" fill="#123A2E"/><text x="302" y="183" class="c mono">transport_links</text><text x="658" y="183" class="s" text-anchor="end">graph · nodes and links</text>
+  </g>
+
+  <!-- rules + partner data side by side -->
+  <text x="292" y="216" class="tag" style="fill:#00ED64">COMMERCIAL RULES</text>
+  <rect x="292" y="224" width="182" height="44" rx="5" fill="#123A2E"/><text x="302" y="241" class="c mono">price_tiers</text><text x="302" y="257" class="c mono">service_commitments</text>
+  <text x="486" y="216" class="tag" style="fill:#F5B83D">PARTNER DATA</text>
+  <rect x="486" y="224" width="182" height="72" rx="5" fill="#2E2A16"/><text x="496" y="239" class="c mono" style="fill:#F7D88A">fleet_vehicles</text><text x="496" y="253" class="c mono" style="fill:#F7D88A">ota_campaigns</text><text x="496" y="267" class="c mono" style="fill:#F7D88A">ota_fleet_choices</text><text x="496" y="281" class="c mono" style="fill:#F7D88A">ride_requests</text>
+
+  <!-- hero queries -->
+  <text x="292" y="306" class="tag" style="fill:#00ED64">ONE QUERY PER DECISION</text>
+  <rect x="292" y="314" width="376" height="40" rx="5" fill="none" stroke="#00ED64" stroke-opacity=".6" stroke-dasharray="3 3"/>
+  <text x="302" y="330" class="t">Quote this vehicle</text>
+  <text x="302" y="344" class="s">$geoNear  →  p95 of live counters  →  $graphLookup backhaul  →  tier + Mbit/s</text>
+  <rect x="292" y="360" width="376" height="40" rx="5" fill="none" stroke="#00ED64" stroke-opacity=".6" stroke-dasharray="3 3"/>
+  <text x="302" y="376" class="t">Score candidate routes</text>
+  <text x="302" y="390" class="s">each leg (cell, entry time)  ×  forecast  →  lowest Mbit/s per route</text>
+
+  <!-- decisions -->
+  <text x="292" y="420" class="tag" style="fill:#00ED64">DECISIONS, WITH THEIR EVIDENCE</text>
+  <rect x="292" y="428" width="376" height="34" rx="5" fill="#123A2E"/><text x="302" y="449" class="c mono">ota_offers</text><text x="658" y="449" class="s" text-anchor="end">the network's menu per car · auditable</text>
+
+  <!-- ───────── OUT ───────── -->
+  <!-- agents -->
+  <rect x="740" y="46" width="200" height="96" rx="8" fill="#14323A" stroke="#00ED64" stroke-opacity=".7"/>
+  <text x="752" y="66" class="tag" style="fill:#00ED64">AI AGENTS</text>
+  <text x="752" y="88" class="t">Call the queries as tools</text>
+  <text x="752" y="104" class="s">act within policy: ≤ 80% per cell,</text>
+  <text x="752" y="117" class="s">no full backhaul, NOC above 100 cars</text>
+  <text x="752" y="132" class="s">write each decision back</text>
+  <path d="M686,322 C712,322 712,86 738,86" stroke="#00ED64" stroke-width="1.6" fill="none" marker-start="url(#ag)" marker-end="url(#ag)"/>
+  <text x="694" y="206" class="s" transform="rotate(-90 694 206)" text-anchor="middle" style="fill:#00ED64">queries · decisions</text>
+
+  <!-- outputs -->
+  <rect x="740" y="158" width="200" height="54" rx="8" fill="#12283A" stroke="#93A9B8" stroke-opacity=".5"/>
+  <text x="752" y="178" class="t">NOC review</text><text x="752" y="194" class="s">approve or reject large campaigns,</text><text x="752" y="206" class="s">the agent resumes where it stopped</text>
+
+  <rect x="740" y="224" width="200" height="66" rx="8" fill="#2A2412" stroke="#F5B83D" stroke-opacity=".7"/>
+  <text x="752" y="244" class="t">Fleet: a menu per car</text><text x="752" y="260" class="s">download now (paced) or cheaper</text><text x="752" y="272" class="s">cells nearby; the fleet picks</text><text x="752" y="284" class="s" style="fill:#F5B83D">tier + Mbit/s only, never raw load</text>
+
+  <rect x="740" y="302" width="200" height="54" rx="8" fill="#2A2412" stroke="#F5B83D" stroke-opacity=".7"/>
+  <text x="752" y="322" class="t">Ride platform</text><text x="752" y="338" class="s">"Connected ride": the route that</text><text x="752" y="350" class="s">keeps the call, sold at a premium</text>
+
+  <rect x="740" y="368" width="200" height="54" rx="8" fill="#241A3A" stroke="#B98CFF" stroke-opacity=".7"/>
+  <text x="752" y="388" class="t">Network</text><text x="752" y="404" class="s">activate the slice along the route</text><text x="752" y="416" class="s">through the vendor's exposure function</text>
+
+  <path d="M686,445 C716,445 712,185 738,185" stroke="#93A9B8" stroke-width="1.4" fill="none" marker-end="url(#ag)" opacity=".8"/>
+  <path d="M686,445 C716,445 712,257 738,257" stroke="#F5B83D" stroke-width="1.4" fill="none" marker-end="url(#aa)"/>
+  <path d="M686,445 C716,445 712,329 738,329" stroke="#F5B83D" stroke-width="1.4" fill="none" marker-end="url(#aa)"/>
+  <path d="M686,445 C716,445 712,395 738,395" stroke="#B98CFF" stroke-width="1.4" fill="none" marker-end="url(#ap)"/>
+
+  <!-- ───────── change stream loop ───────── -->
+  <rect x="20" y="490" width="920" height="34" rx="8" fill="#0F2A22" stroke="#00ED64" stroke-opacity=".5"/>
+  <text x="36" y="511" class="t" style="fill:#00ED64">⟳ Change streams</text>
+  <text x="160" y="511" class="s" style="fill:#CFE9DC">the rush turns cells congested  →  the network revises those cars' offers  →  the write is the event  →  the fleet picks again  ·  resumable, nothing lost</text>
+</svg>
+</body></html>

@@ -231,6 +231,7 @@ const DOCS = MODEL.docs, SIMP = MODEL.sim, P = SIMP.params;
 const CELLDOCS = Object.fromEntries(DOCS.ran_cells.map(c => [c._id, c]));
 const CAMPAIGN = DOCS.ota_campaigns[0], RIDEDOC = DOCS.ride_requests[0], TIERDOC = DOCS.price_tiers[0];
 const OFFERS = Object.fromEntries(DOCS.ota_offers.map(o => [o.vehicle_id, o]));
+const CHOICES = Object.fromEntries((DOCS.ota_fleet_choices || []).map(c => [c.vehicle_id, c]));   // the fleet's picks, partner data
 const VEHDOCS = Object.fromEntries(DOCS.fleet_vehicles.map(o => [o._id, o]));
 const FC = Object.fromEntries(DOCS.ran_load_forecast.map(f => [f.cell_id, f]));
 const D = {
@@ -314,8 +315,8 @@ const SECTBYID = Object.fromEntries(SECT.map(c => [c.id, c]));
 for (const v of V) {
   const o = OFFERS[v.id], vd = VEHDOCS[v.id];
   v.q = { pos: vd.position.coordinates, cell: SECTBYID[o.serving_cell], tier: o.tier, dl: o.expected_dl_mbps, offer: o };
-  if (o.alternative) v.q.alt = { site: o.alternative.site_id, name: o.alternative.area_name, tier: o.alternative.tier,
-                                 dl: o.alternative.expected_dl_mbps, mi: o.alternative.distance_mi };
+  const ch = CHOICES[v.id], m = ch && (o.offered_cells || []).find(x => x.site_id === ch.chosen_site);
+  if (m) v.q.alt = { site: m.site_id, name: m.area_name, tier: m.tier, dl: m.expected_dl_mbps, mi: m.distance_mi, menu: o.offered_cells.length };
 }
 const NNOW = V.filter(v => !v.defer).length, NDEF = V.length - NNOW;
 
@@ -334,7 +335,7 @@ const ST = { WAIT: 0, DL: 1, PAUSE: 2, ENROUTE: 3, QUEUED: 4, DONE: 5 };
       const re = V.filter(v => !v.plan && v.doneT == null && v.plan2);
       for (const v of re) { v.plan = v.plan2; v.requoted = true; }
       frames.REQUOTED = re.length;
-      log.push({ t, who: "agent", id: "requote", text: `Revised offers for <b>${re.length}</b> cars still waiting: they keep crossing congested cells, so their next rides now end in ${BETTER.map(b => SITE[b].name).join(", ")}. Pushed to the fleet by change stream.` });
+      log.push({ t, who: "agent", id: "requote", text: `Revised offers for <b>${re.length}</b> cars still waiting: their cells turn congested in the rush, so the answer is now not now, with cheaper cells offered nearby. Pushed to the fleet by change stream; the fleet picks the cells their next rides end in (${BETTER.map(b => SITE[b].name).join(", ")}).` });
     }
     const budget = SECT.map(c => { const l = loadAt(c, t); return tierOf(l) === "congested" ? 0 : Math.max(0, (RETAIL_CAP - l) / 100 * CAP_MBPS); });
     for (const v of V) {
@@ -402,7 +403,8 @@ const forecastBump = BEST.cells.reduce((a, e) => e.min < a.min ? e : a);
 const congestedNames = [...new Set(V.filter(v => v.defer).map(v => v.q.cell.name))];
 log.push(
   { t: 0, who: "fleet", text: `Quote request OTA-FA-2026-48: ${V.length} vehicles, ${GB} GB each (FW 2026.48.1), done by 18:00, keep ${HEADROOM} Mbit/s per car for remote assistance.` },
-  { t: QUOTE_T, who: "agent", id: "quote", text: `Answer per vehicle: <b>${NNOW}</b> download now in discounted or standard cells, paced. <b>${NDEF}</b> sit in congested cells (${congestedNames.slice(0, 4).join(", ")}…), about ${Math.round(V.filter(v => v.defer).reduce((a, v) => a + v.q.dl, 0) / NDEF)} Mbit/s: their next rides end in ${BETTER.map(b => SITE[b].name).join(", ")}, discounted tier.` },
+  { t: QUOTE_T, who: "agent", id: "quote", text: `Answer per vehicle: <b>${NNOW}</b> download now in discounted or standard cells, paced. <b>${NDEF}</b> sit in congested cells (${congestedNames.slice(0, 4).join(", ")}…), about ${Math.round(V.filter(v => v.defer).reduce((a, v) => a + v.q.dl, 0) / NDEF)} Mbit/s: not now, each with a menu of cheaper cells nearby.` },
+  { t: QUOTE_T, who: "fleet", text: `Fleet picks a cell from each menu: the one the car's next ride ends in (${BETTER.map(b => SITE[b].name).join(", ")}), so it downloads on its way. The network never sees the rides.` },
   { t: QUOTE_T, who: "agent", id: "backhaul", text: `Hell's Kitchen not offered: its radio is quiet, but backhaul AGG-MTN-W2 runs at 91% (followed the topology, not only the cell).` },
   { t: REVIEW_T, who: "noc", text: `Campaign above 100 vehicles: paused for a NOC review.` },
   { t: APPROVE_T, who: "noc", text: `Approved by the NOC on-call engineer. Downloads start 13:05.` },
@@ -461,9 +463,9 @@ function vehicleCard(v, t) {
   const q = v.q, st = frames[Math.floor(t)].st[v.i], pr = frames[Math.floor(t)].prog[v.i];
   const now = ["waiting for the update", "downloading", "paused (congested cell)", "deferred, on its way", "parked, in the queue", "updated"][st];
   let ans = `<b>${v.id}</b> · ${now}<br>At 13:01: ${q.cell.name} (${q.cell.id}), <b>${q.tier}</b>, ${q.dl.toFixed(1)} Mbit/s expected<br>`;
-  ans += v.defer ? `Answer: <b class="vio">defer</b>. Next ride ends in ${q.alt.name} (${q.alt.mi.toFixed(1)} mi, ${q.alt.tier}, ${q.alt.dl.toFixed(0)} Mbit/s), arrives ${fmt(v.plan.tArr)}`
-    : `Answer: <b class="blu">download now</b>, paced. Pauses in congested cells.`;
-  if (v.requoted && t >= REQUOTE_T) ans += `<br>15:30 revised: <b class="vio">defer</b>, next ride ends in ${v.plan.tgtName}, arrives ${fmt(v.plan.tArr)}`;
+  ans += v.defer ? `Network: <b class="vio">not now</b>, ${q.alt.menu} cheaper cells offered nearby.<br>Fleet's pick: ${q.alt.name} (${q.alt.mi.toFixed(1)} mi, ${q.alt.tier}, ${q.alt.dl.toFixed(0)} Mbit/s), where its next ride ends at ${fmt(v.plan.tArr)}`
+    : `Network: <b class="blu">download now</b>, paced. Pauses in congested cells.`;
+  if (v.requoted && t >= REQUOTE_T) ans += `<br>15:30 revised offer: <b class="vio">not now</b>. Fleet's pick: ${v.plan.tgtName}, where its next ride ends at ${fmt(v.plan.tArr)}`;
   ans += `<br>Progress: ${pr.toFixed(1)} / ${GB} GB${v.doneT != null ? ` · done ${fmt(v.doneT)}` : ""} · deadline 18:00`;
   return ans;
 }
@@ -571,7 +573,7 @@ function panel(t) {
     : "Campaign done before the rush, retail users never noticed";
   const tl = $("toast"), show = MODE === "ota" ? t >= QUOTE_T && t < 14 : t >= RIDE_BOOK && t < RIDE_GO + 3;
   tl.style.display = show ? "block" : "none";
-  if (MODE === "ota") tl.innerHTML = `<b>13:01 · Network agent</b> · ${NDEF} robotaxis sit in congested cells. Instead of 3 Mbit/s there, their next rides end in cheaper cells nearby (arcs), where they download at discounted tier.`;
+  if (MODE === "ota") tl.innerHTML = `<b>13:01 · Network agent</b> · ${NDEF} robotaxis sit in congested cells. Instead of 3 Mbit/s there, the network offers cheaper cells nearby, and the fleet picks the one each car's next ride ends in (arcs), where it downloads at discounted tier.`;
   else tl.innerHTML = `<b>17:03 · Connected ride</b> · Route ${BEST.k} takes ${BEST.mins - Math.min(...Object.values(RIDE).map(r => r.mins))} minutes longer, but the predicted downlink never drops below ${BEST.min.toFixed(0)} Mbit/s. The fleet sells it as a premium ride.`;
   const items = log.filter(l => l.t <= t && (MODE === "ride" ? l.t >= RIDE_BOOK : l.t < RIDE_BOOK)).slice(-14).reverse();
   $("log").innerHTML = items.map(l => `<li><span class="t">${fmt(l.t)}</span><span class="w ${l.who}">${
@@ -623,14 +625,16 @@ function sample() { return selected || V.find(v => v.defer && v.q.cell.site === 
 function docs(t) {
   const v = sample(), w = V.find(x => !x.defer), c = v.q.cell, t15 = t - (t % 15), l = loadAt(c, t15 + 7.5);
   const rideCell = BEST.cells[Math.floor(BEST.cells.length / 2)].c;
-  const trimRide = (d) => ({ ...d, candidates: d.candidates.map(x => ({ ...x, legs: [...x.legs.slice(0, 2), `… ${x.legs.length} legs in all, one per cell and quarter hour`] })) });
+  const trimRide = (d) => ({ ...d, candidates: d.candidates.map(x => ({ ...x, legs: [...x.legs.slice(0, 2), `… ${x.legs.length} legs in all, one per cell the car enters`] })) });
   const all = {
     vehicle: { title: "fleet_vehicles", sub: "the fleet's cars, as reported", coll: "fleet_vehicles", src: "fleet platform (the fleet's API call)", refresh: "every 10 s", atlas: true,
       body: [VEHDOCS[v.id], VEHDOCS[w.id]], note: "What the fleet shares with the network: position, the serving cell from the car's modem, software version, and the bandwidth it keeps for safety. No passenger data. GeoJSON with a 2dsphere index. Seeded as reported at the 13:01 quote; the page moves the cars." },
     campaign: { title: "ota_campaigns", sub: "the fleet's request", coll: "ota_campaigns", src: "fleet console (scripted request)", refresh: "per campaign", atlas: true,
       body: [CAMPAIGN], note: "One document per campaign: the request, its constraints and the NOC decision. Campaigns above the threshold pause for a NOC review, like the demo's other blast-radius actions." },
     offers: { title: "ota_offers", sub: "the network's answer, per vehicle", coll: "ota_offers", src: "network agent (quote_ota_campaign)", refresh: "on change, pushed by change stream", atlas: true,
-      body: [OFFERS[v.id], OFFERS[w.id]], note: "One answer per vehicle: tier and expected throughput, the decision and, for a deferred car, the better cell its next ride ends in, with the backhaul check. The page draws every car's answer from these documents. Raw cell load never leaves the network." },
+      body: [OFFERS[v.id], OFFERS[w.id]], note: "One answer per vehicle: tier and expected throughput in its cell, the decision and, when it is not now, the menu of nearby cells offered, cheapest first, with the cells not offered and why (a full backhaul). The network does not know where the car is going. Raw cell load never leaves the network." },
+    choices: { title: "ota_fleet_choices", sub: "the fleet's pick from the menu", coll: "ota_fleet_choices", src: "fleet dispatch (partner data)", refresh: "per offer", atlas: true,
+      body: [CHOICES[v.id]].filter(Boolean), note: "Written by the fleet, not the network: of the offered cells, the one the car's next ride ends in, so it downloads on its way. The fleet knows its rides; the network never sees them. Both sides' data meet in Atlas." },
     cells: { title: "ran_cells", sub: "same collection as the night shift", coll: "ran_cells", src: "network inventory (simulated)", refresh: "on change", atlas: true,
       body: [CELLDOCS[MODE === "ride" ? rideCell.id : c.id]], note: "The cells the night-shift map puts to sleep at night are the cells the fleet buys in the afternoon. One inventory, three scenarios." },
     pm: { title: "ran_pm_counters", sub: "time series, 15-min, 3GPP", coll: "ran_pm_counters", src: "OSS performance management (TS 28.552)", refresh: "every 15 min", atlas: false,
@@ -644,9 +648,9 @@ function docs(t) {
     tiers: { title: "price_tiers", sub: "what the fleet may see", coll: "price_tiers", src: "product catalog", refresh: "on change", atlas: true,
       body: [TIERDOC], note: "Three tiers. The thresholds live in the database: the agent's query and this page read the same rule." },
     ride: { title: "ride_requests", sub: "the connected ride", coll: "ride_requests", src: "fleet booking (route candidates, no identity)", refresh: "per booking", atlas: true,
-      body: [trimRide(RIDEDOC)], note: "The fleet sends candidate routes, the cells each one crosses with the quarter hour, and the application's need, not who the passenger is. Legs shortened here; Copy has them all." },
+      body: [trimRide(RIDEDOC)], note: "The fleet sends candidate routes, the cells each one crosses with the time the car enters them, and the application's need, not who the passenger is. Legs shortened here; Copy has them all." },
   };
-  const order = MODE === "ride" ? ["ride", "forecast", "cells", "vehicle"] : ["vehicle", "campaign", "offers", "cells", "pm", "transport", "tiers"];
+  const order = MODE === "ride" ? ["ride", "forecast", "cells", "vehicle"] : ["vehicle", "campaign", "offers", "choices", "cells", "pm", "transport", "tiers"];
   return order.map(id => ({ id, ...all[id], copy: id === "ride" ? [RIDEDOC] : all[id].body }));
 }
 
@@ -694,14 +698,22 @@ const ROUTE_CODE = `// For a booking: the lowest predicted downlink per route, o
 db.ride_requests.aggregate([
   { $match: { _id: "${RIDEDOC._id}" } },
   { $unwind: "$candidates" },
-  { $unwind: "$candidates.legs" },              // a leg: a cell the car is in, and the quarter hour
-  { $lookup: {
-      from: "ran_load_forecast", localField: "candidates.legs.cell_id", foreignField: "cell_id",
-      pipeline: [{ $match: { date: "${DATE}", window: "13:00-18:00" } }], as: "fc" } },
-  { $set: {
-      load: { $arrayElemAt: [{ $first: "$fc.quarter_hour_load_pct" }, "$candidates.legs.quarter"] } } },
-  { $set: {
-      dl: { $max: [0.5, { $multiply: [120, { $pow: [{ $subtract: [1, { $divide: ["$load", 100] }] }, 2] }] }] } } },
+  { $unwind: "$candidates.legs" },              // a leg: a cell the car is in, and when it enters
+  { $lookup: {                                   // the forecast slot that time falls in
+      from: "ran_load_forecast",
+      let: { cell: "$candidates.legs.cell_id", at: "$candidates.legs.enter" },
+      pipeline: [
+        { $match: { $expr: { $and: [
+            { $eq: ["$cell_id", "$$cell"] }, { $lte: ["$starts_at", "$$at"] },
+            { $lt: ["$$at", { $dateAdd: { startDate: "$starts_at", unit: "minute",
+                                         amount: { $multiply: [15, { $size: "$quarter_hour_load_pct" }] } } }] } ] } } },
+        { $project: { _id: 0, load: { $arrayElemAt: ["$quarter_hour_load_pct", { $toInt: { $floor: {
+            $divide: [{ $dateDiff: { startDate: "$starts_at", endDate: "$$at", unit: "minute" } }, 15] } } }] } } } ],
+      as: "fc" } },
+  { $set: { load: { $first: "$fc.load" } } },
+  { $set: {                                      // no forecast for that time counts as a dip
+      dl: { $cond: [{ $eq: [{ $ifNull: ["$load", null] }, null] }, 0,
+                    { $max: [0.5, { $multiply: [120, { $pow: [{ $subtract: [1, { $divide: ["$load", 100] }] }, 2] }] }] }] } } },
   { $group: {
       _id: "$candidates.route_id", label: { $first: "$candidates.label" },
       minutes: { $first: "$candidates.duration_min" },
@@ -713,20 +725,23 @@ db.ride_requests.aggregate([
             call_ok: { $gte: ["$lowest_dl_mbps", "$need"] },
             lowest_dl_mbps: { $round: ["$lowest_dl_mbps", 1] } } },
   { $sort: { call_ok: -1, minutes: 1 } } ])`;
-const STREAM_CODE = `// The fleet's agent (or this dashboard) is told the moment an answer changes
-const stream = db.ota_offers.watch([
+const STREAM_CODE = `// The fleet (and this page) is told the moment the network revises an offer
+const stream = db.watch([
   { $match: {
-      operationType: { $in: ["insert", "update", "replace"] },
-      "fullDocument.campaign_id": "${CAMPAIGN._id}" } },
-  { $project: {
-      "fullDocument.vehicle_id": 1, "fullDocument.decision": 1,
-      "fullDocument.tier": 1, "fullDocument.expected_dl_mbps": 1, "fullDocument.alternative": 1 } }
-], { fullDocument: "updateLookup" })`;
+      operationType: "insert",
+      "ns.coll": { $in: ["ota_offers", "ota_fleet_choices"] },   // the network's offer, the fleet's pick
+      "fullDocument.campaign_id": "${CAMPAIGN._id}" } }
+], { resumeAfter: lastToken })                    // a consumer that restarts misses nothing
+
+for await (const change of stream) {
+  lastToken = change._id                          // keep it: the resume point
+  deliver(change.fullDocument)                    // offer → fleet dispatch, pick → network
+}`;
 const HERO = MODE === "ride" ? [
   { run: "routes", title: "Run it on Atlas", sub: "score the three routes, live", coll: "ride_requests" },
   { title: "Score candidate routes", sub: "route_quality", coll: "ride_requests", code: ROUTE_CODE,
-    callouts: [["$unwind: \"$candidates.legs\"", "Each route becomes the cells it crosses, with the quarter hour the car is there"],
-      ["ran_load_forecast", "The forecast for that cell and time, not a snapshot at pickup"], ["$min", "A call is as good as its worst cell"],
+    callouts: [["$unwind: \"$candidates.legs\"", "Each route becomes the cells it crosses, with the time the car enters each one"],
+      ["$dateDiff", "The forecast slot that time falls in, not a snapshot at pickup"], ["$min", "A call is as good as its worst cell"],
       ["$setDifference", "The cells where the call would drop"], ["$sort", "Routes that keep the call first, then the shortest"]],
     note: "Forecast, not snapshot: the ride happens in the next 15 to 25 minutes. The answer per route is what the fleet sells; the slice makes it a guarantee. The first tab runs it on Atlas." },
 ] : [
@@ -736,9 +751,11 @@ const HERO = MODE === "ride" ? [
       ["$graphLookup", "Follow the backhaul: cell → aggregation → provider edge (graph)"], ["$switch: { branches: [", "Tier thresholds as stored in price_tiers (55% / 75%)"],
       ["backhaul full", "A quiet radio behind a full uplink is not offered (Hell's Kitchen)"], ["$project", "The fleet gets tier and Mbit/s, never the raw load"]],
     note: "One aggregation answers one vehicle: geospatial, time series, graph and business rules in the same database. The network agent runs it per car and writes the answer to ota_offers. The first tab runs it on Atlas for the selected car (click one on the map)." },
-  { title: "Revised offers, live", sub: "change stream", coll: "ota_offers", code: STREAM_CODE,
-    callouts: [["watch", "Change streams: push, no polling"], ["campaign_id", "Only this campaign's answers"], ["$project", "Only what the fleet may see"]],
-    note: "When load changes, the network agent rewrites a car's offer; the change stream pushes it to the fleet. That is how the 15:30 revised offers reach the cars still waiting." },
+  { run: "stream", title: "Revised offers, live", sub: "the 15:30 re-quote over a change stream", coll: "ota_offers · ota_fleet_choices" },
+  { title: "Watch the answers", sub: "change stream", coll: "ota_offers · ota_fleet_choices", code: STREAM_CODE,
+    callouts: [["db.watch", "Change streams: the write is the event, no polling"], ["ns.coll", "Both sides: the network's offers and the fleet's picks"],
+      ["resumeAfter", "Resume where the consumer stopped: nothing lost, nothing twice"], ["lastToken = change._id", "The resume token travels with every event"]],
+    note: "Postgres can do the query; delivering its result reliably is the hard part. LISTEN/NOTIFY drops a notification while the listener is away and carries at most 8 KB; logical decoding needs a replication slot, which keeps WAL until its consumer catches up, and a pipeline such as Debezium and Kafka. Here the database itself keeps the stream and the resume point. (Change streams do not work on time series collections, so the trigger is the network agent's revised offer, not the counters.)" },
 ];
 function heroCode(q) {
   const v = sample(), p = vpos(v, Math.max(1, t)), at = Math.max(1, t);
@@ -772,6 +789,7 @@ function hlCode(code, callouts) {
 }
 let copyText = "";
 function openModal(title, tabs, show) {
+  LIVE.visible = false;
   $("mTitle").textContent = title; $("ov").classList.add("on"); $("modal").style.gridTemplateColumns = ""; $("mTabs").style.display = "";
   $("mTabs").innerHTML = tabs.map((x, i) => `<button class="tab" data-i="${i}">${esc(x.title)}<small>${esc(x.sub)}</small></button>`).join("");
   $("mTabs").onclick = (e) => { const b = e.target.closest(".tab"); if (b) show(+b.dataset.i); };
@@ -786,10 +804,58 @@ function openData(which) {
     $("mCode").innerHTML = d.body.map(hlJSON).join("\n\n"); $("mExplain").textContent = d.note; copyText = d.copy.map(b => JSON.stringify(b, null, 2)).join("\n\n"); }
   show(Math.max(0, ds.findIndex(d => d.id === which)));
 }
+// ═══ Revised offers, live: the 15:30 re-quote, delivered by a change stream ══
+const LIVE = { run: null, ws: null, token: "", seen: new Set(), lines: [], total: 0, stopped: false, resumed: 0, onResume: 0 };
+function streamTab() {
+  LIVE.visible = true;
+  const re = V.filter(v => v.requoted);
+  const ctl = (id, label, on) => `<button class="tab" id="${id}" style="display:inline-block;margin-left:8px;padding:3px 10px"${on ? "" : " disabled"}>${label}</button>`;
+  const paint = () => {
+    if (!LIVE.visible) return;
+    const n = LIVE.seen.size, runLabel = LIVE.run ? "Run again" : "▶ Run it on Atlas";
+    $("mMeta").innerHTML = `${badge(true)}<b>ota_offers · ota_fleet_choices</b> · ${re.length} cars still waiting at 15:30 · ${n}/${LIVE.total || 2 * re.length} events`
+      + ctl("lvRun", runLabel, !LIVE.ws) + ctl("lvStop", "Stop the consumer", !!LIVE.ws) + ctl("lvRes", "Resume from token", !LIVE.ws && LIVE.stopped);
+    $("mCode").innerHTML = LIVE.lines.length ? LIVE.lines.slice(-40).join("\n")
+      : `<span class="c">// Press Run: the network agent re-quotes the ${re.length} cars on Atlas and writes a revised offer for each,\n// the fleet writes its pick, and the change stream delivers every insert here, with its resume token.\n// Stop the consumer halfway: the writes go on. Resume from the token: the missed events arrive, none twice.</span>`;
+    $("mExplain").innerHTML = LIVE.total && n >= LIVE.total
+      ? `<p style="margin:0"><b style="color:var(--green)">All ${n} events delivered, none lost, none twice</b>${LIVE.onResume ? `: ${LIVE.onResume} of them arrived after the consumer resumed from its token` : ""}. Each car's revised offer and the fleet's pick are documents in Atlas; the page simulates the rest of the afternoon from them.</p>`
+      : `<p style="margin:0">The write is the event: no polling and no message broker. The resume token is the consumer's bookmark in the database's own change log.</p>`;
+    $("lvRun").onclick = start; $("lvStop").onclick = stop; $("lvRes").onclick = () => connect(LIVE.token);
+  };
+  const add = (html) => { LIVE.lines.push(html); paint(); };
+  function connect(resume) {
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${proto}://${location.host}${PREFIX}/ws/fleet/requote?run=${LIVE.run}${resume ? `&resume_after=${encodeURIComponent(resume)}` : ""}`);
+    LIVE.ws = ws; LIVE.stopped = false; paint();
+    ws.onmessage = (m) => { const e = JSON.parse(m.data);
+      if (e.type === "ready") add(`<span class="c">// ${e.resumed ? `consumer resumed after token ${LIVE.token.slice(0, 18)}…` : "change stream open; the network agent starts writing"}</span>`);
+      if (e.type === "error") add(`<span class="c">// error: ${esc(e.text)}</span>`);
+      if (e.type !== "event" || LIVE.seen.has(e.token)) return;
+      LIVE.seen.add(e.token); LIVE.token = e.token; if (resume) LIVE.onResume++;
+      const who = e.coll === "ota_offers" ? '<span class="op">network</span>' : '<span class="k">fleet  </span>';
+      add(`${who} <span class="s">${esc(e.coll.padEnd(17))}</span> ${esc(e.text)}  <span class="c">${e.token.slice(0, 18)}…</span>`);
+      if (LIVE.seen.size >= LIVE.total) { ws.close(); LIVE.ws = null; paint(); } };
+    ws.onclose = () => { if (LIVE.ws === ws) { LIVE.ws = null; paint(); } };
+  }
+  async function start() {
+    Object.assign(LIVE, { run: null, token: "", seen: new Set(), lines: [], stopped: false, onResume: 0 });
+    const vehicles = re.map(v => { const p = vpos(v, REQUOTE_T); return { id: v.id, lng: +p[0].toFixed(5), lat: +p[1].toFixed(5), pick: v.plan2.target, eta: v.plan2.tArr }; });
+    try {
+      const res = await fetch(`${PREFIX}/api/fleet/requote`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ minute: REQUOTE_T, vehicles }) });
+      const r = await res.json(); if (!res.ok) throw new Error(r.detail || `HTTP ${res.status}`);
+      LIVE.run = r.run; LIVE.total = r.events; connect("");
+    } catch (e) { add(`<span class="c">// could not start the re-quote: ${esc(e.message)}</span>`); }
+  }
+  function stop() { if (!LIVE.ws) return; const ws = LIVE.ws; LIVE.ws = null; LIVE.stopped = true; ws.close();
+    add(`<span class="c">// consumer stopped at token ${LIVE.token.slice(0, 18)}…; the network agent keeps writing</span>`); }
+  paint();
+}
 function openHero(i0 = 0) {
   openModal("Hero queries", HERO, show);
   async function show(i) {
     selectTab(i); const q = HERO[i];
+    LIVE.visible = q.run === "stream";
+    if (q.run === "stream") { streamTab(); return; }
     if (q.run) {
       const v = sample(), at = Math.max(1, t), p = vpos(v, at);
       $("mMeta").innerHTML = `<b>${esc(q.coll)}</b> · running on Atlas for ${q.run === "quote" ? `${v.id} at ${fmt(at)}` : RIDEDOC._id} …`;

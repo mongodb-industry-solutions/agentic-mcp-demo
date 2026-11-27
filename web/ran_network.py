@@ -22,7 +22,8 @@ import datetime
 import math
 
 DATE = datetime.date(2026, 11, 24)             # a Tuesday night
-START = datetime.datetime(2026, 11, 24, 18, 0)  # 18:00 local (UTC-5)
+NY = datetime.timezone(datetime.timedelta(hours=-5), "EST")   # New York in November (UTC-5)
+START = datetime.datetime(2026, 11, 24, 18, 0, tzinfo=NY)    # 18:00 in New York, stored by MongoDB as 23:00Z
 STEPS = 540                                    # sim minutes, 18:00 → 03:00
 TZ = "-05:00"
 MARKET, CLUSTER = "NYC", "Midtown"
@@ -147,7 +148,7 @@ def _surge(amp: float, minute: int) -> float:
 
 def documents() -> dict[str, list[dict]]:
     m = model()
-    ts = datetime.datetime(2026, 11, 24, 17, 0)
+    ts = datetime.datetime(2026, 11, 24, 17, 0, tzinfo=NY)
     sites, cells, forecast, pm = [], [], [], []
     for s in m["sites"]:
         sites.append({
@@ -189,7 +190,7 @@ def documents() -> dict[str, list[dict]]:
         forecast.append({"_id": f"{c['_id']}:{DATE.isoformat()}", "cell_id": c["_id"], "date": DATE.isoformat(),
                          "starts_at": iso(0), "hourly_load_pct": hourly, "unit": "PRB %, capacity layer",
                          "model": "seasonal profile by area type (planned events included, incidents not)",
-                         "generated_at": datetime.datetime(2026, 11, 24, 12, 0)})
+                         "generated_at": datetime.datetime(2026, 11, 24, 12, 0, tzinfo=NY)})
         # 15-minute PM counters (3GPP TS 28.552): what the carrier carries when awake
         for q in range(0, STEPS, 15):
             load = min(100.0, _curve(lp["area_type"], q + 7.5) * lp["load_factor"] + _surge(c.get("surge_pct", 0), q + 7))
